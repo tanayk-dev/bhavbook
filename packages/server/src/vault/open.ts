@@ -1,8 +1,10 @@
-// Opens (and creates or upgrades) a vault: WAL, foreign keys, bigint integers, forward migrations.
+// Opens (and creates or upgrades) a vault: hardened connection, WAL, foreign keys, bigint integers, migrations.
 import { existsSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { autoBackup } from './backup.js';
+import { VaultError } from './errors.js';
 import { loadMigrations, migrate, type Migration } from './migrations.js';
+import { APPLICATION_ID, hardenConnection } from './schema.js';
 
 export interface OpenVaultOptions {
   readonly appVersion: string;
@@ -15,7 +17,11 @@ export function openVault(vaultPath: string, options: OpenVaultOptions): Databas
   const existed = existsSync(vaultPath);
   const db = new Database(vaultPath);
   try {
-    db.defaultSafeIntegers(true);
+    hardenConnection(db);
+    const applicationId = Number(db.pragma('application_id', { simple: true }));
+    if (existed && applicationId !== 0 && applicationId !== APPLICATION_ID) {
+      throw new VaultError('this file is not a BhavBook vault');
+    }
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');

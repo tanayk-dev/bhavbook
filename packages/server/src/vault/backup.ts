@@ -1,30 +1,51 @@
-// Backups and restore (ADR-0020): consistent snapshots via VACUUM INTO, atomic writes, verified restore.
+// Backups and restore (ADR-0020): consistent snapshots via VACUUM INTO, atomic owner-only writes, and a restore that
+// treats the backup as hostile until it is proven to be a BhavBook vault with exactly the expected schema.
 import { randomBytes } from 'node:crypto';
 import {
+  closeSync,
+  copyFileSync,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { decodeBhav, encodeBhav, looksLikeSqlite, sha256 } from './container.js';
-import { BackupError } from './errors.js';
-import { currentVersion, latestVersion, loadMigrations, migrate, type Migration } from './migrations.js';
+import { BackupError, VaultError } from './errors.js';
+import {
+  appliedMigrations,
+  assertHistoryMatches,
+  currentVersion,
+  latestVersion,
+  loadMigrations,
+  migrate,
+  type Migration,
+} from './migrations.js';
+import { APPLICATION_ID, hardenConnection, referenceFingerprint, schemaFingerprint } from './schema.js';
 
 export type BackupReason = 'manual' | 'pre-import' | 'pre-migration' | 'pre-restore';
 /** Routine auto-backups kept per vault; pre-migration backups are never rotated away. */
 export const AUTO_BACKUP_KEEP = 10;
-/** Refuse to read anything bigger as a backup (a vault this size is far beyond v1 use). */
-export const MAX_BACKUP_BYTES = 2 * 1024 * 1024 * 1024;
+/** Largest backup we will read (far beyond v1 use; bounded so a hostile file can't exhaust memory). */
+export const MAX_BACKUP_BYTES = 512 * 1024 * 1024;
+const SQLITE_MIN_PAGE = 512;
+const OWNER_ONLY_FILE = 0o600;
+const OWNER_ONLY_DIR = 0o700;
 
 export interface BackupOptions {
   readonly appVersion: string;
   readonly now?: () => Date;
+}
+
+function nowOf(options: BackupOptions): Date {
+  return options.now?.() ?? new Date();
 }
 
 function tempPath(target: string, tag: string): string {
@@ -34,11 +55,11 @@ function tempPath(target: string, tag: string): string {
   );
 }
 
-/** Writes `bytes` to `target` atomically (temp file in the same directory, then rename). */
+/** Writes `bytes` to `target` atomically and owner-only (temp file in the same directory, then rename). */
 function writeAtomic(target: string, bytes: Buffer): void {
   const temp = tempPath(target, 'write');
   try {
-    writeFileSync(temp, bytes, { flag: 'wx' });
+    writeFileSync(temp, bytes, { flag: 'wx', mode: OWNER_ONLY_FILE });
     renameSync(temp, target);
   } finally {
     rmSync(temp, { force: true });
@@ -49,8 +70,7 @@ function writeAtomic(target: string, bytes: Buffer): void {
 export function createBackup(
   db: Database.Database,
   outPath: string,
-  appVersion: string,
-  now: () => Date = () => new Date(),
+  options: BackupOptions,
 ): { path: string; sha256: string; bytes: number } {
   const snapshot = tempPath(outPath, 'snapshot');
   try {
@@ -59,8 +79,8 @@ export function createBackup(
     const bytes = readFileSync(snapshot);
     const file = encodeBhav(bytes, {
       schemaVersion: currentVersion(db),
-      appVersion,
-      createdAt: now().toISOString(),
+      appVersion: options.appVersion,
+      createdAt: nowOf(options).toISOString(),
     });
     writeAtomic(outPath, file);
     return { path: outPath, sha256: sha256(bytes), bytes: file.length };
@@ -74,10 +94,28 @@ export function backupDir(vaultPath: string): string {
 }
 
 function stamp(date: Date): string {
-  return date
-    .toISOString()
-    .replace(/[-:]/g, '')
-    .replace(/\.\d{3}Z$/, 'Z');
+  return date.toISOString().replace(/[-:.]/g, '');
+}
+
+/** A file name in the backup directory that doesn't exist yet: `<prefix>-<UTC ms>-<reason>[-n].<ext>`. */
+function uniqueBackupPath(
+  dir: string,
+  prefix: string,
+  date: Date,
+  reason: string,
+  extension: string,
+): string {
+  const base = `${prefix}-${stamp(date)}-${reason}`;
+  let candidate = path.join(dir, `${base}.${extension}`);
+  for (let counter = 2; existsSync(candidate); counter += 1)
+    candidate = path.join(dir, `${base}-${String(counter)}.${extension}`);
+  return candidate;
+}
+
+function ensureBackupDir(vaultPath: string): string {
+  const dir = backupDir(vaultPath);
+  mkdirSync(dir, { recursive: true, mode: OWNER_ONLY_DIR });
+  return dir;
 }
 
 /** Writes `<vault>.backups/auto-<UTC>-<reason>.bhav` and rotates routine backups. */
@@ -87,13 +125,11 @@ export function autoBackup(
   reason: BackupReason,
   options: BackupOptions,
 ): string {
-  const now = options.now ?? (() => new Date());
-  const dir = backupDir(vaultPath);
-  mkdirSync(dir, { recursive: true });
-  const target = path.join(dir, `auto-${stamp(now())}-${reason}.bhav`);
-  createBackup(db, target, options.appVersion, now);
+  const dir = ensureBackupDir(vaultPath);
+  const target = uniqueBackupPath(dir, 'auto', nowOf(options), reason, 'bhav');
+  createBackup(db, target, options);
   const routine = readdirSync(dir)
-    .filter((name) => /^auto-.*\.bhav$/.test(name) && !name.endsWith('-pre-migration.bhav'))
+    .filter((name) => /^auto-.*\.bhav$/.test(name) && !/-pre-migration(-\d+)?\.bhav$/.test(name))
     .sort();
   for (const name of routine.slice(0, Math.max(0, routine.length - AUTO_BACKUP_KEEP))) {
     rmSync(path.join(dir, name), { force: true });
@@ -101,14 +137,125 @@ export function autoBackup(
   return target;
 }
 
-function snapshotExisting(vaultPath: string, options: BackupOptions): void {
-  if (!existsSync(vaultPath)) return;
-  const live = new Database(vaultPath, { fileMustExist: true });
+/** Reads a whole file through one descriptor, so the size check and the read can't disagree (no TOCTOU). */
+function readBounded(file: string): Buffer {
+  const fd = openSync(file, 'r');
   try {
-    autoBackup(live, vaultPath, 'pre-restore', options);
+    const size = fstatSync(fd).size;
+    if (size > MAX_BACKUP_BYTES) throw new BackupError('backup file is too large');
+    const buffer = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const read = readSync(fd, buffer, offset, size - offset, offset);
+      if (read === 0) break;
+      offset += read;
+    }
+    if (offset !== size) throw new BackupError('backup file changed while it was being read');
+    return buffer;
   } finally {
-    live.close();
+    closeSync(fd);
   }
+}
+
+/** Proves the staged database is a BhavBook vault whose schema and history are exactly what we would create. */
+function verifyStaged(staged: string, manifestVersion: number, migrations: readonly Migration[]): void {
+  const db = new Database(staged, { readonly: true, fileMustExist: true });
+  try {
+    hardenConnection(db);
+    if (Number(db.pragma('application_id', { simple: true })) !== APPLICATION_ID) {
+      throw new BackupError('backup is not a BhavBook vault');
+    }
+    if (db.pragma('integrity_check', { simple: true }) !== 'ok')
+      throw new BackupError('backup failed its integrity check');
+    if ((db.pragma('foreign_key_check') as unknown[]).length > 0)
+      throw new BackupError('backup has broken references');
+    const history = appliedMigrations(db);
+    try {
+      assertHistoryMatches(history, migrations);
+    } catch (error) {
+      throw new BackupError('backup migration history does not match this version of BhavBook', {
+        cause: error,
+      });
+    }
+    if ((history.at(-1)?.version ?? 0) !== manifestVersion) {
+      throw new BackupError('backup manifest and migration history disagree');
+    }
+    const expected = referenceFingerprint(migrations, manifestVersion).join('\n');
+    if (schemaFingerprint(db).join('\n') !== expected) {
+      throw new BackupError('backup database has an unexpected schema (extra or altered objects)');
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function migrateStaged(staged: string, migrations: readonly Migration[], options: BackupOptions): void {
+  const db = new Database(staged, { fileMustExist: true });
+  try {
+    hardenConnection(db);
+    db.pragma('foreign_keys = ON');
+    migrate(db, migrations, options.now ? { now: options.now } : {});
+    db.pragma('journal_mode = DELETE');
+  } finally {
+    db.close();
+  }
+}
+
+function isBusy(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    String((error as { code: unknown }).code).startsWith('SQLITE_BUSY')
+  );
+}
+
+/**
+ * Takes an exclusive lock on the live vault (fails if any other connection has it open), snapshots it, and
+ * checkpoints its WAL so the file on disk is complete. A live vault that can't be read is copied raw instead.
+ */
+function retireLiveVault(vaultPath: string, options: BackupOptions): void {
+  if (!existsSync(vaultPath)) return;
+  let live: Database.Database | undefined;
+  try {
+    // timeout 0: report "in use" at once instead of waiting for the other connection.
+    live = new Database(vaultPath, { fileMustExist: true, timeout: 0 });
+    hardenConnection(live);
+    live.pragma('locking_mode = EXCLUSIVE');
+    live.exec('BEGIN EXCLUSIVE; COMMIT;');
+    autoBackup(live, vaultPath, 'pre-restore', options);
+    live.pragma('wal_checkpoint(TRUNCATE)');
+  } catch (error) {
+    if (isBusy(error))
+      throw new BackupError('the vault is in use; close BhavBook and try again', { cause: error });
+    if (error instanceof VaultError) throw error;
+    // Unreadable (corrupt) live vault: keep a raw copy so nothing is lost, then let the restore replace it.
+    const dir = ensureBackupDir(vaultPath);
+    const raw = uniqueBackupPath(dir, 'raw', nowOf(options), 'pre-restore-raw', 'db');
+    copyFileSync(vaultPath, raw);
+    if (existsSync(`${vaultPath}-wal`)) copyFileSync(`${vaultPath}-wal`, `${raw}-wal`);
+  } finally {
+    live?.close();
+  }
+}
+
+const SIDECARS = ['-wal', '-shm'] as const;
+
+/** Moves the old vault (and any sidecars) aside, puts the staged file in place, and rolls back on failure. */
+function swapIn(staged: string, vaultPath: string): void {
+  const old = tempPath(vaultPath, 'old');
+  const moved: [string, string][] = [];
+  try {
+    for (const suffix of ['', ...SIDECARS]) {
+      if (!existsSync(`${vaultPath}${suffix}`)) continue;
+      renameSync(`${vaultPath}${suffix}`, `${old}${suffix}`);
+      moved.push([`${old}${suffix}`, `${vaultPath}${suffix}`]);
+    }
+    renameSync(staged, vaultPath);
+  } catch (error) {
+    for (const [from, to] of moved.reverse()) renameSync(from, to);
+    throw error;
+  }
+  for (const [from] of moved) rmSync(from, { force: true });
 }
 
 export interface RestoreOptions extends BackupOptions {
@@ -116,8 +263,9 @@ export interface RestoreOptions extends BackupOptions {
 }
 
 /**
- * Restores a `.bhav` file over `vaultPath`. The live vault must be closed. Nothing touches it until the backup has
- * been verified (header, lengths, checksum, SQLite integrity) and migrated forward in a temp file next to it.
+ * Restores a `.bhav` file over `vaultPath`. Nothing touches the live vault until the backup has been decoded,
+ * checksummed, proven to be a BhavBook vault with exactly the expected schema, and migrated in a temp file.
+ * Errors are BackupErrors with fixed messages; the underlying error is kept as `cause`.
  */
 export function restoreBackup(
   file: string,
@@ -125,31 +273,26 @@ export function restoreBackup(
   options: RestoreOptions,
 ): { schemaVersion: number } {
   const migrations = options.migrations ?? loadMigrations();
-  if (statSync(file).size > MAX_BACKUP_BYTES) throw new BackupError('backup file is too large');
-  const { manifest, db: bytes } = decodeBhav(readFileSync(file));
-  if (manifest.schemaVersion > latestVersion(migrations)) {
-    throw new BackupError('backup was made by a newer version of BhavBook; please upgrade');
-  }
-  if (!looksLikeSqlite(bytes)) throw new BackupError('backup does not contain a SQLite database');
-
   const staged = tempPath(vaultPath, 'restore');
   try {
-    writeFileSync(staged, bytes, { flag: 'wx' });
-    const db = new Database(staged, { fileMustExist: true });
-    try {
-      db.defaultSafeIntegers(true);
-      const integrity = db.pragma('integrity_check', { simple: true });
-      if (integrity !== 'ok') throw new BackupError('backup database failed its integrity check');
-      migrate(db, migrations, options.now ? { now: options.now } : {});
-      db.pragma('journal_mode = DELETE');
-    } finally {
-      db.close();
+    const { manifest, db: bytes } = decodeBhav(readBounded(file));
+    if (manifest.schemaVersion < 1) throw new BackupError('backup manifest has an invalid schema version');
+    if (manifest.schemaVersion > latestVersion(migrations)) {
+      throw new BackupError('backup was made by a newer version of BhavBook; please upgrade');
     }
-    snapshotExisting(vaultPath, options);
-    for (const suffix of ['-wal', '-shm']) rmSync(`${vaultPath}${suffix}`, { force: true });
-    renameSync(staged, vaultPath);
+    if (!looksLikeSqlite(bytes) || bytes.length < SQLITE_MIN_PAGE || bytes.length % SQLITE_MIN_PAGE !== 0) {
+      throw new BackupError('backup does not contain a SQLite database');
+    }
+    writeFileSync(staged, bytes, { flag: 'wx', mode: OWNER_ONLY_FILE });
+    verifyStaged(staged, manifest.schemaVersion, migrations);
+    migrateStaged(staged, migrations, options);
+    retireLiveVault(vaultPath, options);
+    swapIn(staged, vaultPath);
     return { schemaVersion: latestVersion(migrations) };
+  } catch (error) {
+    if (error instanceof BackupError) throw error;
+    throw new BackupError('restore failed; the current vault was not changed', { cause: error });
   } finally {
-    rmSync(staged, { force: true });
+    for (const suffix of ['', ...SIDECARS]) rmSync(`${staged}${suffix}`, { force: true });
   }
 }

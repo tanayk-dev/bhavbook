@@ -52,14 +52,18 @@ describe('restore rejects hostile or foreign databases', () => {
   it('refuses a SQLite file that is not a BhavBook vault (application id)', () => {
     withTempDir((dir) => {
       const file = backupWith(dir, (db) => db.pragma('application_id = 7'));
-      expect(() => restoreBackup(file, path.join(dir, 'vault.db'), { appVersion: APP })).toThrow(/not a BhavBook/);
+      expect(() => restoreBackup(file, path.join(dir, 'vault.db'), { appVersion: APP })).toThrow(
+        /not a BhavBook/,
+      );
     });
   });
 
   it('refuses a backup whose manifest version disagrees with its migration history', () => {
     withTempDir((dir) => {
       const file = backupWith(dir, (db) => db.prepare('DELETE FROM schema_migrations').run());
-      expect(() => restoreBackup(file, path.join(dir, 'vault.db'), { appVersion: APP })).toThrow(/migration history/);
+      expect(() => restoreBackup(file, path.join(dir, 'vault.db'), { appVersion: APP })).toThrow(
+        /migration history/,
+      );
     });
   });
 
@@ -113,7 +117,9 @@ describe('restore swaps safely', () => {
       const [first] = loadMigrations();
       if (!first) throw new Error('no migrations');
       const broken = { version: 2, name: 'broken', sql: 'NOT SQL;' };
-      expect(() => restoreBackup(file, vaultPath, { appVersion: APP, migrations: [first, broken] })).toThrow();
+      expect(() =>
+        restoreBackup(file, vaultPath, { appVersion: APP, migrations: [first, broken] }),
+      ).toThrow();
       expect(readFileSync(vaultPath).equals(before)).toBe(true);
       expect(readdirSync(dir).filter((name) => name.includes('.tmp'))).toEqual([]);
     });
@@ -243,7 +249,9 @@ describe('migration safety', () => {
   it('reads the version of an empty database without writing to it', () => {
     const db = new Database(':memory:');
     expect(currentVersion(db)).toBe(0);
-    expect(db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name = 'schema_migrations'").get()).toEqual({
+    expect(
+      db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name = 'schema_migrations'").get(),
+    ).toEqual({
       n: 0,
     });
   });

@@ -18,12 +18,17 @@ export {
 } from './container.js';
 export { BackupError, VaultError } from './errors.js';
 export {
+  appliedMigrations,
+  assertHistoryMatches,
   currentVersion,
   latestVersion,
   loadMigrations,
   migrate,
+  migrationChecksum,
   MIGRATIONS_DIR,
+  type AppliedMigration,
   type Migration,
   type MigrateOptions,
 } from './migrations.js';
 export { openVault, type OpenVaultOptions } from './open.js';
+export { APPLICATION_ID, hardenConnection, referenceFingerprint, schemaFingerprint } from './schema.js';

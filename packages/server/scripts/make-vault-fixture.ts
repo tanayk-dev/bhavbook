@@ -15,7 +15,7 @@ try {
   const db = openVault(path.join(work, 'vault.db'), { appVersion: '0.0.0-fixture' });
   mkdirSync(path.dirname(out), { recursive: true });
   // A fixed timestamp keeps the manifest stable across regenerations.
-  createBackup(db, out, '0.0.0-fixture', () => new Date('2026-10-19T00:00:00Z'));
+  createBackup(db, out, { appVersion: '0.0.0-fixture', now: () => new Date('2026-10-19T00:00:00Z') });
   db.close();
   console.log(`wrote ${path.relative(root, out)} (schema ${version})`);
 } finally {
