@@ -12,7 +12,8 @@ async function ruleIdsFor(code: string, relativePath: string): Promise<string[]>
   return (result?.messages ?? []).map((message) => message.ruleId ?? 'fatal');
 }
 
-describe('repo ESLint config', () => {
+// The first lint builds the TypeScript program for the repo, which takes several seconds on a cold start.
+describe('repo ESLint config', { timeout: 30_000 }, () => {
   it('rejects parseFloat inside packages/core', async () => {
     const ids = await ruleIdsFor('export const p = parseFloat("1.5");\n', 'packages/core/src/index.ts');
     expect(ids).toContain('bhavbook/no-float-money');
