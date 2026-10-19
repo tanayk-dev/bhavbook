@@ -40,6 +40,8 @@ export interface FillAllocation {
   readonly fillId: string;
   /** The opening-lot adjustment behind a synthetic allocation; null for imported fills. */
   readonly adjustmentId: string | null;
+  /** The corporate action that created or reshaped this allocation (bonus and demerger-child lots); else null. */
+  readonly corporateActionId: string | null;
   readonly accountId: string;
   readonly instrumentKey: string;
   readonly bucket: Bucket;
@@ -100,13 +102,15 @@ export function compareFills(
 /** Within one fill, the intraday part comes before the remainder. */
 const PART_RANK: Readonly<Record<Bucket, number>> = { INTRADAY: 0, DELIVERY: 1, MTF: 1 };
 
-/** A total order on allocations: execution order, then account and fill (dedup keys can repeat across accounts). */
+/** A total order on allocations: execution order, then account and fill (dedup keys can repeat across accounts), then key. */
 export function compareAllocations(a: FillAllocation, b: FillAllocation): number {
   return (
     compareFills(a, b) ||
     byText(a.accountId, b.accountId) ||
     byText(a.fillId, b.fillId) ||
-    PART_RANK[a.bucket] - PART_RANK[b.bucket]
+    PART_RANK[a.bucket] - PART_RANK[b.bucket] ||
+    // A part already sold before a corporate action, then the part it reshaped (`<key>~<action>`).
+    byText(a.key, b.key)
   );
 }
 

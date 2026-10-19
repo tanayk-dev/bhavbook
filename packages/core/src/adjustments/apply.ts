@@ -11,6 +11,8 @@ import {
   type ProductOverride,
   type TradeFill,
 } from '../fifo/types.js';
+import { applyCorporateActions } from '../corporate-actions/apply.js';
+import type { CorporateAction, Fraction } from '../corporate-actions/types.js';
 import { buildPositions, type Position } from '../positions/build.js';
 import { istDateOf, istDayBounds } from '../time/ist.js';
 import type { Adjustment, OpeningLot } from './types.js';
@@ -62,6 +64,7 @@ function openingAllocation(lot: OpeningLot): FillAllocation {
     key: `${id}#${lot.bucket}`,
     fillId: id,
     adjustmentId: lot.id,
+    corporateActionId: null,
     accountId: lot.accountId,
     instrumentKey: lot.instrumentKey,
     bucket: lot.bucket,
@@ -86,6 +89,8 @@ function checkOverride(override: ProductOverride): ProductOverride {
 export interface Reconstruction {
   readonly allocations: readonly FillAllocation[];
   readonly positions: readonly Position[];
+  /** Entitlements to part of a share left by corporate actions (cash in lieu). */
+  readonly fractions: readonly Fraction[];
 }
 
 interface Sorted {
@@ -120,19 +125,35 @@ function sortAdjustments(adjustments: readonly Adjustment[]): Sorted {
   return sorted;
 }
 
-/** The account's positions from its fills and active adjustments. Pure and deterministic. */
+/** Bucketed fills and opening lots, before corporate actions. */
+export function baseAllocations(
+  fills: readonly TradeFill[],
+  adjustments: readonly Adjustment[],
+): FillAllocation[] {
+  const { overrides, opening } = sortAdjustments(adjustments);
+  return [...allocateBuckets(fills, overrides), ...opening].sort(compareAllocations);
+}
+
+/**
+ * The account's positions from its fills, active adjustments and corporate actions (applied in ex-date order to
+ * what is open at each ex-date). Pure and deterministic.
+ */
 export function reconstructAccount(
   fills: readonly TradeFill[],
   adjustments: readonly Adjustment[],
+  corporateActions: readonly CorporateAction[] = [],
 ): Reconstruction {
-  const { overrides, opening, excluded } = sortAdjustments(adjustments);
-  const allocations = [...allocateBuckets(fills, overrides), ...opening].sort(compareAllocations);
+  const { excluded } = sortAdjustments(adjustments);
+  const { allocations, fractions } = applyCorporateActions(
+    baseAllocations(fills, adjustments),
+    corporateActions,
+  );
   const positions = buildPositions(allocations, matchFifo(allocations)).map((position) =>
     excluded.has(`${position.accountId}\u0000${position.anchorKey}`)
       ? { ...position, excluded: true }
       : position,
   );
-  return { allocations, positions };
+  return { allocations, positions, fractions };
 }
 
 function orphanQuantity(reconstruction: Reconstruction, lot: OpeningLot): bigint {
