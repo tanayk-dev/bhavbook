@@ -34,6 +34,13 @@ describe('scanText', () => {
     ['call 98765-43210', 'mobile'],
     ['TRANSFER FROM CDSL (BOID : 1200000087654321', 'demat-account'],
     ['Demat Account No. IN30000012345678', 'demat-account'],
+    ['paid to someone@okaxis', 'upi-id'],
+    ['refund to a.person@ybl', 'upi-id'],
+    ['Bank A/c No: 123456789012', 'bank-account'],
+    ['IFSC,HDFC0001234', 'ifsc'],
+    ['Aadhaar 2345 6789 0123', 'aadhaar'],
+    ['DOB: 01/02/1990', 'date-of-birth'],
+    ['Pincode 411001', 'pin-code'],
   ])('flags %j as %s', (text, kind) => {
     expect(scanText(text, 'f.csv', []).map((finding) => finding.kind)).toEqual([kind]);
   });
@@ -52,6 +59,10 @@ describe('scanText', () => {
     'TRANSFER FROM CDSL (BOID : 1200000000000000',
     'order 1200000051263385 filled',
     'Demat Account charges',
+    'Money added to your Trading Account',
+    'Bank A/c No: 000000000000',
+    'IFSC,XXXX0XXXXXX',
+    'bill 12649302 dated 18 Sep 2024',
   ])('allows %j', (text) => {
     expect(scanText(text, 'f.csv', [])).toEqual([]);
   });

@@ -65,6 +65,45 @@ const DETECTORS: readonly Detector[] = [
     raw: true,
   },
   {
+    // UPI handles have no dot in the domain (name@okaxis, name@ybl), so the email detector misses them.
+    kind: 'upi-id',
+    pattern: /(?<![\w.@-])[\w.-]{2,}@(?:ok(?:axis|hdfcbank|icici|sbi)|ybl|ibl|axl|paytm|apl|upi|fbl|ikwik|freecharge|yapl|jupiteraxis|slc|pthdfc|ptsbi|ptyes|ptaxis)(?![\w.])/gi,
+    allowed: () => false,
+    raw: true,
+  },
+  {
+    kind: 'bank-account',
+    // "Demat Account No." is handled by the demat detector, which keeps the public DP ID.
+    pattern: /(?<!demat\s)(?<![A-Za-z0-9])(?:a\/?c|acct|account)(?:\s*(?:no|number))?\.?[^\d\n]{0,12}(\d{9,18})(?!\d)/gi,
+    allowed: (m) => /^0+$/.test(m[1] ?? ''),
+    raw: true,
+  },
+  {
+    kind: 'ifsc',
+    pattern: new RegExp(`${START}[A-Z]{4}0[A-Z0-9]{6}${END}`, 'g'),
+    allowed: (m) => /^X{4}0X{6}$/.test(m[0]),
+    raw: false,
+  },
+  {
+    kind: 'aadhaar',
+    // Grouped 4-4-4 only: an unseparated 12-digit run is indistinguishable from +91 mobiles and broker IDs.
+    pattern: new RegExp(`${START}[2-9]\\d{3}[ -]\\d{4}[ -]\\d{4}${END}`, 'g'),
+    allowed: () => false,
+    raw: false,
+  },
+  {
+    kind: 'date-of-birth',
+    pattern: /(?:\bdob\b|date of birth|\bbirth date)[^\n]{0,20}\d{1,4}[-/ .]\w{1,9}[-/ .]\d{2,4}/gi,
+    allowed: () => false,
+    raw: true,
+  },
+  {
+    kind: 'pin-code',
+    pattern: /(?:\bpin\s?code|\bpostal code|\bzip)[^\d\n]{0,10}[1-9]\d{5}(?!\d)/gi,
+    allowed: () => false,
+    raw: true,
+  },
+  {
     kind: 'masked-mobile',
     pattern: new RegExp(`${START}\\d{2}X{4,}\\d{2}${END}`, 'g'),
     allowed: () => false,
@@ -187,6 +226,14 @@ export function scanWorkbook(workbook: XLSX.WorkBook, location: string, denyTerm
   return findings;
 }
 
+/** UTF-16LE decoding of binary data, keeping only printable BMP text (no surrogates or control characters). */
+function utf16Text(data: Buffer): string {
+  return data
+    .subarray(0, data.length - (data.length % 2))
+    .toString('utf16le')
+    .replace(/[\uD800-\uDFFF\u0000-\u0008\u000E-\u001F]+/g, ' ');
+}
+
 /** The subset of SheetJS's (loosely typed) CFB container we use. */
 interface ContainerEntry {
   readonly name: string;
@@ -208,7 +255,12 @@ export function scanContainer(bytes: Buffer, location: string, denyTerms: readon
     const where = `${location}#${container.FullPaths[index] ?? entry.name}`;
     const isXml = /\.(xml|rels|vml)$/i.test(entry.name);
     if (!isXml && /\.(png|jpe?g|gif|emf|wmf|bin)$/i.test(entry.name)) return [];
-    const decodings = isXml ? [data.toString('utf8')] : [data.toString('latin1'), data.toString('utf16le')];
+    // Binary streams: latin1, plus UTF-16LE at both byte alignments (records can start at odd offsets).
+    // Unpaired surrogates from decoding binary as UTF-16 are dropped: personal data is never in them, and V8's
+    // case-insensitive regex engine can crash on long runs of them.
+    const decodings = isXml
+      ? [data.toString('utf8')]
+      : [data.toString('latin1'), utf16Text(data), utf16Text(data.subarray(1))];
     return decodings.flatMap((text) => scanText(text, where, denyTerms, { raw: true }));
   });
 }
