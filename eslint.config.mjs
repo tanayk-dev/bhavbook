@@ -6,7 +6,8 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 import bhavbook from 'eslint-plugin-bhavbook';
 
-const MONEY_PACKAGES = ['packages/core/**/*.ts', 'packages/adapters/**/*.ts'];
+// Source only: tests may read fixtures from disk and build expectations freely.
+const MONEY_PACKAGES = ['packages/core/src/**/*.ts', 'packages/adapters/src/**/*.ts'];
 
 const IO_MODULES = [
   'fs',
