@@ -114,3 +114,17 @@ describe('detectReport', () => {
     expect(detectReport([fakeAdapter('dhan', 'dhan.x', 1.5)], probe)).toEqual([]);
   });
 });
+
+describe('contract bounds (security review)', () => {
+  it.each(['__proto__', 'Has Space', 'x'.repeat(65)])('rejects the flag key %j', (key) => {
+    const flags = JSON.parse(`{"${key}": true}`) as Record<string, boolean>;
+    expect(canonicalRowSchema.safeParse({ ...row, flags }).success).toBe(false);
+  });
+
+  it('caps string lengths', () => {
+    expect(canonicalRowSchema.safeParse({ ...row, dedupKey: 'k'.repeat(257) }).success).toBe(false);
+    expect(canonicalRowSchema.safeParse({ ...row, raw: { line: 1, text: 'x'.repeat(8193) } }).success).toBe(
+      false,
+    );
+  });
+});

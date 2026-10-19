@@ -16,11 +16,36 @@ const isin = z.string().regex(/^[A-Z]{2}[A-Z0-9]{9}\d$/);
 const micro = z.bigint().nonnegative();
 const line = z.number().int().positive();
 
+// Bounds (security review): every string and collection is capped, and record keys are plain identifiers, so a
+// hostile file can't smuggle `__proto__`-style keys or unbounded data through the contract.
+const MAX_TEXT = 256;
+const MAX_RAW_ROW = 8 * 1024;
+const MAX_CELL_TEXT = 32 * 1024;
+const text = z.string().min(1).max(MAX_TEXT);
+const RECORD_KEY = /^[a-z][a-z0-9_]{0,63}$/;
+const MAX_RECORD_KEYS = 64;
+/** Checks the raw object's own keys first: zod silently drops `__proto__`, we want such input rejected. */
+function hasPlainKeys(input: unknown): boolean {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return false;
+  const keys = Object.keys(input);
+  return keys.length <= MAX_RECORD_KEYS && keys.every((key) => RECORD_KEY.test(key));
+}
+function boundedRecord<T extends z.ZodType>(value: T) {
+  return z
+    .unknown()
+    .refine(hasPlainKeys, 'record keys must be plain identifiers')
+    .pipe(z.record(z.string().regex(RECORD_KEY), value));
+}
+
 /** One cell of a parsed spreadsheet: cached values only, never formulas. */
-export const cellSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+export const cellSchema = z.union([z.string().max(MAX_CELL_TEXT), z.number(), z.boolean(), z.null()]);
 export type Cell = z.infer<typeof cellSchema>;
 
-export const sheetDataSchema = z.object({ name: z.string(), rows: z.array(z.array(cellSchema)) });
+export const sheetDataSchema = z.object({
+  // Excel's own sheet-name limit is 31 characters.
+  name: z.string().max(31),
+  rows: z.array(z.array(cellSchema).max(1_000)).max(200_000),
+});
 export type SheetData = z.infer<typeof sheetDataSchema>;
 
 /** What detect() sees: the start of a text file, or sheet names plus their first rows. */
@@ -36,10 +61,10 @@ export type AdapterInput =
 export const canonicalRowSchema = z
   .object({
     /** Per-adapter idempotency key (ADR-0009); unique within an account. */
-    dedupKey: z.string().min(1),
+    dedupKey: text,
     granularity: z.enum(['fill', 'order']),
     source: z.enum(['tradebook', 'external']),
-    externalOrderId: z.string().min(1).nullable(),
+    externalOrderId: text.nullable(),
     executedAtUtc: utcInstant,
     tradeDateIst: istDate,
     side: z.enum(['BUY', 'SELL']),
@@ -50,12 +75,12 @@ export const canonicalRowSchema = z
     valueAuthority: z.enum(['price', 'value']),
     exchange: z.enum(['NSE', 'BSE']),
     isin: isin.nullable(),
-    brokerSymbol: z.string().min(1).nullable(),
-    brokerName: z.string().min(1).nullable(),
+    brokerSymbol: text.nullable(),
+    brokerName: text.nullable(),
     productDeclared: z.enum(['DELIVERY', 'INTRADAY', 'MTF']).nullable(),
-    flags: z.record(z.string(), z.boolean()),
+    flags: boundedRecord(z.boolean()),
     /** The original row, for the immutable raw store (ADR-0007). */
-    raw: z.object({ line, text: z.string() }).strict(),
+    raw: z.object({ line, text: z.string().max(MAX_RAW_ROW) }).strict(),
   })
   .strict();
 export type CanonicalRow = z.infer<typeof canonicalRowSchema>;
@@ -64,16 +89,16 @@ export const statementRowSchema = z
   .object({
     /** e.g. `dhan.gt.row`, `dhan.tax.lot`, `zerodha.tax_pnl.lot`. */
     kind: z.string().regex(/^[a-z]+\.[a-z0-9_.]+$/),
-    dedupKey: z.string().min(1),
-    key: z.record(z.string(), z.string()),
+    dedupKey: text,
+    key: boundedRecord(z.string().max(MAX_TEXT)),
     /** Money as micro-rupee bigints; other values as strings or null. */
-    data: z.record(z.string(), z.union([z.bigint(), z.string(), z.null()])),
+    data: boundedRecord(z.union([z.bigint(), z.string().max(MAX_CELL_TEXT), z.null()])),
     line,
   })
   .strict();
 export type StatementRow = z.infer<typeof statementRowSchema>;
 
-export const instrumentHintSchema = z.object({ name: z.string().min(1), isin, line }).strict();
+export const instrumentHintSchema = z.object({ name: text, isin, line }).strict();
 export type InstrumentHint = z.infer<typeof instrumentHintSchema>;
 
 export const skipReasonSchema = z.enum(['fno', 'currency', 'commodity', 'mf', 'not_traded', 'other']);

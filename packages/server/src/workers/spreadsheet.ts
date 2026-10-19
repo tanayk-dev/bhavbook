@@ -1,6 +1,7 @@
 // Reads an XLSX or legacy XLS file into plain sheet data in an isolated worker thread (ADR-0023, plan S5a).
-// Limits: file size, total rows, columns per sheet, wall-clock time and worker heap. Only real spreadsheet containers
-// are accepted (SheetJS would otherwise parse arbitrary text as CSV). Errors are SpreadsheetErrors with fixed messages.
+// Limits: file size, unpacked size and part count (checked on the zip's central directory before anything is
+// inflated), sheets, rows, columns, cells, wall-clock time and worker heap. Only real spreadsheet containers are
+// accepted (SheetJS would otherwise parse arbitrary text as CSV). Errors are SpreadsheetErrors with fixed messages.
 import { Worker } from 'node:worker_threads';
 import { sheetDataSchema, type SheetData } from '@bhavbook/adapters';
 import { z } from 'zod';
@@ -11,32 +12,49 @@ export class SpreadsheetError extends Error {
 
 export interface SpreadsheetLimits {
   readonly maxBytes?: number;
+  readonly maxUnpackedBytes?: number;
+  readonly maxZipEntries?: number;
+  readonly maxCompressionRatio?: number;
+  readonly maxSheets?: number;
   readonly maxRows?: number;
   readonly maxColumns?: number;
+  readonly maxCells?: number;
   readonly timeoutMs?: number;
   readonly maxHeapMb?: number;
 }
 
 export const DEFAULT_LIMITS: Required<SpreadsheetLimits> = {
   maxBytes: 25 * 1024 * 1024,
+  maxUnpackedBytes: 200 * 1024 * 1024,
+  maxZipEntries: 500,
+  maxCompressionRatio: 200,
+  maxSheets: 64,
   maxRows: 200_000,
   maxColumns: 1_000,
+  maxCells: 5_000_000,
   timeoutMs: 10_000,
   maxHeapMb: 512,
 };
 
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const OLE2_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+const EOCD_SIGNATURE = 0x06054b50;
+const CENTRAL_SIGNATURE = 0x02014b50;
+const EOCD_MIN = 22;
+const EOCD_SEARCH = EOCD_MIN + 0xffff;
 const WORKER_URL = new URL('./spreadsheet-worker.mjs', import.meta.url);
 
 const MESSAGES: Readonly<Record<string, string>> = {
+  too_many_sheets: 'spreadsheet has too many sheets',
   too_many_rows: 'spreadsheet has too many rows',
   too_many_columns: 'spreadsheet has too many columns',
+  too_many_cells: 'spreadsheet has too many cells',
+  bad_sheet_name: 'spreadsheet has an invalid sheet name',
   unreadable: 'spreadsheet could not be read',
 };
 
 const replySchema = z.union([
-  z.object({ ok: z.literal(true), sheets: z.array(sheetDataSchema) }),
+  z.object({ ok: z.literal(true), sheets: z.array(sheetDataSchema).max(DEFAULT_LIMITS.maxSheets) }),
   z.object({ ok: z.literal(false), code: z.string() }),
 ]);
 
@@ -45,23 +63,94 @@ export function isSpreadsheetContainer(bytes: Buffer): boolean {
   return bytes.subarray(0, 4).equals(ZIP_MAGIC) || bytes.subarray(0, 8).equals(OLE2_MAGIC);
 }
 
+/**
+ * Reads the zip central directory (without inflating anything) and rejects zip bombs: too many parts, too much
+ * declared unpacked data, or an implausible compression ratio. Declared sizes can lie; the worker's limits and
+ * timeout remain the second line of defence.
+ */
+export function inspectZip(
+  bytes: Buffer,
+  limits: Pick<
+    Required<SpreadsheetLimits>,
+    'maxUnpackedBytes' | 'maxZipEntries' | 'maxCompressionRatio'
+  > = DEFAULT_LIMITS,
+): { entries: number; unpackedBytes: number } {
+  const searchFrom = Math.max(0, bytes.length - EOCD_SEARCH);
+  let end = -1;
+  for (let offset = bytes.length - EOCD_MIN; offset >= searchFrom; offset -= 1) {
+    if (bytes.readUInt32LE(offset) === EOCD_SIGNATURE) {
+      end = offset;
+      break;
+    }
+  }
+  if (end < 0) throw new SpreadsheetError('spreadsheet is not a valid zip file');
+  const entries = bytes.readUInt16LE(end + 10);
+  const directorySize = bytes.readUInt32LE(end + 12);
+  const directoryOffset = bytes.readUInt32LE(end + 16);
+  if (entries > limits.maxZipEntries) throw new SpreadsheetError('spreadsheet has too many parts');
+  if (directoryOffset + directorySize > end)
+    throw new SpreadsheetError('spreadsheet is not a valid zip file');
+
+  let cursor = directoryOffset;
+  let unpackedBytes = 0;
+  for (let index = 0; index < entries; index += 1) {
+    if (cursor + 46 > end || bytes.readUInt32LE(cursor) !== CENTRAL_SIGNATURE) {
+      throw new SpreadsheetError('spreadsheet is not a valid zip file');
+    }
+    const compressed = bytes.readUInt32LE(cursor + 20);
+    const unpacked = bytes.readUInt32LE(cursor + 24);
+    unpackedBytes += unpacked;
+    const tooDense =
+      unpacked > 1024 * 1024 && unpacked > Math.max(compressed, 1) * limits.maxCompressionRatio;
+    if (unpackedBytes > limits.maxUnpackedBytes || tooDense) {
+      throw new SpreadsheetError('spreadsheet is too large when unpacked');
+    }
+    cursor +=
+      46 +
+      bytes.readUInt16LE(cursor + 28) +
+      bytes.readUInt16LE(cursor + 30) +
+      bytes.readUInt16LE(cursor + 32);
+  }
+  return { entries, unpackedBytes };
+}
+
+/** Only the error's code (e.g. ERR_WORKER_OUT_OF_MEMORY) is kept: messages may echo file content. */
+function codeOf(error: unknown): string {
+  return error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : 'unknown';
+}
+
 export function readSpreadsheet(bytes: Buffer, limits: SpreadsheetLimits = {}): Promise<SheetData[]> {
   const settings = { ...DEFAULT_LIMITS, ...limits };
-  if (bytes.length > settings.maxBytes)
-    return Promise.reject(new SpreadsheetError('spreadsheet is too large'));
-  if (!isSpreadsheetContainer(bytes))
-    return Promise.reject(new SpreadsheetError('file is not an XLSX or XLS spreadsheet'));
+  try {
+    if (bytes.length > settings.maxBytes) throw new SpreadsheetError('spreadsheet is too large');
+    if (!isSpreadsheetContainer(bytes)) throw new SpreadsheetError('file is not an XLSX or XLS spreadsheet');
+    if (bytes.subarray(0, 4).equals(ZIP_MAGIC)) inspectZip(bytes, settings);
+  } catch (error) {
+    return Promise.reject(
+      error instanceof SpreadsheetError ? error : new SpreadsheetError('spreadsheet could not be read'),
+    );
+  }
 
   // Copy into a fresh buffer we can transfer, so the caller's Buffer is never shared with the worker.
   const copy = new Uint8Array(bytes);
+  const workerLimits = {
+    maxRows: settings.maxRows,
+    maxColumns: settings.maxColumns,
+    maxCells: settings.maxCells,
+    maxSheets: settings.maxSheets,
+  };
   return new Promise((resolve, reject) => {
-    const worker = new Worker(WORKER_URL, {
-      workerData: { bytes: copy, maxRows: settings.maxRows, maxColumns: settings.maxColumns },
-      transferList: [copy.buffer],
-      resourceLimits: { maxOldGenerationSizeMb: settings.maxHeapMb, maxYoungGenerationSizeMb: 64 },
-      stdout: true,
-      stderr: true,
-    });
+    let worker: Worker;
+    try {
+      worker = new Worker(WORKER_URL, {
+        workerData: { bytes: copy, limits: workerLimits },
+        transferList: [copy.buffer],
+        resourceLimits: { maxOldGenerationSizeMb: settings.maxHeapMb, maxYoungGenerationSizeMb: 64 },
+      });
+    } catch (error) {
+      reject(new SpreadsheetError('spreadsheet reader could not start', { cause: codeOf(error) }));
+      return;
+    }
     let settled = false;
     const finish = (outcome: () => void): void => {
       if (settled) return;
@@ -86,7 +175,7 @@ export function readSpreadsheet(bytes: Buffer, limits: SpreadsheetLimits = {}): 
     });
     worker.once('error', (error) => {
       finish(() => {
-        reject(new SpreadsheetError('spreadsheet could not be read', { cause: error }));
+        reject(new SpreadsheetError('spreadsheet could not be read', { cause: codeOf(error) }));
       });
     });
     worker.once('exit', () => {
