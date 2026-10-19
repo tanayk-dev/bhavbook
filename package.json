@@ -1,0 +1,41 @@
+{
+  "name": "bhavbook-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first, open-source trade journal for Indian multi-broker equity traders.",
+  "license": "MIT",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=24.11"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "e2e": "node -e \"console.log('e2e: no suites yet (added in S13a)')\"",
+    "pii:scan": "node -e \"console.log('pii:scan: no fixtures yet (scanner added in S2)')\"",
+    "check:leaks": "node scripts/check-broker-exports.mjs",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm pii:scan && pnpm check:leaks"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "@typescript-eslint/rule-tester": "8.71.2",
+    "@typescript-eslint/utils": "8.71.2",
+    "@vitest/coverage-v8": "5.0.5",
+    "eslint": "10.13.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-bhavbook": "workspace:*",
+    "fast-check": "4.10.2",
+    "globals": "17.13.0",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2",
+    "vitest": "5.0.5"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@bhavbook/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local server: vault, import orchestration, recompute and the HTTP API.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.11"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit"
+  }
+}
