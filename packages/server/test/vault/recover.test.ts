@@ -21,6 +21,19 @@ describe('recoverInterruptedRestore', () => {
     });
   });
 
+  it('removes sidecars at the target that do not belong to the recovered vault', () => {
+    withTempDir((dir) => {
+      const vault = path.join(dir, 'vault.db');
+      writeFileSync(path.join(dir, `.vault.db.old-${HEX}.tmp`), 'main');
+      writeFileSync(`${vault}-wal`, 'stale wal from another file');
+      writeFileSync(`${vault}-shm`, 'stale shm');
+      expect(recoverInterruptedRestore(vault).restoredOldVault).toBe(true);
+      expect(readFileSync(vault, 'utf8')).toBe('main');
+      expect(existsSync(`${vault}-wal`)).toBe(false);
+      expect(existsSync(`${vault}-shm`)).toBe(false);
+    });
+  });
+
   it('picks the newest old vault when several exist, and deletes the rest', () => {
     withTempDir((dir) => {
       const vault = path.join(dir, 'vault.db');

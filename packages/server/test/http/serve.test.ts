@@ -3,7 +3,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createLogger, SESSION_COOKIE, startServer, type RunningServer } from '../../src/http/index.js';
+import { createLogger, sessionCookieName, startServer, type RunningServer } from '../../src/http/index.js';
 
 const TOKEN = 't'.repeat(43);
 const running: RunningServer[] = [];
@@ -67,7 +67,7 @@ describe('startServer', () => {
     const launch = await fetch(server.url, { redirect: 'manual' });
     expect(launch.status).toBe(302);
     const cookie = (launch.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
-    expect(cookie).toBe(`${SESSION_COOKIE}=${TOKEN}`);
+    expect(cookie).toBe(`${sessionCookieName(server.port)}=${TOKEN}`);
     const health = await fetch(`http://127.0.0.1:${server.port}/api/health`, { headers: { cookie } });
     expect(health.status).toBe(200);
     expect((await fetch(`http://127.0.0.1:${server.port}/api/health`)).status).toBe(401);
@@ -86,7 +86,7 @@ describe('WebSocket upgrades', () => {
     const server = await start();
     const status = await upgradeStatus(server.port, {
       origin: 'http://evil.example',
-      cookie: `${SESSION_COOKIE}=${TOKEN}`,
+      cookie: `${sessionCookieName(server.port)}=${TOKEN}`,
     });
     expect(status).toBe(403);
   });
@@ -94,7 +94,7 @@ describe('WebSocket upgrades', () => {
   it('rejects an upgrade with a foreign Host (403) or without the token (401)', async () => {
     const server = await start();
     expect(
-      await upgradeStatus(server.port, { host: 'evil.example', cookie: `${SESSION_COOKIE}=${TOKEN}` }),
+      await upgradeStatus(server.port, { host: 'evil.example', cookie: `${sessionCookieName(server.port)}=${TOKEN}` }),
     ).toBe(403);
     expect(await upgradeStatus(server.port, {})).toBe(401);
   });
@@ -103,7 +103,7 @@ describe('WebSocket upgrades', () => {
     const server = await start();
     const status = await upgradeStatus(server.port, {
       origin: `http://127.0.0.1:${server.port}`,
-      cookie: `${SESSION_COOKIE}=${TOKEN}`,
+      cookie: `${sessionCookieName(server.port)}=${TOKEN}`,
     });
     expect(status).toBe(501);
   });

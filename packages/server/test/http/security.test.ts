@@ -1,6 +1,6 @@
 // ADR-0002: every route needs the session token and passes the Host/Origin allowlist; there is no CORS.
 import { describe, expect, it } from 'vitest';
-import { SESSION_COOKIE } from '../../src/http/index.js';
+import { sessionCookieName } from '../../src/http/index.js';
 import { ORIGIN, PORT, send, testApp, TOKEN } from './helpers.js';
 
 describe('session token', () => {
@@ -13,7 +13,7 @@ describe('session token', () => {
   it('rejects a wrong token, including one that is a prefix of the real one', async () => {
     for (const value of ['nope', TOKEN.slice(0, -1), `${TOKEN}x`]) {
       const response = await send(testApp(), '/api/health', {
-        headers: { cookie: `${SESSION_COOKIE}=${value}` },
+        headers: { cookie: `${sessionCookieName(PORT)}=${value}` },
       });
       expect(response.status).toBe(401);
     }
@@ -30,7 +30,7 @@ describe('session token', () => {
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe('/');
     const cookie = response.headers.get('set-cookie') ?? '';
-    expect(cookie).toContain(`${SESSION_COOKIE}=${TOKEN}`);
+    expect(cookie).toContain(`${sessionCookieName(PORT)}=${TOKEN}`);
     expect(cookie).toMatch(/HttpOnly/i);
     expect(cookie).toMatch(/SameSite=Strict/i);
     expect(cookie).toMatch(/Path=\//);
