@@ -38,6 +38,8 @@ export interface FillAllocation {
   /** `<fill id>#<bucket>`: unique per allocation. */
   readonly key: string;
   readonly fillId: string;
+  /** The opening-lot adjustment behind a synthetic allocation; null for imported fills. */
+  readonly adjustmentId: string | null;
   readonly accountId: string;
   readonly instrumentKey: string;
   readonly bucket: Bucket;

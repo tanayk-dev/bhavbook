@@ -27,6 +27,8 @@ export interface Position {
   /** `<dedup key of the opening fill>#<bucket>`: stable across recomputes and re-imports (journal anchor). */
   readonly anchorKey: string;
   readonly hasInferredProduct: boolean;
+  /** EXCLUDED by the user (an `exclude` adjustment); set by reconstructAccount. */
+  readonly excluded: boolean;
   readonly lots: readonly Lot[];
   readonly orphans: readonly Orphan[];
 }
@@ -121,6 +123,7 @@ function toPosition(run: Run, index: Indexed): Position {
     closedAtUtc: open ? null : run.closedAtUtc,
     anchorKey,
     hasInferredProduct: run.members.some((member) => member.inferred),
+    excluded: false,
     lots,
     orphans,
   };

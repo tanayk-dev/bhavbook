@@ -33,6 +33,7 @@ function allocation(
   return {
     key: `${fill.id}#${bucket}`,
     fillId: fill.id,
+    adjustmentId: null,
     accountId: fill.accountId,
     instrumentKey: fill.instrumentKey,
     bucket,
