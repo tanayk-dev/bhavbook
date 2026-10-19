@@ -3,6 +3,7 @@
 import { randomBytes } from 'node:crypto';
 import { dhanAdapter, zerodhaAdapter, type BrokerAdapter } from '@bhavbook/adapters';
 import type Database from 'better-sqlite3';
+import type { IssueForecaster } from '../recompute/types.js';
 import { autoBackup } from '../vault/index.js';
 import { writeBatches, type CommittedBatch } from './commit.js';
 import { accountCoverage, type KindCoverage } from './coverage.js';
@@ -30,6 +31,8 @@ export interface ImportServiceOptions {
   /** Called after every change to an account's rows; the recompute trigger (a no-op until S9). Must not throw. */
   readonly onChanged?: (accountId: string) => void;
   readonly adapters?: readonly BrokerAdapter[];
+  /** The preview's issue forecast (dry-run recompute, S9); none by default. */
+  readonly forecast?: IssueForecaster;
 }
 
 export interface ImportPreview {
@@ -108,7 +111,13 @@ export function createImportService(options: ImportServiceOptions): ImportServic
       const parsed: ParsedFile[] = [];
       for (const [index, file] of files.entries()) {
         const label = file.name === undefined ? null : file.name.slice(0, MAX_LABEL_CHARS);
-        const outcome = await previewFile({ db, adapters }, account, file, { index, label }, seen);
+        const outcome = await previewFile(
+          { db, adapters, forecast: options.forecast },
+          account,
+          file,
+          { index, label },
+          seen,
+        );
         previews.push(outcome.preview);
         if (outcome.parsed !== null) parsed.push(outcome.parsed);
       }

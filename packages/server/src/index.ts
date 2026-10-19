@@ -5,3 +5,4 @@ export * from './http/index.js';
 export * from './vault/index.js';
 export * from './import/index.js';
 export * from './services/instruments.js';
+export * from './recompute/index.js';

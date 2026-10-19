@@ -40,13 +40,15 @@ export function seedAccounts(db: Database.Database): void {
 export async function withVault(
   run: (vault: TestVault) => Promise<void> | void,
   options: Partial<ImportServiceOptions> = {},
+  /** Options that need the open vault, e.g. recompute hooks. */
+  withDb: (db: Database.Database) => Partial<ImportServiceOptions> = () => ({}),
 ): Promise<void> {
   const dir = mkdtempSync(path.join(tmpdir(), 'bhavbook-import-'));
   const vaultPath = path.join(dir, 'vault.db');
   const db = openVault(vaultPath, { appVersion: 'test' });
   try {
     seedAccounts(db);
-    const service = createImportService({ db, vaultPath, appVersion: 'test', ...options });
+    const service = createImportService({ db, vaultPath, appVersion: 'test', ...options, ...withDb(db) });
     await run({ dir, vaultPath, db, service });
   } finally {
     db.close();

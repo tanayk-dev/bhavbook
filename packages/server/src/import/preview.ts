@@ -10,6 +10,7 @@ import {
   type RowError,
 } from '@bhavbook/adapters';
 import type Database from 'better-sqlite3';
+import type { IssueForecast, IssueForecaster } from '../recompute/types.js';
 import { readImportFile } from './read.js';
 
 /** How many row errors a preview shows; the total is always in `counts.errors`. */
@@ -44,9 +45,9 @@ export type FilePreview = Labelled &
         readonly counts: PreviewCounts;
         readonly errors: readonly RowError[];
         readonly coverage: ParseResult['coverage'];
-        readonly warnings: readonly 'wrong_account'[];
-        /** Issues the commit would create or resolve; empty until recompute exists (S9). */
-        readonly issueForecast: readonly never[];
+        readonly warnings: readonly ('wrong_account' | 'forecast_unavailable')[];
+        /** Issues the commit would create or resolve (empty when no forecaster is configured). */
+        readonly issueForecast: readonly IssueForecast[];
       }
     | {
         readonly status: 'ambiguous';
@@ -75,6 +76,7 @@ export interface ParsedFile {
 export interface PreviewContext {
   readonly db: Database.Database;
   readonly adapters: readonly BrokerAdapter[];
+  readonly forecast?: IssueForecaster | undefined;
 }
 
 /** Keys already seen in this preview, so a later file's copies count as duplicates. */
@@ -147,6 +149,24 @@ function hasRepeats(result: ParseResult): boolean {
   );
 }
 
+/**
+ * The issue forecast, when a forecaster is configured and the file adds anything new; null when it failed (the
+ * forecast is advisory, so a failure never fails the preview).
+ */
+function forecastFor(
+  context: PreviewContext,
+  accountId: string,
+  result: ParseResult,
+  counts: PreviewCounts,
+): readonly IssueForecast[] | null {
+  if (context.forecast === undefined || (counts.rows.new === 0 && counts.statements.new === 0)) return [];
+  try {
+    return context.forecast(accountId, result);
+  } catch {
+    return null;
+  }
+}
+
 /** Previews one file; `parsed` is set when the file can be committed. */
 export async function previewFile(
   context: PreviewContext,
@@ -191,9 +211,11 @@ export async function previewFile(
     return { preview: { ...base, status: 'unreadable', reason: 'malformed' }, parsed: null };
   }
   const counts = countRows(context.db, account.id, result, seen);
-  const warnings = looksLikeAnotherAccount(context.db, account.id, result)
-    ? (['wrong_account'] as const)
-    : [];
+  const forecast = forecastFor(context, account.id, result, counts);
+  const warnings = [
+    ...(looksLikeAnotherAccount(context.db, account.id, result) ? (['wrong_account'] as const) : []),
+    ...(forecast === null ? (['forecast_unavailable'] as const) : []),
+  ];
   const preview: FilePreview = {
     ...base,
     status: 'ready',
@@ -203,7 +225,7 @@ export async function previewFile(
     errors: result.errors.slice(0, ERROR_SAMPLE),
     coverage: result.coverage,
     warnings,
-    issueForecast: [],
+    issueForecast: forecast ?? [],
   };
   const parsed = {
     kind: top.kind,

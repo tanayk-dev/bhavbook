@@ -33,6 +33,8 @@ export default defineConfig({
   test: {
     projects: projects(),
     passWithNoTests: true,
+    // Shared CI runners (Windows especially) can be several times slower than a laptop.
+    testTimeout: 30_000,
     setupFiles: [NO_OUTBOUND],
     coverage: {
       provider: 'v8',
