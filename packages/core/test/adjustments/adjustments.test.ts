@@ -28,22 +28,36 @@ function openingLot(overrides: Partial<Extract<Adjustment, { kind: 'opening_lot'
   };
 }
 
-const orphanSell = (): TradeFill => fill({ side: 'SELL', qty: 10, price: 120, at: '2025-09-12 10:00', product: 'DELIVERY' });
+const orphanSell = (): TradeFill =>
+  fill({ side: 'SELL', qty: 10, price: 120, at: '2025-09-12 10:00', product: 'DELIVERY' });
 
 describe('opening lots (E5 -> E6)', () => {
   it('E6: an opening lot "before 2025-09-12" completes the position; gross = proceeds - cost', () => {
     const { positions, allocations } = reconstructAccount([orphanSell()], [openingLot()]);
     const position = first(positions);
-    expect([position.state, position.incomplete, rupees(grossPnlMicro(position))]).toEqual(['CLOSED', false, '400']);
+    expect([position.state, position.incomplete, rupees(grossPnlMicro(position))]).toEqual([
+      'CLOSED',
+      false,
+      '400',
+    ]);
     const lot = allocations.find((allocation) => allocation.adjustmentId === 'adj1');
-    expect(lot).toMatchObject({ side: 'BUY', bucket: 'DELIVERY', quantity: 10n, valueMicro: 800_000_000n, inferred: false });
+    expect(lot).toMatchObject({
+      side: 'BUY',
+      bucket: 'DELIVERY',
+      quantity: 10n,
+      valueMicro: 800_000_000n,
+      inferred: false,
+    });
     // One second before the IST day starts: before every fill of that day.
     expect(lot?.executedAtUtc).toBe('2025-09-11T18:29:59Z');
     expect(lot?.tradeDateIst).toBe('2025-09-11');
   });
 
   it('places an opening lot with an entry date at the start of that IST day', () => {
-    const { allocations } = reconstructAccount([orphanSell()], [openingLot({ beforeDateIst: undefined, entryDateIst: '2025-01-15' })]);
+    const { allocations } = reconstructAccount(
+      [orphanSell()],
+      [openingLot({ beforeDateIst: undefined, entryDateIst: '2025-01-15' })],
+    );
     expect(allocations.find((allocation) => allocation.adjustmentId === 'adj1')).toMatchObject({
       executedAtUtc: '2025-01-14T18:30:00Z',
       tradeDateIst: '2025-01-15',
@@ -52,7 +66,10 @@ describe('opening lots (E5 -> E6)', () => {
 
   it('is never netted with same-day sells (it is a holding, not a trade)', () => {
     const sameDay = fill({ side: 'SELL', qty: 10, price: 120, at: '2025-01-15 10:00' });
-    const { allocations } = reconstructAccount([sameDay], [openingLot({ beforeDateIst: undefined, entryDateIst: '2025-01-15' })]);
+    const { allocations } = reconstructAccount(
+      [sameDay],
+      [openingLot({ beforeDateIst: undefined, entryDateIst: '2025-01-15' })],
+    );
     expect(allocations.map((allocation) => allocation.bucket)).toEqual(['DELIVERY', 'DELIVERY']);
   });
 
@@ -62,7 +79,8 @@ describe('opening lots (E5 -> E6)', () => {
 
   it('rejects malformed opening lots', () => {
     const bad: Partial<Extract<Adjustment, { kind: 'opening_lot' }>>[] = [
-      { bucket: 'INTRADAY' },
+      // Stored adjustments are runtime data: the type forbids INTRADAY, the guard must too.
+      { bucket: 'INTRADAY' as 'DELIVERY' },
       { quantity: 0n },
       { totalCostMicro: -1n },
       { entryDateIst: '2025-01-01' },
@@ -87,7 +105,9 @@ describe('exclude and product_override', () => {
       fill({ side: 'BUY', qty: 5, price: 100, at: '2025-01-01 10:00', product: 'DELIVERY', instrument: 'B' }),
     ];
     const anchor = `${fills[0]?.dedupKey ?? ''}#DELIVERY`;
-    const { positions } = reconstructAccount(fills, [{ id: 'x', kind: 'exclude', accountId: 'acc', anchorKey: anchor }]);
+    const { positions } = reconstructAccount(fills, [
+      { id: 'x', kind: 'exclude', accountId: 'acc', anchorKey: anchor },
+    ]);
     expect(positions.map((position) => [position.instrumentKey, position.excluded])).toEqual([
       ['A', true],
       ['B', false],
@@ -99,8 +119,17 @@ describe('exclude and product_override', () => {
       fill({ side: 'BUY', qty: 10, price: 100, at: '2025-01-02 10:00' }),
       fill({ side: 'SELL', qty: 10, price: 101, at: '2025-01-02 11:00' }),
     ];
-    const override: Adjustment = { id: 'o', kind: 'product_override', accountId: 'acc', instrumentKey: ISIN, tradeDateIst: '2025-01-02', bucket: 'MTF' };
-    expect(reconstructAccount(fills, [override]).positions.map((position) => position.bucket)).toEqual(['MTF']);
+    const override: Adjustment = {
+      id: 'o',
+      kind: 'product_override',
+      accountId: 'acc',
+      instrumentKey: ISIN,
+      tradeDateIst: '2025-01-02',
+      bucket: 'MTF',
+    };
+    expect(reconstructAccount(fills, [override]).positions.map((position) => position.bucket)).toEqual([
+      'MTF',
+    ]);
   });
 });
 
@@ -122,7 +151,13 @@ describe('redundantOpeningLots (E7)', () => {
 
 describe('suggestOpeningLots', () => {
   const orphans = [
-    { anchorKey: 'k1#DELIVERY', instrumentKey: 'INE377Y01014', bucket: 'DELIVERY' as const, quantity: 200n, dateIst: '2024-09-18' },
+    {
+      anchorKey: 'k1#DELIVERY',
+      instrumentKey: 'INE377Y01014',
+      bucket: 'DELIVERY' as const,
+      quantity: 200n,
+      dateIst: '2024-09-18',
+    },
   ];
   const lot = {
     statementKey: 'tax|short_term|INE377Y01014|2024-09-17',
@@ -152,9 +187,11 @@ describe('suggestOpeningLots', () => {
     const later = { ...lot, statementKey: 'later', buyDateIst: '2024-09-19' };
     const otherIsin = { ...lot, statementKey: 'isin', isin: 'INE000000002' };
     const otherQty = { ...lot, statementKey: 'qty', quantity: 100n };
-    expect(suggestOpeningLots(orphans, [earlier, later, otherIsin, otherQty, lot]).map((entry) => entry.statementKey)).toEqual([
-      lot.statementKey,
-    ]);
+    expect(
+      suggestOpeningLots(orphans, [earlier, later, otherIsin, otherQty, lot]).map(
+        (entry) => entry.statementKey,
+      ),
+    ).toEqual([lot.statementKey]);
     expect(suggestOpeningLots(orphans, [earlier]).map((entry) => entry.statementKey)).toEqual(['older']);
     expect(suggestOpeningLots(orphans, [later, otherIsin, otherQty])).toEqual([]);
   });
