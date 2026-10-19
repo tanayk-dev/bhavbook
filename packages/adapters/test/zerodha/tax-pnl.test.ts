@@ -37,7 +37,10 @@ describe('zerodha tax P&L', () => {
   });
 
   it('labels every equity section and keeps identical lots apart (occurrence index)', () => {
-    expect(new Set(lots.map((row) => row.key.section))).toEqual(new Set(['intraday', 'short_term', 'long_term', 'buyback']));
+    // The Buyback section exists in this file but has no rows.
+    expect(new Set(lots.map((row) => row.key.section))).toEqual(
+      new Set(['intraday', 'short_term', 'long_term']),
+    );
     const dvr = lots.filter((row) => row.key.symbol === 'TATAMTRDVR');
     expect(dvr.length).toBeGreaterThanOrEqual(2);
     expect(new Set(lots.map((row) => row.dedupKey)).size).toBe(lots.length);
@@ -46,7 +49,9 @@ describe('zerodha tax P&L', () => {
   it('reads DP charges per scrip and sale date from "Other Debits and Credits"', () => {
     const expected = input.sheets
       .find((sheet) => sheet.name === 'Other Debits and Credits')
-      ?.rows.filter((row) => typeof row[1] === 'string' && row[1].startsWith('DP Charges for Sale of')).length;
+      ?.rows.filter((row) =>
+        row.some((cell) => typeof cell === 'string' && cell.startsWith('DP Charges for Sale of')),
+      ).length;
     expect(dp).toHaveLength(expected ?? -1);
     expect(dp.find((row) => row.key.symbol === 'INDHOTEL')).toMatchObject({
       key: { symbol: 'INDHOTEL', sale_date: '2024-12-13' },
@@ -55,7 +60,9 @@ describe('zerodha tax P&L', () => {
   });
 
   it('never outputs the header block (client ID, name, PAN)', () => {
-    const text = JSON.stringify(result, (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value));
+    const text = JSON.stringify(result, (_key, value: unknown) =>
+      typeof value === 'bigint' ? value.toString() : value,
+    );
     expect(text).not.toMatch(/Client ID|Client Name|XXXXX0000X|XXX000/);
   });
 

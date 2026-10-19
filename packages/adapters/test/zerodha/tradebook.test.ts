@@ -48,8 +48,18 @@ describe('zerodha tradebook: golden fixture', () => {
     for (const row of result.rows) {
       const key = `${row.brokerSymbol ?? ''}|${row.exchange}`;
       const entry = sums.get(key) ?? { buy: 0n, sell: 0n, buyQty: 0n, sellQty: 0n };
-      if (row.side === 'BUY') sums.set(key, { ...entry, buy: entry.buy + row.tradeValueMicro, buyQty: entry.buyQty + row.quantity });
-      else sums.set(key, { ...entry, sell: entry.sell + row.tradeValueMicro, sellQty: entry.sellQty + row.quantity });
+      if (row.side === 'BUY')
+        sums.set(key, {
+          ...entry,
+          buy: entry.buy + row.tradeValueMicro,
+          buyQty: entry.buyQty + row.quantity,
+        });
+      else
+        sums.set(key, {
+          ...entry,
+          sell: entry.sell + row.tradeValueMicro,
+          sellQty: entry.sellQty + row.quantity,
+        });
     }
     expect(sums.size).toBe(32);
     for (const [key, sum] of sums) {
@@ -84,17 +94,25 @@ describe('zerodha tradebook: golden fixture', () => {
   });
 
   it('marks every fill as price-authoritative with no declared product (Zerodha has no product column)', () => {
-    expect(result.rows.every((row) => row.valueAuthority === 'price' && row.productDeclared === null)).toBe(true);
+    expect(result.rows.every((row) => row.valueAuthority === 'price' && row.productDeclared === null)).toBe(
+      true,
+    );
     expect(result.rows.every((row) => row.granularity === 'fill' && row.source === 'tradebook')).toBe(true);
   });
 });
 
 describe('zerodha tradebook: edge cases', () => {
-  const good = 'TCS,INE467B01029,2025-09-12,NSE,EQ,EQ,sell,false,5.000000,3130.600098,606003125,1300000051263375,2025-09-12T14:50:01';
+  const good =
+    'TCS,INE467B01029,2025-09-12,NSE,EQ,EQ,sell,false,5.000000,3130.600098,606003125,1300000051263375,2025-09-12T14:50:01';
 
   it('skips non-equity segments with a reason instead of dropping them', () => {
     const result = zerodhaAdapter.parse(
-      csv(good, good.replace(',EQ,EQ,', ',FO,FUT,'), good.replace(',EQ,EQ,', ',CDS,FUT,'), good.replace(',EQ,EQ,', ',MCX,FUT,')),
+      csv(
+        good,
+        good.replace(',EQ,EQ,', ',FO,FUT,'),
+        good.replace(',EQ,EQ,', ',CDS,FUT,'),
+        good.replace(',EQ,EQ,', ',MCX,FUT,'),
+      ),
       'zerodha.tradebook',
     );
     expect(result.rows).toHaveLength(1);
@@ -110,7 +128,7 @@ describe('zerodha tradebook: edge cases', () => {
     ['a zero quantity', good.replace('5.000000', '0'), 'non_positive_quantity'],
     ['an unknown side', good.replace(',sell,', ',hold,'), 'bad_side'],
     ['an unknown exchange', good.replace(',NSE,', ',MSE,'), 'bad_exchange'],
-    ['a malformed price', good.replace('3130.600098', '31,30'), 'bad_price'],
+    ['a malformed price', good.replace('3130.600098', '31.3.0'), 'bad_price'],
     ['a malformed time', good.replace('2025-09-12T14:50:01', 'soon'), 'bad_time'],
     ['a missing trade id', good.replace(',606003125,', ',,'), 'missing_id'],
     ['the wrong column count', 'TCS,INE467B01029', 'bad_row'],
@@ -131,7 +149,9 @@ describe('zerodha tradebook: edge cases', () => {
   });
 
   it('refuses a file whose header is not the tradebook header', () => {
-    expect(() => zerodhaAdapter.parse({ type: 'text', text: 'a,b\r\n1,2' }, 'zerodha.tradebook')).toThrow(/header/);
+    expect(() => zerodhaAdapter.parse({ type: 'text', text: 'a,b\r\n1,2' }, 'zerodha.tradebook')).toThrow(
+      /header/,
+    );
   });
 
   it.todo('golden test on a real "Equity (external trades)" export once a sample exists (PRD §6.3)');

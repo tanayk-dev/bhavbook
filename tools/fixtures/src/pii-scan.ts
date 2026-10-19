@@ -316,7 +316,7 @@ export function loadDenylist(): string[] {
   const file = process.env.BHAVBOOK_PII_DENYLIST ?? path.join(homedir(), '.bhavbook-pii-denylist');
   if (!existsSync(file)) return [];
   return readFileSync(file, 'utf8')
-    .replace(/^﻿/, '') // Windows PowerShell 5 writes UTF-8 with a BOM
+    .replace(/^\uFEFF/, '') // Windows PowerShell 5 writes UTF-8 with a BOM
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith('#'));

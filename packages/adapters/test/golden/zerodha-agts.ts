@@ -11,7 +11,10 @@ export interface AgtsTotals {
 }
 
 function money(cell: unknown): bigint {
-  const text = typeof cell === 'number' ? cell.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 20 }) : String(cell);
+  const text =
+    typeof cell === 'number'
+      ? cell.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 20 })
+      : String(cell);
   return parseDecimalToMicro(normaliseDecimalString(text, 2, 'half-up'));
 }
 

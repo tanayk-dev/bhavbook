@@ -29,7 +29,12 @@ export function sheetsOf(file: string): SheetData[] {
   return book.SheetNames.map((name) => {
     const sheet = book.Sheets[name];
     if (!sheet) return { name, rows: [] };
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: null, blankrows: true });
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+      header: 1,
+      raw: true,
+      defval: null,
+      blankrows: true,
+    });
     return { name, rows: rows.map((row) => row.map(toCell)) };
   });
 }
@@ -41,5 +46,8 @@ export function sheetInput(broker: string, kind: string): AdapterInput & { type:
 /** What detect() gets: the first 64 KB of text, or sheet names with their first 20 rows. */
 export function probeOf(input: AdapterInput): FileProbe {
   if (input.type === 'text') return { type: 'text', head: input.text.slice(0, 64 * 1024) };
-  return { type: 'sheets', sheets: input.sheets.map((sheet) => ({ name: sheet.name, rows: sheet.rows.slice(0, 20) })) };
+  return {
+    type: 'sheets',
+    sheets: input.sheets.map((sheet) => ({ name: sheet.name, rows: sheet.rows.slice(0, 20) })),
+  };
 }
