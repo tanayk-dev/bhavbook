@@ -8,9 +8,9 @@ import {
   parseDecimalToMicro,
   parseIstLocal,
 } from '@bhavbook/core';
-import { parse } from 'csv-parse/sync';
 import type { CanonicalRow, ParseResult, RowError, SkipReason } from '../contract.js';
 import { ISO_DATE } from '../cells.js';
+import { isBlankRecord, readCsvRecords } from '../csv.js';
 
 export const TRADEBOOK_HEADER = [
   'symbol',
@@ -48,12 +48,6 @@ class RowProblem extends Error {
   }
 }
 
-interface CsvRecord {
-  readonly record: readonly string[];
-  readonly line: number;
-  readonly raw: string;
-}
-
 function normaliseName(name: string): string {
   return name
     .replace(/^\uFEFF/, '')
@@ -79,34 +73,6 @@ export function tradebookHeaderConfidence(firstLine: string): number {
   const names = firstLine.split(',').map(normaliseName);
   if (names.join(',') === TRADEBOOK_HEADER.join(',')) return 1;
   return headerColumns(names) === null ? 0 : 0.9;
-}
-
-/** csv-parse can quote cell content in its error messages; never let that escape (ADR-0019). */
-function readRecords(text: string): CsvRecord[] {
-  let parsed: unknown;
-  try {
-    parsed = parse(text, {
-      bom: true,
-      skip_empty_lines: true,
-      relax_column_count: true,
-      info: true,
-      raw: true,
-    });
-  } catch {
-    throw new Error('malformed CSV');
-  }
-  if (!Array.isArray(parsed)) throw new Error('malformed CSV');
-  return parsed.map((entry: unknown) => {
-    const value = entry as { record?: unknown; info?: { lines?: unknown }; raw?: unknown };
-    if (
-      !Array.isArray(value.record) ||
-      typeof value.info?.lines !== 'number' ||
-      typeof value.raw !== 'string'
-    ) {
-      throw new Error('malformed CSV');
-    }
-    return { record: value.record.map(String), line: value.info.lines, raw: value.raw };
-  });
 }
 
 function fieldsOf(record: readonly string[], columns: ReadonlyMap<Field, number>): Fields {
@@ -192,12 +158,12 @@ function toRow(fields: Fields, line: number, raw: string, source: CanonicalRow['
     brokerName: null,
     productDeclared: null,
     flags: { auction: fields.auction.toLowerCase() === 'true' },
-    raw: { line, text: raw.replace(/\r?\n$/, '') },
+    raw: { line, text: raw },
   };
 }
 
 export function parseTradebook(text: string, source: CanonicalRow['source']): ParseResult {
-  const records = readRecords(text).filter((entry) => entry.record.some((cell) => cell.trim() !== ''));
+  const records = readCsvRecords(text).filter((entry) => !isBlankRecord(entry.record));
   const [header, ...data] = records;
   const columns = header ? headerColumns(header.record) : null;
   if (!columns || !header) throw new Error('not a Zerodha tradebook (unexpected header)');
