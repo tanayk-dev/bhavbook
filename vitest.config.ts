@@ -51,6 +51,7 @@ export default defineConfig({
         'packages/core/src/money/**': { branches: 100 },
         'packages/core/src/fees/**': { branches: 100 },
         'packages/core/src/fifo/**': { branches: 100 },
+        'packages/core/src/corporate-actions/**': { branches: 100 },
       },
     },
   },
