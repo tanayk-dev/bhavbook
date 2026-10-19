@@ -5,3 +5,4 @@ export * from './contract.js';
 export * from './detect.js';
 export * from './cells.js';
 export { zerodhaAdapter } from './zerodha/index.js';
+export { dhanAdapter } from './dhan/index.js';

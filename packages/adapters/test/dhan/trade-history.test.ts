@@ -54,7 +54,8 @@ describe('dhan trade history: golden fixture', () => {
 
   it('maps the Order column to the declared product, including MTF', () => {
     const products = new Map<string, number>();
-    for (const row of result.rows) products.set(row.productDeclared ?? 'null', (products.get(row.productDeclared ?? 'null') ?? 0) + 1);
+    for (const row of result.rows)
+      products.set(row.productDeclared ?? 'null', (products.get(row.productDeclared ?? 'null') ?? 0) + 1);
     expect(Object.fromEntries(products)).toEqual({ DELIVERY: 106, INTRADAY: 8, MTF: 2 });
   });
 
@@ -67,6 +68,11 @@ describe('dhan trade history: golden fixture', () => {
   it('converts IST date + time to UTC', () => {
     const row = result.rows.find((candidate) => candidate.raw.text.startsWith('2024-09-18,09:16:45'));
     expect(row?.executedAtUtc).toBe('2024-09-18T03:46:45Z');
+  });
+
+  it('stores raw rows without line endings (CRLF files included)', () => {
+    const zerodha = zerodhaAdapter.parse(textInput('zerodha', 'tradebook'), 'zerodha.tradebook');
+    for (const row of [...result.rows, ...zerodha.rows]) expect(row.raw.text).not.toMatch(/[\r\n]/);
   });
 
   it('is stable across re-parses (idempotent keys)', () => {
@@ -109,8 +115,8 @@ describe('dhan trade history: edge cases', () => {
   });
 
   it('turns CSV syntax errors into a fixed message', () => {
-    expect(() => dhanAdapter.parse({ type: 'text', text: `${HEADER}\r\n"SECRET,x` }, 'dhan.trade_history')).toThrow(
-      /^malformed CSV$/,
-    );
+    expect(() =>
+      dhanAdapter.parse({ type: 'text', text: `${HEADER}\r\n"SECRET,x` }, 'dhan.trade_history'),
+    ).toThrow(/^malformed CSV$/);
   });
 });

@@ -3,7 +3,9 @@ import { detectReport, dhanAdapter, parseResultSchema } from '../../src/index.js
 import { probeOf, sheetInput, textInput } from '../helpers/fixtures.js';
 
 function noMetadata(value: unknown): void {
-  const text = JSON.stringify(value, (_key, item: unknown) => (typeof item === 'bigint' ? item.toString() : item));
+  const text = JSON.stringify(value, (_key, item: unknown) =>
+    typeof item === 'bigint' ? item.toString() : item,
+  );
   for (const placeholder of ['TEST USER', 'XXXX00000X', '1234567890', 'test@example.com', 'testxxx']) {
     expect(text).not.toContain(placeholder);
   }
@@ -51,7 +53,9 @@ describe('dhan DP charges', () => {
       key: { date: '2025-01-14', isin: 'INE04I401011', type: 'DP Charges for Sale' },
       data: { quantity: '3', charges_micro: 12_500_000n },
     });
-    expect(result.instrumentHints).toContainEqual(expect.objectContaining({ name: 'KPIT Technologies', isin: 'INE04I401011' }));
+    expect(result.instrumentHints).toContainEqual(
+      expect.objectContaining({ name: 'KPIT Technologies', isin: 'INE04I401011' }),
+    );
     expect(result.instrumentHints.every((hint) => hint.isin !== 'NA')).toBe(true);
     noMetadata(result);
   });
@@ -79,20 +83,31 @@ describe('dhan Tax Report (.xls)', () => {
   it('includes the IPO lot that the trade file lacks (Bajaj Housing, 200 @ 176, bought 17-09-2024)', () => {
     expect(lots).toContainEqual(
       expect.objectContaining({
-        key: expect.objectContaining({ name: 'Bajaj Housing Finance', buy_date: '2024-09-17', quantity: '200' }) as unknown,
-        data: expect.objectContaining({ buy_value_micro: 35_200_000_000n, sell_value_micro: 34_810_000_000n }) as unknown,
+        key: expect.objectContaining({
+          name: 'Bajaj Housing Finance',
+          buy_date: '2024-09-17',
+          quantity: '200',
+        }) as unknown,
+        data: expect.objectContaining({
+          buy_value_micro: 35_200_000_000n,
+          sell_value_micro: 34_810_000_000n,
+        }) as unknown,
       }),
     );
   });
 
   it('rounds float-noise cells to paise and learns statement name -> ISIN', () => {
     expect(lots[0]?.data).toMatchObject({ gross_pnl_micro: -750_000_000n, total_charges_micro: 19_380_000n });
-    expect(result.instrumentHints).toContainEqual(expect.objectContaining({ name: 'REC', isin: 'INE020B01018' }));
+    expect(result.instrumentHints).toContainEqual(
+      expect.objectContaining({ name: 'REC', isin: 'INE020B01018' }),
+    );
   });
 
   it('never outputs the header block', () => {
     noMetadata(result);
-    expect(JSON.stringify(result, (_k, v: unknown) => (typeof v === 'bigint' ? '' : v))).not.toContain('XXXXX XXXXX');
+    expect(JSON.stringify(result, (_k, v: unknown) => (typeof v === 'bigint' ? '' : v))).not.toContain(
+      'XXXXX XXXXX',
+    );
   });
 });
 
