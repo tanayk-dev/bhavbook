@@ -48,7 +48,8 @@
 | S5a | Adapter contract and spreadsheet worker | S2, S3 | default | **yes** |
 | S5b | Zerodha parsers | S5a | default | — |
 | S6 | Dhan parsers | S5a | default | — |
-| S7 | Import pipeline | S4, S5b, S6 | default | **yes** |
+| S7-1 | Import pipeline: schema 0002, preview, commit | S4, S5b, S6 | default | **yes** |
+| S7-2 | Import pipeline: undo, coverage | S7-1 | default | **yes** |
 | S8 | Instrument resolution | S7 | default | — |
 | S9 | Reconstruction core | S8 | **strongest** | — |
 | S10a | Adjustments and opening-lot suggestions | S9 | **strongest** | — |
@@ -71,7 +72,7 @@ W1  S1
 W2  S2 ∥ S3
 W3  S4 ∥ S5a
 W4  S5b ∥ S6 ∥ S11
-W5  S7
+W5  S7-1 → S7-2
 W6  S8
 W7  S9
 W8  S10a ∥ S10b ∥ S12a ∥ S13a
@@ -374,9 +375,9 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
    - compute counts (new, duplicate, skipped-by-reason, errors), coverage, wrong-account warnings, and an **issue forecast** by dry-running recompute on a copy-on-write in-memory view (once S9 exists; before that, the forecast is empty);
    - write nothing; return a preview token with a 15-minute TTL.
 2. `commitImport(token)`: auto-backup, then **one transaction** inserting `import_batch`, `raw_row` and `trade_row`/`statement_row` (`ON CONFLICT DO NOTHING`), then trigger a recompute (a no-op hook until S9).
-3. `undoImport(batchId)`: delete exactly that batch's rows, then recompute.
-   - **Overlap rule (found in S4):** `trade_row`/`statement_row` keep one row per dedup key, so a later overlapping batch inserts nothing for keys it shares with an earlier batch. Undoing the *earlier* batch would lose those rows. In the same transaction, re-parse the remaining batches' `raw_row`s for the deleted keys and re-insert them under the surviving batch. Test: import A, import overlapping B, undo A → B's overlapping trades are still present.
-4. `coverage(accountId)`: merged ranges per report kind, plus gaps.
+3. `undoImport(batchId)` **(S7-2)**: delete exactly that batch's rows, then recompute.
+   - **Overlap rule (found in S4):** `trade_row`/`statement_row` keep one row per dedup key, so a later overlapping batch inserts nothing for keys it shares with an earlier batch. Undoing the *earlier* batch would lose those rows. In the same transaction, re-insert the deleted keys from the earliest surviving batch's `batch_row` copy (schema 0002, see r5). Test: import A, import overlapping B, undo A → B's overlapping trades are still present.
+4. `coverage(accountId)` **(S7-2)**: merged ranges per report kind, plus gaps.
 5. Tests:
    - re-import → 0 new rows;
    - overlapping Zerodha windows deduplicate;
@@ -826,6 +827,10 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
 - Log every mutation below.
 
 ## Changelog
+
+- 2026-10-19 r5: S5b, S6 and S11 merged (wave 4). S7 split into S7-1 (schema 0002, preview, commit) and S7-2 (undo, coverage) under the ~800-line rule.
+  - Undo can't re-parse `raw_row`s as r4 planned: statement rows from spreadsheets have no raw text, a Dhan key's occurrence index depends on the whole file, and Journal CSVs can't be rebuilt without their (never stored) metadata block. Schema 0002 adds `batch_row`: each batch's own canonical copy of every row it contained, deduplicated or not. Undo re-inserts shared keys from the earliest surviving batch's copy, so the final state equals importing the remaining batches in order.
+  - From S11 on, steps also get the `ecc:code-reviewer` pass the convention requires; PR titles use `<step-id>: <title>`.
 
 - 2026-10-19 r1: created from PRD Draft 1 + ADR-0001…0026.
 - 2026-10-19 r4: S3 and S2 merged; S4 in progress.

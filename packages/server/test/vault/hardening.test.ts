@@ -19,18 +19,19 @@ import { insertTrade, migratedMemoryDb, seedAccount, withTempDir } from './helpe
 
 const APP = '0.0.0-test';
 
-/** A schema-1 vault, optionally tampered with, packed as a .bhav file. */
+/** A current-schema vault, optionally tampered with, packed as a .bhav file. */
 function backupWith(dir: string, tamper: (db: Database.Database) => void): string {
   const vaultPath = path.join(dir, 'source.db');
   const db = openVault(vaultPath, { appVersion: APP });
   seedAccount(db);
   insertTrade(db);
+  const schemaVersion = currentVersion(db);
   tamper(db);
   const raw = path.join(dir, 'raw.db');
   db.prepare('VACUUM INTO ?').run(raw);
   db.close();
   const file = path.join(dir, 'tampered.bhav');
-  writeFileSync(file, encodeBhav(readFileSync(raw), { schemaVersion: 1, appVersion: APP, createdAt: 'x' }));
+  writeFileSync(file, encodeBhav(readFileSync(raw), { schemaVersion, appVersion: APP, createdAt: 'x' }));
   return file;
 }
 
