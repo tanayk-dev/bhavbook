@@ -3,7 +3,8 @@
 // header block (name, UCC, mobile, email) is never read.
 import type { Cell, InstrumentHint, ParseResult, RowError, SheetData, StatementRow } from '../contract.js';
 import { cellText, columnIndex, isBlankRow, moneyMicro } from '../cells.js';
-import { fromDayMonthYear } from './dates.js';
+import { addHint, ISIN_PATTERN } from '../hints.js';
+import { fromDayMonthYear, validIsoDate } from './dates.js';
 
 const TAX_REPORT_SHEETS = ['Equity', 'F&O', 'Global Transactions', 'DP Charges Statement'];
 const SECTION_PREFIX = 'Equity Segment - ';
@@ -34,7 +35,6 @@ const MONEY: readonly (readonly [string, string])[] = [
   ['Total Charges', 'total_charges_micro'],
   ['Net P&L', 'net_pnl_micro'],
 ];
-const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;
 const RANGE = /from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})/;
 
 export function isTaxReport(sheetNames: readonly string[]): boolean {
@@ -71,7 +71,12 @@ function lotOf(
     sell_qty: sellQuantity,
     holding_days: cellText(at('Holding Period')),
   };
-  for (const [column, field] of MONEY) data[field] = moneyMicro(at(column), 2);
+  for (const [column, field] of MONEY) {
+    const amount = moneyMicro(at(column), 2);
+    // An empty optional amount is null; a present but unreadable one makes the lot bad.
+    if (amount === null && cellText(at(column)) !== null) return null;
+    data[field] = amount;
+  }
   if (data.buy_value_micro === null || data.sell_value_micro === null) return null;
   const key = { section, name, isin, buy_date: buyDate, sell_date: sellDate, quantity };
   const identity = [
@@ -86,76 +91,99 @@ function lotOf(
   return { kind: 'dhan.tax.lot', dedupKey: identity, key, data, line };
 }
 
-interface State {
-  section: string | null;
-  columns: Map<string, number> | null;
+/** Where the walker is in the sheet. Only the preamble (header block, summary table) is ignored. */
+type Mode =
+  | { readonly kind: 'preamble' }
+  | { readonly kind: 'lots'; readonly section: string; readonly columns: Map<string, number> | null }
+  | { readonly kind: 'holdings' }
+  | { readonly kind: 'unknown' };
+
+const FOOTER = 'This is a system generated report';
+
+interface Collected {
+  readonly lots: StatementRow[];
+  readonly skipped: ParseResult['skipped'];
+  readonly errors: RowError[];
+}
+
+function titleMode(title: string, line: number, out: Collected): Mode {
+  const section = title.startsWith(SECTION_PREFIX) ? sectionOf(title) : { known: false, section: null };
+  if (!section.known) {
+    out.errors.push({ line, code: 'unknown_section' });
+    return { kind: 'unknown' };
+  }
+  return section.section === null
+    ? { kind: 'holdings' }
+    : { kind: 'lots', section: section.section, columns: null };
+}
+
+function headerMode(mode: Mode & { kind: 'lots' }, row: readonly Cell[], line: number, out: Collected): Mode {
+  const columns = columnIndex(row);
+  if (REQUIRED.every((name) => columns.has(name))) return { ...mode, columns };
+  out.errors.push({ line, code: 'bad_header' });
+  return { ...mode, columns: null };
 }
 
 /**
- * Walks the Equity sheet: an `Equity Segment - ...` title starts a section, a row starting with `Sr.` is its
- * header, any other multi-cell row is a lot. A single-text row that is not a title (the footer notes) ends the
- * section; an unknown section title is reported.
+ * Walks the Equity sheet: an `Equity Segment - ...` title starts a section and a `Sr.` row is its header. Inside a
+ * lot section every other row is a lot or a `bad_lot` error; Free Holdings rows are skipped; rows under an unknown
+ * title are errors. Reading stops at the footer. Nothing after the first title is ignored silently.
  */
-function collectLots(sheet: SheetData): { lots: StatementRow[]; errors: RowError[] } {
-  const lots: StatementRow[] = [];
-  const errors: RowError[] = [];
+function collectLots(sheet: SheetData): Collected {
+  const out: Collected = { lots: [], skipped: [], errors: [] };
   const seen = new Map<string, number>();
-  const state: State = { section: null, columns: null };
+  let mode: Mode = { kind: 'preamble' };
   for (const [index, row] of sheet.rows.entries()) {
     const line = index + 1;
     if (isBlankRow(row)) continue;
     const cells = texts(row);
-    if (cells.length === 1) {
-      const title = cells[0] ?? '';
-      const { known, section } = title.startsWith(SECTION_PREFIX)
-        ? sectionOf(title)
-        : { known: true, section: null };
-      if (!known) errors.push({ line, code: 'unknown_section' });
-      state.section = section;
-      state.columns = null;
+    const first = cells[0] ?? '';
+    if (cells.length === 1 && first.startsWith(FOOTER)) break;
+    if (cells.length === 1 && first.toLowerCase().startsWith('equity segment')) {
+      mode = titleMode(first, line, out);
       continue;
     }
-    if (state.section === null) continue;
-    if (cells[0] === 'Sr.') {
-      state.columns = columnIndex(row);
-      if (REQUIRED.some((name) => !state.columns?.has(name))) {
-        errors.push({ line, code: 'bad_header' });
-        state.columns = null;
-      }
+    if (mode.kind === 'preamble' || first === 'Sr.') {
+      if (mode.kind === 'lots' && first === 'Sr.') mode = headerMode(mode, row, line, out);
       continue;
     }
-    const lot = state.columns === null ? null : lotOf(row, state.columns, state.section, line);
+    if (mode.kind === 'holdings') {
+      out.skipped.push({ line, reason: 'other' });
+      continue;
+    }
+    const lot =
+      mode.kind === 'lots' && mode.columns !== null ? lotOf(row, mode.columns, mode.section, line) : null;
     if (lot === null) {
-      errors.push({ line, code: 'bad_lot' });
+      out.errors.push({ line, code: 'bad_lot' });
       continue;
     }
     const count = (seen.get(lot.dedupKey) ?? 0) + 1;
     seen.set(lot.dedupKey, count);
-    lots.push({ ...lot, dedupKey: `${lot.dedupKey}#${String(count)}` });
+    out.lots.push({ ...lot, dedupKey: `${lot.dedupKey}#${String(count)}` });
   }
-  return { lots, errors };
+  return out;
 }
 
 export function parseTaxReport(sheets: readonly SheetData[]): ParseResult {
   const equity = sheets.find((sheet) => sheet.name === 'Equity');
   if (!equity || !isTaxReport(sheets.map((sheet) => sheet.name))) throw new Error('not a Dhan tax report');
-  const { lots, errors } = collectLots(equity);
+  const { lots, skipped, errors } = collectLots(equity);
   const hints: InstrumentHint[] = [];
   for (const lot of lots) {
-    const name = lot.key.name ?? '';
     const isin = lot.key.isin ?? '';
-    if (ISIN.test(isin) && !hints.some((hint) => hint.name === name))
-      hints.push({ name, isin, line: lot.line });
+    if (ISIN_PATTERN.test(isin)) addHint(hints, errors, { name: lot.key.name ?? '', isin, line: lot.line });
   }
   const range = equity.rows
     .map((row) => RANGE.exec(texts(row).join(' ')))
     .find((match): match is RegExpExecArray => match !== null);
+  const from = validIsoDate(range?.[1] ?? '');
+  const to = validIsoDate(range?.[2] ?? '');
   return {
     rows: [],
     statements: lots,
     instrumentHints: hints,
-    skipped: [],
-    errors,
-    coverage: range ? { from: range[1] ?? '', to: range[2] ?? '' } : null,
+    skipped,
+    errors: errors.sort((a, b) => a.line - b.line),
+    coverage: from && to ? { from, to } : null,
   };
 }

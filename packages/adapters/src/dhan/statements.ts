@@ -3,9 +3,10 @@
 import type { InstrumentHint, ParseResult, RowError, StatementRow } from '../contract.js';
 import { moneyMicro } from '../cells.js';
 import { fromDayMonthName } from './dates.js';
-import { readJournalCsv } from './journal-csv.js';
+import { addHint, ISIN_PATTERN } from '../hints.js';
+import { readJournalCsv, type JournalCsv } from './journal-csv.js';
 
-const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;
+const QUANTITY = /^\d+$/;
 
 const GT_MONEY: readonly (readonly [string, string])[] = [
   ['Buy Value', 'buy_value_micro'],
@@ -40,8 +41,17 @@ function occurrenceKeys(): (key: string) => string {
   };
 }
 
-function result(statements: StatementRow[], errors: RowError[], extra: Partial<ParseResult>): ParseResult {
-  return { rows: [], statements, instrumentHints: [], skipped: [], errors, coverage: null, ...extra };
+/** Unexpected lines in the file are row errors too; errors are reported in file order. */
+function result(
+  csv: JournalCsv,
+  statements: StatementRow[],
+  errors: RowError[],
+  instrumentHints: ParseResult['instrumentHints'] = [],
+): ParseResult {
+  const all = [...errors, ...csv.unexpected.map((line) => ({ line, code: 'bad_row' }))].sort(
+    (a, b) => a.line - b.line,
+  );
+  return { rows: [], statements, instrumentHints, skipped: [], errors: all, coverage: csv.coverage };
 }
 
 export function parseGlobalTransactions(text: string): ParseResult {
@@ -57,7 +67,9 @@ export function parseGlobalTransactions(text: string): ParseResult {
       sell_qty: fields['Sell Qty.'] ?? '',
     };
     for (const [column, field] of GT_MONEY) data[field] = moneyMicro(fields[column] ?? null, 2);
-    if (date === null || name === '' || Object.values(data).some((value) => value === null)) {
+    const quantities = [data.buy_qty, data.sell_qty];
+    const badQuantity = quantities.some((value) => typeof value !== 'string' || !QUANTITY.test(value));
+    if (date === null || name === '' || badQuantity || Object.values(data).some((value) => value === null)) {
       errors.push({ line, code: 'bad_row' });
       continue;
     }
@@ -65,7 +77,7 @@ export function parseGlobalTransactions(text: string): ParseResult {
     const identity = ['gt', date, key.exchange, key.bill_no, name].join('|');
     statements.push({ kind: 'dhan.gt.row', dedupKey: keyOf(identity), key, data, line });
   }
-  return result(statements, errors, { coverage: csv.coverage });
+  return result(csv, statements, errors);
 }
 
 export function parseDpCharges(text: string): ParseResult {
@@ -78,22 +90,34 @@ export function parseDpCharges(text: string): ParseResult {
     const date = fromDayMonthName(fields.Date ?? '');
     const name = fields['Scrip Name'] ?? '';
     const type = fields['Type of Transaction'] ?? '';
-    const isin = ISIN.test(fields.ISIN ?? '') ? (fields.ISIN ?? '') : '';
+    // Dhan writes `NA` on the GST summary rows; anything else must be a real ISIN.
+    const rawIsin = fields.ISIN ?? '';
+    const isin = rawIsin === 'NA' ? '' : rawIsin;
+    const quantity = fields.Quantity ?? '';
     const charges = moneyMicro(fields.Charges ?? null, 2);
-    if (date === null || name === '' || type === '' || charges === null) {
+    const badIsin = isin !== '' && !ISIN_PATTERN.test(isin);
+    if (
+      date === null ||
+      name === '' ||
+      type === '' ||
+      badIsin ||
+      !QUANTITY.test(quantity) ||
+      charges === null
+    ) {
       errors.push({ line, code: 'bad_row' });
       continue;
     }
     const key = { date, name, isin, type };
-    const identity = ['dp', date, type, isin || name].join('|');
+    // The name, not the ISIN: whether an export carries the ISIN must not change the key.
+    const identity = ['dp', date, type, name, quantity, String(charges)].join('|');
     statements.push({
       kind: 'dhan.dp.row',
       dedupKey: keyOf(identity),
       key,
-      data: { quantity: fields.Quantity ?? '', charges_micro: charges },
+      data: { quantity, charges_micro: charges },
       line,
     });
-    if (isin !== '' && !hints.some((hint) => hint.name === name)) hints.push({ name, isin, line });
+    if (isin !== '') addHint(hints, errors, { name, isin, line });
   }
-  return result(statements, errors, { instrumentHints: hints, coverage: csv.coverage });
+  return result(csv, statements, errors, hints);
 }

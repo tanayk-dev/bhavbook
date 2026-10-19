@@ -23,6 +23,9 @@ const PRODUCTS: ReadonlyMap<string, NonNullable<CanonicalRow['productDeclared']>
   ['MTF', 'MTF'],
 ]);
 
+/** Statuses of orders that produced no trade; any other status than `Traded` is reported, never guessed. */
+const NOT_TRADED: ReadonlySet<string> = new Set(['rejected', 'cancelled', 'canceled', 'pending', 'expired']);
+
 class RowProblem extends Error {
   constructor(readonly code: string) {
     super(code);
@@ -100,13 +103,21 @@ function executedAtOf(date: string, time: string): string {
   }
 }
 
-/** ADR-0009: sha256 of the identifying fields; the caller appends the occurrence index of identical tuples. */
-function identityOf(fields: Fields): string {
-  const tuple = [fields.date, fields.time, fields.name, fields.side, fields.order, fields.exchange];
-  const digest = createHash('sha256')
-    .update([...tuple, fields.quantity, fields.value].join('|'))
-    .digest('hex');
-  return `dhan:${digest}`;
+/**
+ * ADR-0009: sha256 of the identifying fields, taken from the parsed row (not the raw text) so `200` / `200.0` or
+ * `9811.7` / `9811.70` in another export give the same key. The caller appends the occurrence index.
+ */
+function identityOf(row: Omit<CanonicalRow, 'dedupKey'>): string {
+  const tuple = [
+    row.executedAtUtc,
+    row.brokerName ?? '',
+    row.side,
+    row.productDeclared ?? '',
+    row.exchange,
+    row.quantity.toString(),
+    row.tradeValueMicro.toString(),
+  ];
+  return `dhan:${createHash('sha256').update(tuple.join('|')).digest('hex')}`;
 }
 
 function toRow(fields: Fields, line: number, raw: string): Omit<CanonicalRow, 'dedupKey'> {
@@ -158,8 +169,13 @@ export function parseTradeHistory(text: string): ParseResult {
       continue;
     }
     const fields = fieldsOf(record);
-    if (fields.status.toLowerCase() !== 'traded') {
+    const status = fields.status.toLowerCase();
+    if (NOT_TRADED.has(status)) {
       skipped.push({ line, reason: 'not_traded' });
+      continue;
+    }
+    if (status !== 'traded') {
+      errors.push({ line, code: 'unknown_status' });
       continue;
     }
     if (fields.segment.toLowerCase() !== 'equity') {
@@ -168,7 +184,7 @@ export function parseTradeHistory(text: string): ParseResult {
     }
     try {
       const row = toRow(fields, line, raw);
-      const identity = identityOf(fields);
+      const identity = identityOf(row);
       const occurrence = (occurrences.get(identity) ?? 0) + 1;
       occurrences.set(identity, occurrence);
       rows.push({ ...row, dedupKey: `${identity}#${String(occurrence)}` });

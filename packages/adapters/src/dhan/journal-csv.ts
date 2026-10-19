@@ -17,6 +17,8 @@ export interface JournalRow {
 export interface JournalCsv {
   readonly rows: readonly JournalRow[];
   readonly summary: Readonly<Record<string, string>>;
+  /** Lines after the header that are neither data rows, the summary nor the NOTE line: callers report them. */
+  readonly unexpected: readonly number[];
   readonly coverage: { from: string; to: string } | null;
 }
 
@@ -27,7 +29,7 @@ export function journalTitle(head: string): string {
 
 function summaryOf(record: readonly string[] | undefined): Record<string, string> {
   const summary: Record<string, string> = {};
-  if (!record || record[0]?.startsWith('NOTE')) return summary;
+  if (!record) return summary;
   for (let index = 0; index + 1 < record.length; index += 2) {
     const label = record[index]?.trim() ?? '';
     if (label !== '' && !Object.hasOwn(summary, label)) summary[label] = record[index + 1]?.trim() ?? '';
@@ -42,21 +44,27 @@ export function readJournalCsv(text: string, required: readonly string[]): Journ
   const header = records[headerAt]?.record;
   if (!header) throw new Error('not a Dhan report (expected header not found)');
 
+  // Data rows have the header's width; the summary pairs line (the last other line) and the NOTE line don't.
+  // Blank lines never end the table, so a stray one can't hide the rows after it.
   const rows: JournalRow[] = [];
-  let index = headerAt + 1;
-  for (; index < records.length; index += 1) {
-    const entry = records[index];
-    if (!entry || isBlankRecord(entry.record)) break;
+  const others: { line: number; record: readonly string[] }[] = [];
+  for (const entry of records.slice(headerAt + 1)) {
+    if (isBlankRecord(entry.record) || entry.record[0]?.trim().startsWith('NOTE')) continue;
+    if (entry.record.length !== header.length) {
+      others.push(entry);
+      continue;
+    }
     const fields = Object.fromEntries(
       header.map((name, column) => [name, entry.record[column]?.trim() ?? '']),
     );
     rows.push({ line: entry.line, fields, raw: entry.raw });
   }
-  const summaryRecord = records.slice(index).find((entry) => !isBlankRecord(entry.record))?.record;
+  const summaryRecord = others.at(-1)?.record;
   const [title] = records;
   return {
     rows,
     summary: summaryOf(summaryRecord),
+    unexpected: others.slice(0, -1).map((entry) => entry.line),
     coverage: title ? periodOf(title.record.join(',')) : null,
   };
 }
