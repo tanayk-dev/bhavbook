@@ -11,6 +11,8 @@ import {
   type ProductOverride,
   type TradeFill,
 } from '../fifo/types.js';
+import { applyCorporateActions } from '../corporate-actions/apply.js';
+import type { CorporateAction, Fraction } from '../corporate-actions/types.js';
 import { buildPositions, type Position } from '../positions/build.js';
 import { istDateOf, istDayBounds } from '../time/ist.js';
 import type { Adjustment, OpeningLot } from './types.js';
@@ -62,6 +64,7 @@ function openingAllocation(lot: OpeningLot): FillAllocation {
     key: `${id}#${lot.bucket}`,
     fillId: id,
     adjustmentId: lot.id,
+    corporateActionId: null,
     accountId: lot.accountId,
     instrumentKey: lot.instrumentKey,
     bucket: lot.bucket,
@@ -86,6 +89,8 @@ function checkOverride(override: ProductOverride): ProductOverride {
 export interface Reconstruction {
   readonly allocations: readonly FillAllocation[];
   readonly positions: readonly Position[];
+  /** Entitlements to part of a share left by corporate actions (cash in lieu). */
+  readonly fractions: readonly Fraction[];
 }
 
 interface Sorted {
@@ -120,19 +125,35 @@ function sortAdjustments(adjustments: readonly Adjustment[]): Sorted {
   return sorted;
 }
 
-/** The account's positions from its fills and active adjustments. Pure and deterministic. */
+function allocationsOf(fills: readonly TradeFill[], { overrides, opening }: Sorted): FillAllocation[] {
+  return [...allocateBuckets(fills, overrides), ...opening].sort(compareAllocations);
+}
+
+/** Bucketed fills and opening lots, before corporate actions. */
+export function baseAllocations(
+  fills: readonly TradeFill[],
+  adjustments: readonly Adjustment[],
+): FillAllocation[] {
+  return allocationsOf(fills, sortAdjustments(adjustments));
+}
+
+/**
+ * The account's positions from its fills, active adjustments and corporate actions (applied in ex-date order to
+ * what is open at each ex-date). Pure and deterministic.
+ */
 export function reconstructAccount(
   fills: readonly TradeFill[],
   adjustments: readonly Adjustment[],
+  corporateActions: readonly CorporateAction[] = [],
 ): Reconstruction {
-  const { overrides, opening, excluded } = sortAdjustments(adjustments);
-  const allocations = [...allocateBuckets(fills, overrides), ...opening].sort(compareAllocations);
+  const sorted = sortAdjustments(adjustments);
+  const { allocations, fractions } = applyCorporateActions(allocationsOf(fills, sorted), corporateActions);
   const positions = buildPositions(allocations, matchFifo(allocations)).map((position) =>
-    excluded.has(`${position.accountId}\u0000${position.anchorKey}`)
+    sorted.excluded.has(`${position.accountId}\u0000${position.anchorKey}`)
       ? { ...position, excluded: true }
       : position,
   );
-  return { allocations, positions };
+  return { allocations, positions, fractions };
 }
 
 function orphanQuantity(reconstruction: Reconstruction, lot: OpeningLot): bigint {
@@ -141,24 +162,44 @@ function orphanQuantity(reconstruction: Reconstruction, lot: OpeningLot): bigint
     .reduce((sum, position) => sum + position.orphanQty, 0n);
 }
 
+/** The instrument and every one a conversion or demerger links it to (shares move between them). */
+function linkedInstruments(instrumentKey: string, actions: readonly CorporateAction[]): Set<string> {
+  const linked = new Set([instrumentKey]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const { isin, newIsin } of actions) {
+      if (newIsin !== null && linked.has(isin) !== linked.has(newIsin)) {
+        linked.add(isin).add(newIsin);
+        grew = true;
+      }
+    }
+  }
+  return linked;
+}
+
 /**
  * Opening lots that real fills now cover (E7): the imported history reaches back before the lot (a real buy in
  * the same account, instrument and bucket precedes it), and leaving the lot out would no longer orphan the
  * quantity the lot was covering. A lot for shares still held, or only partly sold, with no earlier real buy is
  * never flagged. Suggestions only: replacing a lot is always the user's decision. Each lot is checked on its own
- * (account, instrument) slice, since netting and FIFO never cross instruments.
+ * (account, instrument) slice, since netting and FIFO never cross instruments; the slice follows the shares
+ * through conversions and demergers, with the corporate actions applied.
  */
 export function redundantOpeningLots(
   fills: readonly TradeFill[],
   adjustments: readonly Adjustment[],
+  corporateActions: readonly CorporateAction[] = [],
 ): string[] {
   return adjustments.flatMap((adjustment) => {
     if (adjustment.kind !== 'opening_lot') return [];
+    const linked = linkedInstruments(adjustment.instrumentKey, corporateActions);
     const sameInstrument = (value: { accountId: string; instrumentKey: string }): boolean =>
-      value.accountId === adjustment.accountId && value.instrumentKey === adjustment.instrumentKey;
+      value.accountId === adjustment.accountId && linked.has(value.instrumentKey);
     const slice = fills.filter(sameInstrument);
     const sliceAdjustments = adjustments.filter((other) => other.kind !== 'exclude' && sameInstrument(other));
-    const withAll = reconstructAccount(slice, sliceAdjustments);
+    const sliceActions = corporateActions.filter((action) => linked.has(action.isin));
+    const withAll = reconstructAccount(slice, sliceAdjustments, sliceActions);
     const lotAllocation = withAll.allocations.find((allocation) => allocation.adjustmentId === adjustment.id);
     const realBuyBefore = withAll.allocations.some(
       (allocation) =>
@@ -172,6 +213,7 @@ export function redundantOpeningLots(
     const without = reconstructAccount(
       slice,
       sliceAdjustments.filter((other) => other.id !== adjustment.id),
+      sliceActions,
     );
     const absorbed = orphanQuantity(without, adjustment) - orphanQuantity(withAll, adjustment);
     return absorbed < adjustment.quantity ? [adjustment.id] : [];

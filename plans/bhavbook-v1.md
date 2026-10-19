@@ -55,7 +55,8 @@
 | S9-2 | Reconstruction core: recompute, golden tests (server) | S9-1 | **strongest** | — |
 | S10a-1 | Adjustments in reconstruction, opening-lot suggestions (core) | S9 | **strongest** | — |
 | S10a-2 | Adjustment service, statement and redundancy issues (server) | S10a-1 | **strongest** | — |
-| S10b | Corporate actions | S9 | **strongest** | — |
+| S10b-1 | Corporate actions in reconstruction, preview, suspicion heuristics (core) | S9 | **strongest** | — |
+| S10b-2 | Corporate-action service, recompute, suspicion issues (server) | S10b-1, S10a-2 | **strongest** | — |
 | S10c | Journal anchors | S10a | default | — |
 | S11 | Server and CLI | S4 | default | **yes** |
 | S12a | Fee rules and engine | S9 | **strongest** | — |
@@ -77,7 +78,7 @@ W4  S5b ∥ S6 ∥ S11
 W5  S7-1 → S7-2
 W6  S8
 W7  S9-1 → S9-2
-W8  S10a-1 → S10a-2 ∥ S10b ∥ S12a ∥ S13a
+W8  S10a-1 → S10a-2 ∥ S10b-1 → S10b-2 ∥ S12a ∥ S13a
 W9  S10c ∥ S12b ∥ S13b
 W10 S13c ∥ S15a
 W11 S14a ∥ S14b
@@ -830,6 +831,7 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
 
 ## Changelog
 
+- 2026-10-19 r9: S10a-1 and S10a-2 merged. S10b split: S10b-1 is the pure core (tasks 1-4); S10b-2 stores corporate actions, applies them in recompute (fill_allocation.corporate_action_id for bonus and demerger-child lots) and raises the suspicion issues. A corporate action applies at the start of its ex-date (IST) to the quantity still open then; entitlements are computed on each account's total holding, floored, spread over the lots exactly, and the fraction is reported. `cost_split_bp` is the child's share of the cost.
 - 2026-10-19 r8: S9-2 merged (wave 7). S10a split under the ~800-line rule: S10a-1 is the pure core (tasks 1-2, plus detecting redundant opening lots for task 4); S10a-2 is the server (adjustment service with validated input, tasks 3-4's issues and actions, task 5's golden tests). E11's full golden test removes the 17 Sep buy from the fixture text to reproduce the export the PRD describes (r7).
 - 2026-10-19 r7: S9-1 merged. S9-2 findings on the real fixtures: (a) the anonymised Dhan trade history does contain the 2024-09-17 BUY 200 @ 176 that E11 assumed missing, so there is no orphan on 18 Sep 2024 and all 46 FY 2024-25 Tax Report lots are reproduced (E11's orphan path stays covered by a synthetic core test); (b) 43 of the 46 lots match to the paisa, and 3 differ by Rs 0.02-0.06 between Dhan's Tax Report and its trade file (the same 3 scrips that differ in Global Transactions, S8), so those are a difference between Dhan's reports and the golden test pins them. The preview's issue forecast is a dry-run recompute inside a rolled-back savepoint. Moved to S13c: showing positions whose instrument alias has an open `conflict` issue as needing review (the conflict already raises its own issue). Recompute today rebuilds trade-row allocations only; S10a/S10b/S12a must extend it for adjustment and corporate-action allocations, `position.excluded` and charges.
 - 2026-10-19 r6: S7-1, S7-2 and S8 merged. S9 split under the ~800-line rule: S9-1 is the pure core (tasks 1-4 with E1-E5, E11's netting, E12 and the properties); S9-2 is the server recompute (task 5), the golden tests against the real Dhan and Zerodha fixtures (task 6; they need the adapters, which core can't import), instrument re-keying and the benchmark. Two S8 notes carry into S9-2: run instrument resolution inside recompute, and treat rows whose alias has an open `conflict` issue as needing review.
