@@ -25,15 +25,37 @@ const split: CorporateAction = {
 
 describe('chargeAccount', () => {
   const fills = [
-    chargeable({ side: 'BUY', qty: 10, price: 1000, at: '2025-01-02 10:00', product: 'DELIVERY', instrument: 'A' }),
-    chargeable({ side: 'SELL', qty: 4, price: 1100, at: '2025-02-03 10:00', product: 'DELIVERY', instrument: 'A' }),
+    chargeable({
+      side: 'BUY',
+      qty: 10,
+      price: 1000,
+      at: '2025-01-02 10:00',
+      product: 'DELIVERY',
+      instrument: 'A',
+    }),
+    chargeable({
+      side: 'SELL',
+      qty: 4,
+      price: 1100,
+      at: '2025-02-03 10:00',
+      product: 'DELIVERY',
+      instrument: 'A',
+    }),
   ];
 
   it('spreads a buy charge over the parts a corporate action left, by value, exactly', () => {
     const { allocations } = reconstructAccount(fills, [], [split]);
-    const { charges } = chargeAccount({ broker: 'dhan', fills, adjustments: [], allocations, rules: bundledFeeRules() });
+    const { charges } = chargeAccount({
+      broker: 'dhan',
+      fills,
+      adjustments: [],
+      allocations,
+      rules: bundledFeeRules(),
+    });
     const buyKey = allocations.find((allocation) => allocation.side === 'BUY')?.key ?? '';
-    const stt = charges.filter((charge) => charge.component === 'stt' && charge.allocationKey.startsWith(buyKey));
+    const stt = charges.filter(
+      (charge) => charge.component === 'stt' && charge.allocationKey.startsWith(buyKey),
+    );
     // Rs 10,000 x 0.1% = Rs 10, split 4,000 : 6,000 over the sold part and the split part.
     expect(stt.map((charge) => [charge.allocationKey, charge.amountMicro])).toEqual([
       [buyKey, 4n * RUPEE],
@@ -87,5 +109,33 @@ describe('chargeAccount', () => {
     // The MTF buy pays MTF brokerage: Rs 10,000 x 0.03% = Rs 3.
     const brokerage = charges.filter((charge) => charge.component === 'brokerage');
     expect(brokerage.reduce((sum, charge) => sum + charge.amountMicro, 0n)).toBe(3n * RUPEE);
+  });
+});
+
+describe('chargeAccount when a holding is cashed out entirely', () => {
+  it('keeps the charge on the original allocation key', () => {
+    const fills = [
+      chargeable({
+        side: 'BUY',
+        qty: 3,
+        price: 1000,
+        at: '2025-01-02 10:00',
+        product: 'DELIVERY',
+        instrument: 'A',
+      }),
+    ];
+    const reverse = { ...split, ratioNum: 1n, ratioDen: 10n };
+    const { allocations } = reconstructAccount(fills, [], [reverse]);
+    expect(allocations).toEqual([]);
+    const { charges } = chargeAccount({
+      broker: 'dhan',
+      fills,
+      adjustments: [],
+      allocations,
+      rules: bundledFeeRules(),
+    });
+    expect(new Set(charges.map((charge) => charge.allocationKey))).toEqual(
+      new Set([`${fills[0]?.id ?? ''}#DELIVERY`]),
+    );
   });
 });

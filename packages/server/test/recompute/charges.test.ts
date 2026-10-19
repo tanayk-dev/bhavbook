@@ -1,6 +1,9 @@
 // S12a-2: recompute stores estimated charges for every allocation of an imported trade, and the Dhan golden
 // runs through the vault with the real orders: per day, STT and stamp duty equal what Global Transactions
-// billed to the rupee, and every other component is within Rs 0.01 per scrip row of that day.
+// billed to the rupee, and every other component is within Rs 0.01 per scrip row of that day. Two differences are
+// Dhan's and pinned exactly (plan r12): STT on 18 Sep 2024 (billed Rs 40; the contract-note formula gives Rs 39,
+// the one day research A1 could not match either) and GST on 9 May 2024 (Rs 0.02; it persists with the real
+// orders, so the order structure does not explain it).
 import type Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { recompute } from '../../src/recompute/index.js';
@@ -19,6 +22,11 @@ const COMPONENTS = {
   ipft: 'other_micro',
 } as const;
 type Component = keyof typeof COMPONENTS;
+/** engine - billed, for the two days Dhan's statement does not follow its own published rules. */
+const KNOWN: ReadonlyMap<string, bigint> = new Map([
+  ['2024-09-18 stt', -RUPEE],
+  ['2024-05-09 gst', 2n * PAISA],
+]);
 
 /** What Global Transactions billed, per day and component, and how many scrip rows each day has. */
 function billed(db: Database.Database): Map<string, { rows: bigint; amounts: Record<Component, bigint> }> {
@@ -43,14 +51,14 @@ function billed(db: Database.Database): Map<string, { rows: bigint; amounts: Rec
 }
 
 function charged(db: Database.Database, date: string, component: Component): bigint {
-  return (db
+  return db
     .prepare(
       `SELECT coalesce(sum(c.amount_micro), 0) FROM fill_charge c
        JOIN fill_allocation a ON a.id = c.fill_allocation_id JOIN trade_row t ON t.id = a.trade_row_id
        WHERE a.account_id = ? AND t.trade_date_ist = ? AND c.component = ? AND c.source = 'estimated'`,
     )
     .pluck()
-    .get(DHAN, date, component) as bigint);
+    .get(DHAN, date, component) as bigint;
 }
 
 describe('charges in recompute', () => {
@@ -63,7 +71,7 @@ describe('charges in recompute', () => {
       ]);
       recompute(db, DHAN, { now });
       const days = billed(db);
-      expect(days.size).toBe(47);
+      expect(days.size).toBe(46);
       const misses: string[] = [];
       for (const [date, { rows, amounts }] of days) {
         for (const component of Object.keys(COMPONENTS) as Component[]) {
@@ -73,7 +81,10 @@ describe('charges in recompute', () => {
           const expected = rupees ? ((statement + RUPEE / 2n) / RUPEE) * RUPEE : statement;
           const tolerance = rupees ? 0n : rows * PAISA;
           const difference = engine - expected;
-          if (difference > tolerance || difference < -tolerance) {
+          const known = KNOWN.get(`${date} ${component}`);
+          if (
+            known !== undefined ? difference !== known : difference > tolerance || difference < -tolerance
+          ) {
             misses.push(`${date} ${component} engine ${String(engine)} billed ${String(statement)}`);
           }
         }
@@ -106,10 +117,13 @@ describe('charges in recompute', () => {
     await withVault(async ({ db, service }) => {
       await importFiles(service, DHAN, [fixtureFile('dhan', 'trade_history')]);
       recompute(db, DHAN, { now });
-      const issue = db
-        .prepare("SELECT status, subject_json FROM issue WHERE kind = 'fees_unrated'")
-        .get() as { status: string; subject_json: string } | undefined;
-      const unratedTrades = count(db, 'trade_row', "account_id = 'acc_dhan' AND trade_date_ist < '2024-04-01'");
+      const issue = db.prepare("SELECT status, subject_json FROM issue WHERE kind = 'fees_unrated'").get() as
+        { status: string; subject_json: string } | undefined;
+      const unratedTrades = count(
+        db,
+        'trade_row',
+        "account_id = 'acc_dhan' AND trade_date_ist < '2024-04-01'",
+      );
       if (unratedTrades === 0) {
         expect(issue).toBeUndefined();
       } else {
@@ -125,9 +139,9 @@ describe('charges in recompute', () => {
       recompute(db, ZERODHA, { now });
       const versions = db.prepare('SELECT DISTINCT rule_version FROM fill_charge ORDER BY 1').pluck().all();
       expect(versions.length).toBeGreaterThan(0);
-      expect(versions.every((version) => typeof version === 'string' && version.endsWith('+zerodha/2024-06-01'))).toBe(
-        true,
-      );
+      expect(
+        versions.every((version) => typeof version === 'string' && version.endsWith('+zerodha/2024-06-01')),
+      ).toBe(true);
     });
   });
 });

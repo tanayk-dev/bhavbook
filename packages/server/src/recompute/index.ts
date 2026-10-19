@@ -5,7 +5,9 @@
 // INCOMPLETE positions, statement lots that could fill them, opening lots real fills now cover, suspected
 // corporate actions, and fractions of a share (cash in lieu). Imported rows are never edited.
 //
-// Not yet here: charges (S12a); that step extends this rebuild.
+// Charges (S12a-2, ADR-0016): estimated from the bundled fee rules on the trades as imported, carried onto the
+// allocations the rebuild ends with, and stored per allocation and component. Trades with no rule version in
+// force are flagged by one `fees_unrated` issue.
 import { createHash } from 'node:crypto';
 import type { ParseResult } from '@bhavbook/adapters';
 import {
@@ -13,7 +15,12 @@ import {
   redundantOpeningLots,
   suggestOpeningLots,
   suspectCorporateActions,
+  bundledFeeRules,
+  chargeAccount,
   type Adjustment,
+  type ChargeableFill,
+  type FeeExchange,
+  type FillCharge,
   type Bucket,
   type CorporateAction,
   type CorporateActionSuspicion,
@@ -45,6 +52,7 @@ import {
 import {
   CASH_IN_LIEU,
   CORPORATE_ACTION_SUSPECTED,
+  FEES_UNRATED,
   FILL_FROM_STATEMENT,
   INCOMPLETE_POSITION,
   OPENING_LOT_REDUNDANT,
@@ -79,6 +87,7 @@ interface TradeRow {
   readonly isin: string | null;
   readonly broker_symbol: string | null;
   readonly broker_name: string | null;
+  readonly exchange: FeeExchange;
 }
 
 /** The alias a broker's rows carry: Zerodha symbols, Dhan scrip names. */
@@ -121,13 +130,13 @@ function brokerOf(db: Database.Database, accountId: string): string {
   return broker;
 }
 
-function loadFills(db: Database.Database, accountId: string, broker: string): TradeFill[] {
+function loadFills(db: Database.Database, accountId: string, broker: string): ChargeableFill[] {
   const aliases = aliasKeys(db, broker);
   // side, granularity and product_declared are enforced by CHECK constraints (0001_init.sql).
   const rows = db
     .prepare(
       `SELECT id, dedup_key, granularity, external_order_id, executed_at_utc, trade_date_ist, side, quantity,
-              trade_value_micro, product_declared, isin, broker_symbol, broker_name
+              trade_value_micro, product_declared, isin, broker_symbol, broker_name, exchange
        FROM trade_row WHERE account_id = ?`,
     )
     .all(accountId) as TradeRow[];
@@ -142,6 +151,7 @@ function loadFills(db: Database.Database, accountId: string, broker: string): Tr
     quantity: row.quantity,
     valueMicro: row.trade_value_micro,
     productDeclared: row.product_declared,
+    exchange: row.exchange,
     granularity: row.granularity,
     externalOrderId: row.external_order_id,
   }));
@@ -201,7 +211,7 @@ function writeDerived(
   accountId: string,
   allocations: readonly FillAllocation[],
   positions: readonly Position[],
-): void {
+): ReadonlyMap<string, bigint> {
   // Children go with their parents (lots, reconciliation, charges cascade); allocations last.
   db.prepare('DELETE FROM position WHERE account_id = ?').run(accountId);
   db.prepare('DELETE FROM fill_allocation WHERE account_id = ?').run(accountId);
@@ -264,6 +274,43 @@ function writeDerived(
       );
     }
   }
+  return allocationIds;
+}
+
+/** Estimated charges; an account of a broker with no fee rules has every fill unrated. */
+function chargesOf(
+  broker: string,
+  fills: readonly ChargeableFill[],
+  adjustments: readonly Adjustment[],
+  allocations: readonly FillAllocation[],
+): { charges: readonly FillCharge[]; unrated: readonly string[] } {
+  if (broker !== 'dhan' && broker !== 'zerodha') {
+    return { charges: [], unrated: fills.map((fill) => fill.id) };
+  }
+  return chargeAccount({ broker, fills, adjustments, allocations, rules: bundledFeeRules() });
+}
+
+/** One row per (allocation, component); a charge whose allocation was cashed out entirely is not stored. */
+function writeCharges(
+  db: Database.Database,
+  allocationIds: ReadonlyMap<string, bigint>,
+  charges: readonly FillCharge[],
+): void {
+  const insert = db.prepare(
+    `INSERT INTO fill_charge (fill_allocation_id, component, amount_micro, source, rule_version)
+     VALUES (?, ?, ?, 'estimated', ?)`,
+  );
+  for (const charge of charges) {
+    const id = allocationIds.get(charge.allocationKey);
+    if (id !== undefined) insert.run(id, charge.component, charge.amountMicro, charge.ruleVersion);
+  }
+}
+
+/** One issue while any trade has no fee rule version in force (charges unknown, never guessed). */
+function unratedFindings(unrated: readonly string[]): Map<string, string> {
+  const findings = new Map<string, string>();
+  if (unrated.length > 0) findings.set('fees', JSON.stringify({ fills: unrated.length }));
+  return findings;
 }
 
 /**
@@ -504,8 +551,11 @@ export function recompute(
     const corporateActions = activeCorporateActions(db);
     const reconstruction = reconstruct(fills, adjustments, corporateActions);
     const { allocations, positions } = reconstruction;
-    writeDerived(db, accountId, allocations, positions);
+    const allocationIds = writeDerived(db, accountId, allocations, positions);
+    const { charges, unrated } = chargesOf(broker, fills, adjustments, allocations);
+    writeCharges(db, allocationIds, charges);
     refreshAnchors(db, accountId, positions);
+    syncIssues(db, accountId, FEES_UNRATED, unratedFindings(unrated), at);
     syncIssues(db, accountId, INCOMPLETE_POSITION, incompleteFindings(positions), at);
     syncIssues(db, accountId, FILL_FROM_STATEMENT, statementFindings(db, accountId, positions), at);
     syncIssues(
