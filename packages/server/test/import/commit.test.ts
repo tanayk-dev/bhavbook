@@ -153,7 +153,7 @@ describe('commitImport', () => {
     });
   });
 
-  it('runs on a vault migrated forward from schema 1', async () => {
+  it('runs on the current schema (0002; migration from v0001 is covered by the backup fixture tests)', async () => {
     await withVault(({ db }) => {
       expect(currentVersion(db)).toBe(latestVersion());
       expect(latestVersion()).toBeGreaterThanOrEqual(2);

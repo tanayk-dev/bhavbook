@@ -15,10 +15,6 @@ export type ReadOutcome =
   | { readonly ok: true; readonly input: AdapterInput; readonly probe: FileProbe; readonly sha256: string }
   | { readonly ok: false; readonly reason: 'too_large' | 'malformed' };
 
-export class ImportError extends Error {
-  override readonly name = 'ImportError';
-}
-
 function decodeText(bytes: Buffer): string {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);

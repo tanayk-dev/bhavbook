@@ -2,7 +2,12 @@
 // bounded previews, lean batch copies.
 import { rmSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { ImportError, MAX_PREVIEW_BYTES, MAX_PREVIEW_FILES, MAX_LABEL_CHARS } from '../../src/import/index.js';
+import {
+  ImportError,
+  MAX_PREVIEW_BYTES,
+  MAX_PREVIEW_FILES,
+  MAX_LABEL_CHARS,
+} from '../../src/import/index.js';
 import { backupDir } from '../../src/vault/index.js';
 import { count, csvWindow, fixtureFile, importFiles, withVault, ZERODHA } from './helpers.js';
 
@@ -11,7 +16,8 @@ describe('wrong-account guard uses the imported coverage, not the span of all tr
     await withVault(async ({ service }) => {
       await importFiles(service, ZERODHA, [csvWindow('zerodha', 'tradebook', 0, 30)]);
       await importFiles(service, ZERODHA, [csvWindow('zerodha', 'tradebook', 100, 121)]);
-      const [file] = (await service.previewImport(ZERODHA, [csvWindow('zerodha', 'tradebook', 40, 90)])).files;
+      const [file] = (await service.previewImport(ZERODHA, [csvWindow('zerodha', 'tradebook', 40, 90)]))
+        .files;
       expect(file).toMatchObject({ status: 'ready', warnings: [] });
     });
   });
@@ -24,9 +30,9 @@ describe('import_batch.counts_json', () => {
       const second = await service.previewImport(ZERODHA, [fixtureFile('zerodha', 'tradebook')]);
       service.commitImport(first.token ?? '');
       service.commitImport(second.token ?? '');
-      const counts = (db.prepare('SELECT counts_json FROM import_batch ORDER BY rowid').pluck().all() as string[]).map(
-        (text) => JSON.parse(text) as { rows: { new: number; duplicate: number } },
-      );
+      const counts = (
+        db.prepare('SELECT counts_json FROM import_batch ORDER BY rowid').pluck().all() as string[]
+      ).map((text) => JSON.parse(text) as { rows: { new: number; duplicate: number } });
       expect(counts.map((entry) => entry.rows)).toEqual([
         { new: 121, duplicate: 0 },
         { new: 0, duplicate: 121 },
@@ -39,7 +45,9 @@ describe('failed commits', () => {
   it('keep the preview so the commit can be retried', async () => {
     await withVault(async ({ db, service }) => {
       const preview = await service.previewImport(ZERODHA, [fixtureFile('zerodha', 'tradebook')]);
-      db.exec("CREATE TEMP TRIGGER boom BEFORE INSERT ON main.trade_row BEGIN SELECT RAISE(ABORT, 'boom'); END;");
+      db.exec(
+        "CREATE TEMP TRIGGER boom BEFORE INSERT ON main.trade_row BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+      );
       expect(() => service.commitImport(preview.token ?? '')).toThrow(ImportError);
       db.exec('DROP TRIGGER temp.boom');
       expect(service.commitImport(preview.token ?? '').batches[0]?.inserted.rows).toBe(121);
@@ -94,7 +102,10 @@ describe('batch_row payloads', () => {
     await withVault(async ({ db, service }) => {
       await importFiles(service, ZERODHA, [fixtureFile('zerodha', 'tradebook')]);
       const payload = JSON.parse(
-        db.prepare("SELECT payload_json FROM batch_row WHERE target = 'trade' LIMIT 1").pluck().get() as string,
+        db
+          .prepare("SELECT payload_json FROM batch_row WHERE target = 'trade' LIMIT 1")
+          .pluck()
+          .get() as string,
       ) as { raw: Record<string, unknown>; dedupKey: string };
       expect(payload.raw).toEqual({ line: expect.any(Number) as number });
       expect(payload.dedupKey).toMatch(/^zerodha:/);

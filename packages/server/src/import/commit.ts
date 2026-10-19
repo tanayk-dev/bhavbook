@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto';
 import type { CanonicalRow, StatementRow } from '@bhavbook/adapters';
 import type Database from 'better-sqlite3';
 import { toJson } from '../http/json.js';
-import type { ParsedFile } from './preview.js';
+import { encodeStatementPayload, encodeTradePayload } from './payload.js';
+import type { ParsedFile, PreviewCounts } from './preview.js';
 
 export interface CommittedBatch {
   readonly batchId: string;
@@ -15,6 +16,7 @@ export interface CommittedBatch {
 
 interface Statements {
   readonly batch: Database.Statement;
+  readonly counts: Database.Statement;
   readonly raw: Database.Statement;
   readonly copy: Database.Statement;
   readonly trade: Database.Statement;
@@ -28,6 +30,7 @@ function prepare(db: Database.Database): Statements {
          coverage_to, counts_json, status, created_at)
        VALUES (@id, @accountId, @sha256, @kind, @adapterVersion, @from, @to, @counts, 'committed', @createdAt)`,
     ),
+    counts: db.prepare('UPDATE import_batch SET counts_json = ? WHERE id = ?'),
     raw: db
       .prepare('INSERT INTO raw_row (batch_id, line_no, raw_text) VALUES (?, ?, ?) RETURNING id')
       .pluck(),
@@ -52,14 +55,14 @@ function prepare(db: Database.Database): Statements {
 }
 
 /** Inserts one canonical trade row (and its raw row and batch copy); true when it was new for the account. */
-export function insertTrade(
+function insertTrade(
   sql: Pick<Statements, 'raw' | 'copy' | 'trade'>,
   accountId: string,
   batchId: string,
   row: CanonicalRow,
 ): boolean {
   const rawRowId = sql.raw.get(batchId, row.raw.line, row.raw.text) as bigint;
-  sql.copy.run(batchId, 'trade', '', row.dedupKey, toJson(row));
+  sql.copy.run(batchId, 'trade', '', row.dedupKey, encodeTradePayload(row));
   const params = {
     accountId,
     batchId,
@@ -85,13 +88,13 @@ export function insertTrade(
   return sql.trade.run(params).changes > 0;
 }
 
-export function insertStatement(
+function insertStatement(
   sql: Pick<Statements, 'copy' | 'statement'>,
   accountId: string,
   batchId: string,
   row: StatementRow,
 ): boolean {
-  sql.copy.run(batchId, 'statement', row.kind, row.dedupKey, toJson(row));
+  sql.copy.run(batchId, 'statement', row.kind, row.dedupKey, encodeStatementPayload(row));
   return (
     sql.statement.run(accountId, batchId, row.kind, row.dedupKey, JSON.stringify(row.key), toJson(row.data))
       .changes > 0
@@ -116,7 +119,7 @@ export function writeBatches(
       adapterVersion: file.adapterVersion,
       from: file.result.coverage?.from ?? null,
       to: file.result.coverage?.to ?? null,
-      counts: JSON.stringify(file.counts),
+      counts: '{}',
       createdAt,
     });
     let rows = 0;
@@ -124,6 +127,14 @@ export function writeBatches(
     let statements = 0;
     for (const row of file.result.statements)
       if (insertStatement(sql, accountId, batchId, row)) statements += 1;
+    // What the commit actually did (the preview's counts can be stale by now).
+    const counts: PreviewCounts = {
+      rows: { new: rows, duplicate: file.result.rows.length - rows },
+      statements: { new: statements, duplicate: file.result.statements.length - statements },
+      skipped: file.counts.skipped,
+      errors: file.counts.errors,
+    };
+    sql.counts.run(JSON.stringify(counts), batchId);
     return { batchId, kind: file.kind, inserted: { rows, statements } };
   });
 }

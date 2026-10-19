@@ -114,23 +114,37 @@ function countRows(
 }
 
 /**
- * PRD §6.4 wrong-account heuristic: where the file's trade dates overlap the account's existing trade dates, the
- * file should mostly repeat keys the account already has. Sharing under 10% there suggests another person's file.
+ * PRD §6.4 wrong-account heuristic: where the file's trade dates fall inside ranges the account has already
+ * imported (batch coverage, not the span of all its trades, so back-filling a gap never warns), the file should
+ * mostly repeat keys the account already has. Sharing under 10% there suggests another person's file.
  */
 function looksLikeAnotherAccount(db: Database.Database, accountId: string, result: ParseResult): boolean {
   if (result.rows.length === 0) return false;
-  const range = db
+  const ranges = db
     .prepare(
-      'SELECT min(trade_date_ist) AS lo, max(trade_date_ist) AS hi FROM trade_row WHERE account_id = ?',
+      `SELECT coverage_from AS lo, coverage_to AS hi FROM import_batch b
+       WHERE account_id = ? AND coverage_from IS NOT NULL AND coverage_to IS NOT NULL
+         AND EXISTS (SELECT 1 FROM batch_row r WHERE r.batch_id = b.id AND r.target = 'trade')`,
     )
-    .get(accountId) as { lo: string | null; hi: string | null };
-  if (range.lo === null || range.hi === null) return false;
-  const { lo, hi } = range;
-  const inOverlap = result.rows.filter((row) => row.tradeDateIst >= lo && row.tradeDateIst <= hi);
+    .all(accountId) as { lo: string; hi: string }[];
+  const covered = (date: string): boolean => ranges.some((range) => date >= range.lo && date <= range.hi);
+  const inOverlap = result.rows.filter((row) => covered(row.tradeDateIst));
   if (inOverlap.length === 0) return false;
   const exists = db.prepare('SELECT 1 FROM trade_row WHERE account_id = ? AND dedup_key = ?').pluck();
   const shared = inOverlap.filter((row) => exists.get(accountId, row.dedupKey) !== undefined).length;
   return shared / inOverlap.length < WRONG_ACCOUNT_SHARE;
+}
+
+/** The contract says dedup keys and raw lines are unique within a file; a result breaking that is malformed. */
+function hasRepeats(result: ParseResult): boolean {
+  const keys = new Set(result.rows.map((row) => row.dedupKey));
+  const lines = new Set(result.rows.map((row) => row.raw.line));
+  const statements = new Set(result.statements.map((row) => `${row.kind}\u0000${row.dedupKey}`));
+  return (
+    keys.size !== result.rows.length ||
+    lines.size !== result.rows.length ||
+    statements.size !== result.statements.length
+  );
 }
 
 /** Previews one file; `parsed` is set when the file can be committed. */
@@ -165,11 +179,15 @@ export async function previewFile(
     return { preview: { ...base, status: 'wrong_broker', broker: top.broker, kind: top.kind }, parsed: null };
   }
   const adapter = context.adapters.find((candidate) => candidate.broker === top.broker);
+  if (adapter === undefined) throw new Error('detected broker has no adapter');
   let result: ParseResult;
   try {
     // Adapters are ours, but their output still crosses a boundary into the vault: check it against the contract.
-    result = parseResultSchema.parse(adapter?.parse(read.input, top.kind));
+    result = parseResultSchema.parse(adapter.parse(read.input, top.kind));
   } catch {
+    return { preview: { ...base, status: 'unreadable', reason: 'malformed' }, parsed: null };
+  }
+  if (hasRepeats(result)) {
     return { preview: { ...base, status: 'unreadable', reason: 'malformed' }, parsed: null };
   }
   const counts = countRows(context.db, account.id, result, seen);
@@ -189,7 +207,7 @@ export async function previewFile(
   };
   const parsed = {
     kind: top.kind,
-    adapterVersion: adapter?.version ?? '',
+    adapterVersion: adapter.version,
     sha256: read.sha256,
     result,
     counts,
