@@ -13,5 +13,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
   }
 }
