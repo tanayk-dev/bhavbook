@@ -38,22 +38,30 @@ const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const soldOn = (lot: StatementLot, dateIst: string): number => (lot.sellDateIst === dateIst ? 0 : 1);
 
 /**
- * The best statement lot per orphan: same ISIN and exact quantity, bought on or before the orphan sell; a lot
- * sold on the orphan's day first, then the latest buy, then by statement key (deterministic).
+ * The best statement lot per orphan: same ISIN and exact quantity, bought on or before the orphan sell and not
+ * sold before it (a lot sold earlier was consumed by an earlier sale); a lot sold on the orphan's day first, then
+ * the latest buy, then by statement key. Orphans are served earliest first, and each statement lot is suggested
+ * at most once (accepting it twice would double its cost).
  */
 export function suggestOpeningLots(
   orphans: readonly OrphanSummary[],
   lots: readonly StatementLot[],
 ): OpeningLotSuggestion[] {
-  return orphans.flatMap((orphan) => {
+  const used = new Set<string>();
+  const ordered = [...orphans].sort(
+    (a, b) => byText(a.dateIst, b.dateIst) || byText(a.anchorKey, b.anchorKey),
+  );
+  return ordered.flatMap((orphan) => {
     const { bucket } = orphan;
     if (bucket === 'INTRADAY') return [];
     const [best] = lots
       .filter(
         (lot) =>
+          !used.has(lot.statementKey) &&
           lot.isin === orphan.instrumentKey &&
           lot.quantity === orphan.quantity &&
-          lot.buyDateIst <= orphan.dateIst,
+          lot.buyDateIst <= orphan.dateIst &&
+          (lot.sellDateIst === null || lot.sellDateIst >= orphan.dateIst),
       )
       .sort(
         (a, b) =>
@@ -62,6 +70,7 @@ export function suggestOpeningLots(
           byText(a.statementKey, b.statementKey),
       );
     if (best === undefined) return [];
+    used.add(best.statementKey);
     return [
       {
         anchorKey: orphan.anchorKey,

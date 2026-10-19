@@ -212,7 +212,14 @@ describe('review follow-ups', () => {
 
   it('ignores real buys in other buckets or accounts', () => {
     const otherBucket = fill({ side: 'BUY', qty: 10, price: 75, at: '2025-08-01 10:00', product: 'MTF' });
-    const otherAccount = fill({ side: 'BUY', qty: 10, price: 75, at: '2025-08-01 10:00', product: 'DELIVERY', account: 'other' });
+    const otherAccount = fill({
+      side: 'BUY',
+      qty: 10,
+      price: 75,
+      at: '2025-08-01 10:00',
+      product: 'DELIVERY',
+      account: 'other',
+    });
     expect(redundantOpeningLots([orphanSell(), otherBucket, otherAccount], [openingLot()])).toEqual([]);
   });
 
@@ -220,7 +227,14 @@ describe('review follow-ups', () => {
     expect(() => reconstructAccount([], [openingLot(), openingLot()])).toThrow(InvalidArgumentError);
     const unknown = { id: 'u', kind: 'mystery', accountId: 'acc' } as unknown as Adjustment;
     expect(() => reconstructAccount([], [unknown])).toThrow(InvalidArgumentError);
-    const badDate: Adjustment = { id: 'o', kind: 'product_override', accountId: 'acc', instrumentKey: ISIN, tradeDateIst: '2025-13-01', bucket: 'MTF' };
+    const badDate: Adjustment = {
+      id: 'o',
+      kind: 'product_override',
+      accountId: 'acc',
+      instrumentKey: ISIN,
+      tradeDateIst: '2025-13-01',
+      bucket: 'MTF',
+    };
     expect(() => reconstructAccount([], [badDate])).toThrow(InvalidArgumentError);
     const badBucket = { ...badDate, tradeDateIst: '2025-01-02', bucket: 'FOO' } as unknown as Adjustment;
     expect(() => reconstructAccount([], [badBucket])).toThrow(InvalidArgumentError);
@@ -229,13 +243,30 @@ describe('review follow-ups', () => {
   it('matches the sell against the lot (the lot sorts first) and anchors the position on the lot', () => {
     const { positions } = reconstructAccount([orphanSell()], [openingLot()]);
     const position = first(positions);
-    expect([position.orphanQty, position.lots.length, position.anchorKey]).toEqual([0n, 1, 'adj:adj1#DELIVERY']);
+    expect([position.orphanQty, position.lots.length, position.anchorKey]).toEqual([
+      0n,
+      1,
+      'adj:adj1#DELIVERY',
+    ]);
   });
 });
 
 describe('suggestion review follow-ups', () => {
-  const orphan = { anchorKey: 'a#DELIVERY', instrumentKey: 'INE377Y01014', bucket: 'DELIVERY' as const, quantity: 200n, dateIst: '2024-09-18' };
-  const lot = { statementKey: 'L1', isin: 'INE377Y01014', quantity: 200n, buyDateIst: '2024-09-17', sellDateIst: '2024-09-18' as string | null, buyValueMicro: 1n };
+  const orphan = {
+    anchorKey: 'a#DELIVERY',
+    instrumentKey: 'INE377Y01014',
+    bucket: 'DELIVERY' as const,
+    quantity: 200n,
+    dateIst: '2024-09-18',
+  };
+  const lot = {
+    statementKey: 'L1',
+    isin: 'INE377Y01014',
+    quantity: 200n,
+    buyDateIst: '2024-09-17',
+    sellDateIst: '2024-09-18' as string | null,
+    buyValueMicro: 1n,
+  };
 
   it('never suggests a lot that was already sold before the orphan sell', () => {
     expect(suggestOpeningLots([orphan], [{ ...lot, sellDateIst: '2024-06-02' }])).toEqual([]);
@@ -245,6 +276,8 @@ describe('suggestion review follow-ups', () => {
   it('never gives the same statement lot to two orphans (earliest orphan first)', () => {
     const later = { ...orphan, anchorKey: 'b#DELIVERY', dateIst: '2024-10-01' };
     const open = { ...lot, sellDateIst: null };
-    expect(suggestOpeningLots([later, orphan], [open]).map((entry) => entry.anchorKey)).toEqual(['a#DELIVERY']);
+    expect(suggestOpeningLots([later, orphan], [open]).map((entry) => entry.anchorKey)).toEqual([
+      'a#DELIVERY',
+    ]);
   });
 });
