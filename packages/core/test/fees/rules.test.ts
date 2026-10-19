@@ -1,6 +1,7 @@
 // S12a task 1: fee-rule files (zod schema), sources on every rate, version selection by trade date.
 import { describe, expect, it } from 'vitest';
 import { bundledFeeRules, FeeRuleError, parseFeeRules, selectFeeRules } from '../../src/index.js';
+import dhan20240401 from '../../rules/broker/dhan/2024-04-01.json' with { type: 'json' };
 import nse20241001 from '../../rules/statutory/nse/2024-10-01.json' with { type: 'json' };
 
 describe('bundled rule files', () => {
@@ -39,6 +40,14 @@ describe('selectFeeRules', () => {
     expect(selectFeeRules(rules, 'zerodha', 'NSE', '2024-06-01')?.broker.id).toBe('zerodha/2024-06-01');
   });
 
+  it('picks by effective date even from rules that are not sorted', () => {
+    const unsorted = { statutory: [...rules.statutory].reverse(), broker: [...rules.broker].reverse() };
+    expect(selectFeeRules(unsorted, 'zerodha', 'NSE', '2025-01-01')).toMatchObject({
+      statutory: { id: 'nse/2024-10-01' },
+      broker: { id: 'zerodha/2024-06-01' },
+    });
+  });
+
   it('has nothing before the first version', () => {
     expect(selectFeeRules(rules, 'dhan', 'NSE', '2024-03-31')).toBeNull();
     expect(selectFeeRules(rules, 'dhan', 'BSE', '2024-09-30')).toBeNull();
@@ -62,6 +71,18 @@ describe('parseFeeRules', () => {
     ['an unknown exchange', (file) => ({ ...file, exchange: 'MCX' })],
   ])('rejects %s', (_, mutate) => {
     expect(() => parseFeeRules([mutate(good)])).toThrow(FeeRuleError);
+  });
+
+  it('names the file and the field that failed', () => {
+    expect(() => parseFeeRules([good, { ...good, effective_from: '2024-11-01', sebi: {} }])).toThrow(
+      /fee rule file #1: sebi\.value/,
+    );
+  });
+
+  it('rejects a broker file with a malformed DP amount', () => {
+    const dhan = structuredClone(dhan20240401) as { dp: { per_scrip_sell_day_rupees: { value: string } } };
+    dhan.dp.per_scrip_sell_day_rupees.value = '12,50';
+    expect(() => parseFeeRules([dhan])).toThrow(/fee rule file #0: dp\.per_scrip_sell_day_rupees\.value/);
   });
 
   it('rejects two versions with the same effective date', () => {

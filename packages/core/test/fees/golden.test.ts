@@ -1,9 +1,11 @@
 // S12a task 5 golden: Dhan FY 2024-25 Global Transactions (the anonymised fixture). Each (date, scrip) row is
 // rebuilt as one buy order and one sell order; the engine's charges are compared with what Dhan billed:
 // STT and stamp duty per day (the rupee-rounded contract-note total), every other component per row within
-// +/- Rs 0.01. 18 Sep 2024 needs the IPO opening lot (S10a) and is checked in S12b. One known residual: GST on
-// 9 May 2024 (Jain Irrigation) is Rs 0.02 over; the row's odd-paise value suggests several fills, so S12a-2 checks
-// it again with the real orders from the trade file.
+// +/- Rs 0.01, and the year's txn, SEBI and IPFT totals within Rs 0.10 (a wrong rate shows up there even where one
+// row cannot show it). 18 Sep 2024 needs the IPO opening lot (S10a) and is checked in S12b.
+// One unexplained residual is pinned: GST on 9 May 2024 (Jain Irrigation) is Rs 0.02 over. Dhan's 8.02 is exactly
+// 18% of its rounded brokerage + txn + SEBI without IPFT, but that form fits fewer rows overall, so the cause is
+// unknown; S12a-2 checks it again with the real orders from the trade file.
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
@@ -21,6 +23,8 @@ const PAISA = 10_000n;
 const RUPEE = 1_000_000n;
 const SKIPPED_DAY = '2024-09-18';
 const KNOWN_GST_RESIDUAL = '2024-05-09 Jain Irrigation Systems';
+const COLUMNS = 16;
+const YEAR_TOLERANCE = 10n * PAISA;
 const MONTHS: Readonly<Record<string, string>> = {
   Jan: '01',
   Feb: '02',
@@ -48,34 +52,49 @@ interface Row {
   >;
 }
 
+function cell(cells: readonly string[], index: number): string {
+  const value = cells[index];
+  if (value === undefined) throw new Error(`missing column ${String(index)}`);
+  return value;
+}
+
+function quantity(text: string): bigint {
+  if (!/^\d+$/.test(text)) throw new Error('malformed quantity');
+  return BigInt(text);
+}
+
+function parseRow(line: string): Row {
+  const cells = line.slice(1, -1).split('","');
+  if (cells.length !== COLUMNS) throw new Error('unexpected column count');
+  const [day = '', monthName = '', year = ''] = cell(cells, 0).split(' ');
+  const month = MONTHS[monthName];
+  if (month === undefined) throw new Error('unknown month');
+  if (cell(cells, 2) !== 'NSE') throw new Error('only NSE rows are expected in this fixture');
+  const money = (index: number): bigint => parseDecimalToMicro(cell(cells, index));
+  return {
+    date: `${year}-${month}-${day}`,
+    scrip: cell(cells, 1),
+    buyQty: quantity(cell(cells, 4)),
+    buyValue: money(5),
+    sellQty: quantity(cell(cells, 6)),
+    sellValue: money(7),
+    billed: {
+      brokerage: money(8),
+      gst: money(9),
+      stt: money(10),
+      sebi: money(11),
+      stamp_duty: money(12),
+      exchange_txn: money(13),
+      ipft: money(14),
+    },
+  };
+}
+
 function readRows(): Row[] {
-  const [name = ''] = readdirSync(DIR);
-  const lines = readFileSync(new URL(name, DIR), 'utf8').split(/\r?\n/);
-  return lines
-    .filter((line) => /^"\d{2} [A-Z][a-z]{2} \d{4}/.test(line))
-    .map((line) => {
-      const cells = line.slice(1, -1).split('","');
-      const [dateText = '', scrip = ''] = cells;
-      const [day = '', month = '', year = ''] = dateText.split(' ');
-      const money = (index: number): bigint => parseDecimalToMicro(cells[index] ?? '');
-      return {
-        date: `${year}-${MONTHS[month] ?? ''}-${day}`,
-        scrip,
-        buyQty: BigInt(cells[4] ?? ''),
-        buyValue: money(5),
-        sellQty: BigInt(cells[6] ?? ''),
-        sellValue: money(7),
-        billed: {
-          brokerage: money(8),
-          gst: money(9),
-          stt: money(10),
-          sebi: money(11),
-          stamp_duty: money(12),
-          exchange_txn: money(13),
-          ipft: money(14),
-        },
-      };
-    });
+  const files = readdirSync(DIR).filter((name) => name.endsWith('.csv'));
+  if (files.length !== 1) throw new Error('expected exactly one Global Transactions CSV');
+  const lines = readFileSync(new URL(files[0] ?? '', DIR), 'utf8').split(/\r?\n/);
+  return lines.filter((line) => /^"\d{2} [A-Z][a-z]{2} \d{4}/.test(line)).map(parseRow);
 }
 
 function fillsOf(rows: readonly Row[]): ChargeableFill[] {
@@ -166,6 +185,15 @@ describe('Dhan FY 2024-25 Global Transactions', () => {
         }
         expect([component, difference <= PAISA && difference >= -PAISA]).toEqual([component, true]);
       }
+    },
+  );
+
+  it.each(['exchange_txn', 'sebi', 'ipft'] as const)(
+    'the year total of %s is within Rs 0.10 of what Dhan billed',
+    (component) => {
+      const billed = rows.reduce((sum, row) => sum + row.billed[component], 0n);
+      const difference = engineTotal(component, () => true) - billed;
+      expect(difference <= YEAR_TOLERANCE && difference >= -YEAR_TOLERANCE).toBe(true);
     },
   );
 });

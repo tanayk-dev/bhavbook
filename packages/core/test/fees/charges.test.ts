@@ -1,7 +1,7 @@
 // S12a tasks 2, 3 and 5 (ADR-0016): charges per billing unit, rounded as the broker bills, allocated to fills.
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { bundledFeeRules, computeCharges } from '../../src/index.js';
+import { bundledFeeRules, computeCharges, InvalidArgumentError } from '../../src/index.js';
 import { RUPEE } from '../fifo/helpers.js';
 import { charge, chargeable, PAISA, total } from './helpers.js';
 
@@ -209,10 +209,54 @@ describe('allocation', () => {
   it('opening lots and other synthetic allocations are never charged', () => {
     const fills = [buy(1, 100, '2025-11-05 10:00')];
     const { allocations } = charge('dhan', fills);
-    const synthetic = { ...allocations[0], key: 'adj:x#DELIVERY', fillId: 'adj:x', adjustmentId: 'x' };
+    const [real] = allocations;
+    if (real === undefined) throw new Error('no allocation');
+    const synthetic = { ...real, key: 'adj:x#DELIVERY', fillId: 'adj:x', adjustmentId: 'x' };
     expect(
-      computeCharges({ broker: 'dhan', fills, allocations: [synthetic as never], rules: bundledFeeRules() })
-        .charges,
+      computeCharges({ broker: 'dhan', fills, allocations: [synthetic], rules: bundledFeeRules() }).charges,
     ).toEqual([]);
+  });
+});
+
+describe('S12a-1 review follow-ups', () => {
+  it('one order split by netting into intraday and MTF pays one Rs 20 cap, not one per bucket', () => {
+    const fills = [
+      buy(100, 1000, '2024-11-05 10:00', 'A', 'MTF'),
+      sell(40, 1000, '2024-11-05 14:00', 'A', 'MTF'),
+    ];
+    // Buy order: 40,000 intraday + 60,000 MTF at 0.03% = 30 -> one cap of 20; sell order 40,000 -> 12.
+    expect(total(charge('dhan', fills).charges, 'brokerage')).toBe(32n * RUPEE);
+  });
+
+  it('an allocation whose fill was not passed is an error, never a silent zero', () => {
+    const fills = [buy(1, 100, '2025-11-05 10:00')];
+    const { allocations } = charge('dhan', fills);
+    expect(() =>
+      computeCharges({ broker: 'dhan', fills: [], allocations, rules: bundledFeeRules() }),
+    ).toThrow(InvalidArgumentError);
+  });
+
+  it('rejects two fills with the same id', () => {
+    const [first] = [buy(1, 100, '2025-11-05 10:00')];
+    const fills = [first, { ...first }] as const;
+    expect(() =>
+      computeCharges({ broker: 'dhan', fills, allocations: [], rules: bundledFeeRules() }),
+    ).toThrow(InvalidArgumentError);
+  });
+
+  it('gives the same charges whatever the order of the allocations (equal values tie-break by allocation)', () => {
+    const fills = [1, 2, 3, 4, 5].map((index) =>
+      buy(1, '0.37', `2025-11-05 10:0${String(index)}`, `S${String(index)}`),
+    );
+    const { allocations, charges } = charge('dhan', fills);
+    const shuffled = [...allocations].reverse();
+    expect(
+      computeCharges({
+        broker: 'dhan',
+        fills: [...fills].reverse(),
+        allocations: shuffled,
+        rules: bundledFeeRules(),
+      }).charges,
+    ).toEqual(charges);
   });
 });

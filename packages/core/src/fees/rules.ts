@@ -18,7 +18,7 @@ export class FeeRuleError extends Error {
   override readonly name = 'FeeRuleError';
 }
 
-export type Exchange = 'NSE' | 'BSE';
+export type FeeExchange = 'NSE' | 'BSE';
 export type FeeBroker = 'dhan' | 'zerodha';
 
 const isoDate = z
@@ -71,7 +71,7 @@ type SideRates = Readonly<Record<Side, Rate>>;
 export interface StatutoryRule {
   /** `<exchange>/<effective date>`, e.g. `nse/2024-10-01`. */
   readonly id: string;
-  readonly exchange: Exchange;
+  readonly exchange: FeeExchange;
   readonly effectiveFrom: string;
   readonly stt: Readonly<Record<Bucket, SideRates>>;
   readonly stampDuty: Readonly<Record<Bucket, SideRates>>;
@@ -140,23 +140,34 @@ function toBroker(file: z.infer<typeof brokerSchema>): BrokerRule {
   };
 }
 
+const fileSchema = z.discriminatedUnion('kind', [statutorySchema, brokerSchema]);
+
 const byId = (a: { readonly id: string }, b: { readonly id: string }): number => byText(a.id, b.id);
 
 /** Validates rule files (statutory and broker, any order). Versions are unique per exchange or broker and date. */
 export function parseFeeRules(files: readonly unknown[]): FeeRules {
   const statutory: StatutoryRule[] = [];
   const broker: BrokerRule[] = [];
-  for (const file of files) {
-    const asStatutory = statutorySchema.safeParse(file);
-    const asBroker = brokerSchema.safeParse(file);
-    if (asStatutory.success) statutory.push(toStatutory(asStatutory.data));
-    else if (asBroker.success) broker.push(toBroker(asBroker.data));
-    else throw new FeeRuleError('invalid fee rule file');
+  for (const [index, file] of files.entries()) {
+    const parsed = fileSchema.safeParse(file);
+    if (!parsed.success) {
+      // Paths and zod's messages only (rule files hold no personal data).
+      const issues = parsed.error.issues
+        .map((issue) => `${issue.path.join('.')} ${issue.message}`)
+        .join('; ');
+      throw new FeeRuleError(`invalid fee rule file #${String(index)}: ${issues}`);
+    }
+    if (parsed.data.kind === 'statutory') statutory.push(toStatutory(parsed.data));
+    else broker.push(toBroker(parsed.data));
   }
   const ids = [...statutory, ...broker].map((rule) => rule.id);
-  if (new Set(ids).size !== ids.length)
+  if (new Set(ids).size !== ids.length) {
     throw new FeeRuleError('two fee rule versions with the same effective date');
-  return { statutory: statutory.sort(byId), broker: broker.sort(byId) };
+  }
+  return Object.freeze({
+    statutory: Object.freeze(statutory.sort(byId)),
+    broker: Object.freeze(broker.sort(byId)),
+  });
 }
 
 const BUNDLED: readonly unknown[] = [
@@ -169,17 +180,25 @@ const BUNDLED: readonly unknown[] = [
   zerodhaFrom20240601,
 ];
 
-/** The rule files shipped with BhavBook (packages/core/rules). */
+let bundled: FeeRules | undefined;
+
+/** The rule files shipped with BhavBook (packages/core/rules), parsed once. */
 export function bundledFeeRules(): FeeRules {
-  return parseFeeRules(BUNDLED);
+  bundled ??= parseFeeRules(BUNDLED);
+  return bundled;
 }
 
-/** The latest version effective on or before `date` (versions are sorted by id, so by date within one key). */
+/** The version with the latest effective date on or before `date` (whatever the order of `versions`). */
 function inForce<T extends { readonly effectiveFrom: string }>(
   versions: readonly T[],
   date: string,
 ): T | null {
-  return versions.filter((rule) => rule.effectiveFrom <= date).at(-1) ?? null;
+  let latest: T | null = null;
+  for (const rule of versions) {
+    if (rule.effectiveFrom <= date && (latest === null || rule.effectiveFrom > latest.effectiveFrom))
+      latest = rule;
+  }
+  return latest;
 }
 
 export interface SelectedRules {
@@ -191,7 +210,7 @@ export interface SelectedRules {
 export function selectFeeRules(
   rules: FeeRules,
   broker: FeeBroker,
-  exchange: Exchange,
+  exchange: FeeExchange,
   date: string,
 ): SelectedRules | null {
   const statutory = inForce(
