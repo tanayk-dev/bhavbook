@@ -13,3 +13,8 @@ export class ParseError extends BhavbookCoreError {
 export class PrecisionError extends BhavbookCoreError {
   override readonly name = 'PrecisionError';
 }
+
+/** An argument is outside its valid domain (non-positive divisor, negative weight, unknown mode, …). */
+export class InvalidArgumentError extends BhavbookCoreError {
+  override readonly name = 'InvalidArgumentError';
+}

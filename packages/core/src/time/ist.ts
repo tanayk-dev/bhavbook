@@ -1,6 +1,6 @@
 // IST (Asia/Kolkata) date logic with a fixed +05:30 offset; India has no DST (ADR-0005).
 // Only Date's UTC methods are used, so results never depend on the machine timezone.
-import { ParseError } from '../errors.js';
+import { InvalidArgumentError, ParseError } from '../errors.js';
 
 /** Calendar date `YYYY-MM-DD` in IST. */
 export type IstDate = string;
@@ -76,7 +76,7 @@ export function istDateOf(utcIso: UtcIso): IstDate {
 }
 
 /** UTC bounds of an IST day: `startUtc` inclusive, `endUtc` exclusive. */
-export function istDayBounds(date: IstDate): { startUtc: UtcIso; endUtc: UtcIso } {
+export function istDayBounds(date: IstDate): Readonly<{ startUtc: UtcIso; endUtc: UtcIso }> {
   const startMs = istDateMs(date) - IST_OFFSET_MS;
   return { startUtc: toUtcIso(startMs), endUtc: toUtcIso(startMs + DAY_MS) };
 }
@@ -84,7 +84,7 @@ export function istDayBounds(date: IstDate): { startUtc: UtcIso; endUtc: UtcIso 
 /** Whole calendar days from `entry` to `exit` (both IST dates). Same day is 0. */
 export function holdingDays(entry: IstDate, exit: IstDate): number {
   const days = (istDateMs(exit) - istDateMs(entry)) / DAY_MS;
-  if (days < 0) throw new RangeError('exit date is before entry date');
+  if (days < 0) throw new InvalidArgumentError('exit date is before entry date');
   return days;
 }
 
@@ -92,5 +92,7 @@ export function holdingDays(entry: IstDate, exit: IstDate): number {
 export function formatIstDate(date: IstDate): string {
   const parsed = new Date(istDateMs(date));
   const day = String(parsed.getUTCDate()).padStart(2, '0');
-  return `${day} ${MONTHS[parsed.getUTCMonth()] ?? ''} ${parsed.getUTCFullYear()}`;
+  const month = MONTHS[parsed.getUTCMonth()];
+  if (month === undefined) throw new ParseError('month out of range');
+  return `${day} ${month} ${parsed.getUTCFullYear()}`;
 }

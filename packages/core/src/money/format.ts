@@ -1,5 +1,6 @@
 // The single display formatter for money (domain.md: round only at the UI layer, through one helper).
 import { formatScaled, pow10 } from './decimal.js';
+import { InvalidArgumentError } from '../errors.js';
 import { divRound } from './rounding.js';
 
 export interface FormatINROptions {
@@ -18,7 +19,9 @@ function groupIndian(digits: string): string {
 
 /** Formats micro-rupees for display, e.g. `123_456_780_000n` → `₹1,23,456.78`. Rounds half-up. */
 export function formatINR(valueMicro: bigint, options: FormatINROptions = {}): string {
-  const dp = options.dp ?? 2;
+  // Widened on purpose: guards untyped (JS or cast) callers at runtime.
+  const dp: number = options.dp ?? 2;
+  if (dp !== 0 && dp !== 2) throw new InvalidArgumentError('dp must be 0 or 2');
   const rounded = divRound(valueMicro, pow10(6 - dp), 'half-up');
   const plain = formatScaled(rounded < 0n ? -rounded : rounded, dp);
   const [integerPart = '0', fraction] = plain.split('.');

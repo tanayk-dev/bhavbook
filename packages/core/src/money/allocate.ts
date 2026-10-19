@@ -1,13 +1,15 @@
+import { InvalidArgumentError } from '../errors.js';
+
 /**
  * Splits `total` across `weights` in proportion, so the parts always sum to `total` exactly.
  * Each part gets the floor of its exact share; the leftover units go to the largest remainders,
  * ties broken by lower index (deterministic). Used to spread contract-note charges over fills (ADR-0016).
  */
-export function allocateLargestRemainder(total: bigint, weights: readonly bigint[]): bigint[] {
-  if (weights.some((weight) => weight < 0n)) throw new RangeError('weights cannot be negative');
+export function allocateLargestRemainder(total: bigint, weights: readonly bigint[]): readonly bigint[] {
+  if (weights.some((weight) => weight < 0n)) throw new InvalidArgumentError('weights cannot be negative');
   const weightSum = weights.reduce((sum, weight) => sum + weight, 0n);
   if (weightSum === 0n) {
-    if (total !== 0n) throw new RangeError('cannot allocate a non-zero total over zero weight');
+    if (total !== 0n) throw new InvalidArgumentError('cannot allocate a non-zero total over zero weight');
     return weights.map(() => 0n);
   }
 
@@ -21,7 +23,7 @@ export function allocateLargestRemainder(total: bigint, weights: readonly bigint
   const bonusIndexes = new Set(
     [...shares]
       .sort((a, b) => (a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1))
-      .slice(0, Number.parseInt(leftover.toString(), 10))
+      .filter((_, rank) => BigInt(rank) < leftover)
       .map((share) => share.index),
   );
 

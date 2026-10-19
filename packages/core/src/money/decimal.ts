@@ -1,5 +1,5 @@
 // Decimal strings to and from bigint, without ever going through a float (ADR-0004, ADR-0010).
-import { ParseError, PrecisionError } from '../errors.js';
+import { InvalidArgumentError, ParseError, PrecisionError } from '../errors.js';
 import { divRound, type RoundingMode } from './rounding.js';
 
 export const MICRO_PER_RUPEE = 1_000_000n;
@@ -15,6 +15,9 @@ export interface ScaledDecimal {
 }
 
 export function pow10(exponent: number): bigint {
+  if (!Number.isSafeInteger(exponent) || exponent < 0) {
+    throw new InvalidArgumentError('exponent must be a non-negative integer');
+  }
   return 10n ** BigInt(exponent);
 }
 
@@ -62,7 +65,7 @@ export function formatScaled(value: bigint, dp: number): string {
  * Used by adapters for declared precision normalisation, e.g. Zerodha's `700.599976` → `700.60`.
  */
 export function normaliseDecimalString(text: string, dp: number, mode: RoundingMode): string {
-  if (!Number.isInteger(dp) || dp < 0) throw new RangeError('dp must be a non-negative integer');
+  pow10(dp); // validates dp before any work
   return formatScaled(rescale(parseScaledDecimal(text), dp, mode), dp);
 }
 
@@ -71,6 +74,6 @@ export type RoundingUnit = 'paisa' | 'rupee' | bigint;
 /** Rounds micro-rupees to a whole multiple of `unit` (paisa, rupee, or any positive micro amount). */
 export function roundMicro(valueMicro: bigint, unit: RoundingUnit, mode: RoundingMode): bigint {
   const unitMicro = unit === 'paisa' ? MICRO_PER_PAISA : unit === 'rupee' ? MICRO_PER_RUPEE : unit;
-  if (unitMicro <= 0n) throw new RangeError('rounding unit must be positive');
+  if (unitMicro <= 0n) throw new InvalidArgumentError('rounding unit must be positive');
   return divRound(valueMicro, unitMicro, mode) * unitMicro;
 }
