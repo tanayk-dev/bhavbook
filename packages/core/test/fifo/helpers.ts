@@ -43,10 +43,10 @@ export function fill(spec: FillSpec): TradeFill {
     .replace('.000Z', 'Z');
   const quantity = BigInt(spec.qty);
   return {
-    id: `f${String(counter).padStart(4, '0')}`,
+    id: `f${String(counter).padStart(8, '0')}`,
     accountId: spec.account ?? 'acc',
     instrumentKey: spec.instrument ?? 'INE000000001',
-    dedupKey: `k${String(counter).padStart(4, '0')}`,
+    dedupKey: `k${String(counter).padStart(8, '0')}`,
     executedAtUtc: utc,
     tradeDateIst: date,
     side: spec.side,
