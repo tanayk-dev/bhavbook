@@ -192,11 +192,59 @@ describe('suggestOpeningLots', () => {
         (entry) => entry.statementKey,
       ),
     ).toEqual([lot.statementKey]);
-    expect(suggestOpeningLots(orphans, [earlier]).map((entry) => entry.statementKey)).toEqual(['older']);
+    // Sold before the orphan sell: it can't be the missing entry.
+    expect(suggestOpeningLots(orphans, [earlier])).toEqual([]);
     expect(suggestOpeningLots(orphans, [later, otherIsin, otherQty])).toEqual([]);
   });
 
   it('never suggests a lot for an INTRADAY orphan', () => {
     expect(suggestOpeningLots([{ ...first(orphans), bucket: 'INTRADAY' }], [lot])).toEqual([]);
+  });
+});
+
+describe('review follow-ups', () => {
+  it('never flags a lot that is still held, or only partly sold, when no real buy precedes it', () => {
+    const held = openingLot({ beforeDateIst: undefined, entryDateIst: '2025-01-15' });
+    expect(redundantOpeningLots([], [held])).toEqual([]);
+    const partSell = fill({ side: 'SELL', qty: 6, price: 120, at: '2025-03-01 10:00', product: 'DELIVERY' });
+    expect(redundantOpeningLots([partSell], [held])).toEqual([]);
+  });
+
+  it('ignores real buys in other buckets or accounts', () => {
+    const otherBucket = fill({ side: 'BUY', qty: 10, price: 75, at: '2025-08-01 10:00', product: 'MTF' });
+    const otherAccount = fill({ side: 'BUY', qty: 10, price: 75, at: '2025-08-01 10:00', product: 'DELIVERY', account: 'other' });
+    expect(redundantOpeningLots([orphanSell(), otherBucket, otherAccount], [openingLot()])).toEqual([]);
+  });
+
+  it('rejects duplicate adjustment ids, unknown kinds and malformed overrides', () => {
+    expect(() => reconstructAccount([], [openingLot(), openingLot()])).toThrow(InvalidArgumentError);
+    const unknown = { id: 'u', kind: 'mystery', accountId: 'acc' } as unknown as Adjustment;
+    expect(() => reconstructAccount([], [unknown])).toThrow(InvalidArgumentError);
+    const badDate: Adjustment = { id: 'o', kind: 'product_override', accountId: 'acc', instrumentKey: ISIN, tradeDateIst: '2025-13-01', bucket: 'MTF' };
+    expect(() => reconstructAccount([], [badDate])).toThrow(InvalidArgumentError);
+    const badBucket = { ...badDate, tradeDateIst: '2025-01-02', bucket: 'FOO' } as unknown as Adjustment;
+    expect(() => reconstructAccount([], [badBucket])).toThrow(InvalidArgumentError);
+  });
+
+  it('matches the sell against the lot (the lot sorts first) and anchors the position on the lot', () => {
+    const { positions } = reconstructAccount([orphanSell()], [openingLot()]);
+    const position = first(positions);
+    expect([position.orphanQty, position.lots.length, position.anchorKey]).toEqual([0n, 1, 'adj:adj1#DELIVERY']);
+  });
+});
+
+describe('suggestion review follow-ups', () => {
+  const orphan = { anchorKey: 'a#DELIVERY', instrumentKey: 'INE377Y01014', bucket: 'DELIVERY' as const, quantity: 200n, dateIst: '2024-09-18' };
+  const lot = { statementKey: 'L1', isin: 'INE377Y01014', quantity: 200n, buyDateIst: '2024-09-17', sellDateIst: '2024-09-18' as string | null, buyValueMicro: 1n };
+
+  it('never suggests a lot that was already sold before the orphan sell', () => {
+    expect(suggestOpeningLots([orphan], [{ ...lot, sellDateIst: '2024-06-02' }])).toEqual([]);
+    expect(suggestOpeningLots([orphan], [{ ...lot, sellDateIst: null }])).toHaveLength(1);
+  });
+
+  it('never gives the same statement lot to two orphans (earliest orphan first)', () => {
+    const later = { ...orphan, anchorKey: 'b#DELIVERY', dateIst: '2024-10-01' };
+    const open = { ...lot, sellDateIst: null };
+    expect(suggestOpeningLots([later, orphan], [open]).map((entry) => entry.anchorKey)).toEqual(['a#DELIVERY']);
   });
 });
