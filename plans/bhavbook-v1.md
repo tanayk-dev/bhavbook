@@ -59,7 +59,8 @@
 | S10b-2 | Corporate-action service, recompute, suspicion issues (server) | S10b-1, S10a-2 | **strongest** | — |
 | S10c | Journal anchors | S10a | default | — |
 | S11 | Server and CLI | S4 | default | **yes** |
-| S12a | Fee rules and engine | S9 | **strongest** | — |
+| S12a-1 | Fee rules and engine (core), Global Transactions golden | S9 | **strongest** | — |
+| S12a-2 | Charges in recompute, Dhan vault golden, fee-rules guide | S12a-1, S10b-2 | **strongest** | — |
 | S12b | Reconciliation and FIFO cross-check | S12a, S10a | **strongest** | — |
 | S13a | Web shell, onboarding, settings | S7, S11 | default | **yes** |
 | S13b | Import wizard and coverage view | S13a | default | — |
@@ -78,7 +79,7 @@ W4  S5b ∥ S6 ∥ S11
 W5  S7-1 → S7-2
 W6  S8
 W7  S9-1 → S9-2
-W8  S10a-1 → S10a-2 ∥ S10b-1 → S10b-2 ∥ S12a ∥ S13a
+W8  S10a-1 → S10a-2 ∥ S10b-1 → S10b-2 ∥ S12a-1 → S12a-2 ∥ S13a
 W9  S10c ∥ S12b ∥ S13b
 W10 S13c ∥ S15a
 W11 S14a ∥ S14b
@@ -831,6 +832,7 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
 
 ## Changelog
 
+- 2026-10-20 r11: S12a split. S12a-1 is the pure core (tasks 1-3 and 5): the rule schema, rule files with sources, `computeCharges`, and a golden test built from the anonymised Global Transactions rows (one order per side per scrip-day). S12a-2 writes charges in recompute (on the base allocations, before corporate actions), runs the Dhan golden through the vault with the real orders, and adds `docs/contributing/fee-rules.md`. Task 4 needs no new code: the S10a `product_override` adjustment with bucket MTF is the MTF brokerage override. Rates (verified 2026-10-20 against the circulars): NSE txn ₹3.22/lakh from 2024-04-01 (NSE/FA/61137, first slab), ₹2.97/lakh from 2024-10-01 (NSE/FA/64232), ₹306.99/crore from 2026-03-01 (NSE/FA/73061); NSE IPFT ₹10/crore until 2026-02-28, then ₹0.01/crore (NSE/FA/56129, NSE/FA/73061); BSE txn ₹3.75/lakh for group A/B from 2024-10-01 (other groups and BSE IPFT are not modelled; reconciliation corrects them). STT and stamp duty for the cash segment are unchanged through Budget 2026. One STT and one stamp duty total per contract note across classes (A1); DP is stored inclusive of its GST so trade GST lines up with Global Transactions.
 - 2026-10-20 r10: S10b-1 and S10b-2 merged. Notes for later steps: a trade row can now have several fill_allocation rows (the part sold before a corporate action and the part it reshaped), so S12a must charge per trade row, never per allocation. Corporate actions apply to every account, so a change recomputes all accounts in one transaction and an unreadable stored action blocks every recompute until reverted (the `recompute_failed` issue names it by id for the S13 UI). Same-day actions apply in creation order (ids are `ca_<created>_<random>`).
 - 2026-10-19 r9: S10a-1 and S10a-2 merged. S10b split: S10b-1 is the pure core (tasks 1-4); S10b-2 stores corporate actions, applies them in recompute (fill_allocation.corporate_action_id for bonus and demerger-child lots) and raises the suspicion issues. A corporate action applies at the start of its ex-date (IST) to the quantity still open then; entitlements are computed on each account's total holding, floored, spread over the lots exactly, and the fraction is reported. `cost_split_bp` is the child's share of the cost.
 - 2026-10-19 r8: S9-2 merged (wave 7). S10a split under the ~800-line rule: S10a-1 is the pure core (tasks 1-2, plus detecting redundant opening lots for task 4); S10a-2 is the server (adjustment service with validated input, tasks 3-4's issues and actions, task 5's golden tests). E11's full golden test removes the 17 Sep buy from the fixture text to reproduce the export the PRD describes (r7).

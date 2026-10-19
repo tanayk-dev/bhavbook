@@ -1,0 +1,52 @@
+{
+  "kind": "broker",
+  "broker": "zerodha",
+  "effective_from": "2024-04-01",
+  "notes": "Zerodha: DP Rs 13.50 + GST (Rs 15.93) until the CDSL fee cut on 2024-06-01.",
+  "brokerage": {
+    "DELIVERY": {
+      "percent": {
+        "value": "0%",
+        "source_url": "https://zerodha.com/charges",
+        "verified_on": "2026-10-20"
+      },
+      "max_rupees": null
+    },
+    "INTRADAY": {
+      "percent": {
+        "value": "0.03%",
+        "source_url": "https://zerodha.com/charges",
+        "verified_on": "2026-10-20"
+      },
+      "max_rupees": {
+        "value": "20",
+        "source_url": "https://zerodha.com/charges",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "MTF": {
+      "percent": {
+        "value": "0.3%",
+        "source_url": "https://zerodha.com/charges",
+        "verified_on": "2026-10-20"
+      },
+      "max_rupees": {
+        "value": "20",
+        "source_url": "https://zerodha.com/charges",
+        "verified_on": "2026-10-20"
+      }
+    }
+  },
+  "dp": {
+    "per_scrip_sell_day_rupees": {
+      "value": "13.50",
+      "source_url": "https://tradingqna.com/t/cdsl-reduced-charges-will-zerodha-too/165314",
+      "verified_on": "2026-10-20"
+    },
+    "gst": {
+      "value": "18%",
+      "source_url": "https://zerodha.com/charges",
+      "verified_on": "2026-10-20"
+    }
+  }
+}

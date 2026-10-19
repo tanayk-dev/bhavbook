@@ -1,0 +1,102 @@
+{
+  "kind": "statutory",
+  "exchange": "NSE",
+  "effective_from": "2024-10-01",
+  "notes": "Uniform NSE cash market charge Rs 2.97 per lakh each side (SEBI true-to-label, NSE/FA/64232).",
+  "stt": {
+    "DELIVERY": {
+      "buy": {
+        "value": "0.1%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0.1%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "MTF": {
+      "buy": {
+        "value": "0.1%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0.1%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "INTRADAY": {
+      "buy": {
+        "value": "0%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0.025%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      }
+    }
+  },
+  "stamp_duty": {
+    "DELIVERY": {
+      "buy": {
+        "value": "0.015%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "MTF": {
+      "buy": {
+        "value": "0.015%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "INTRADAY": {
+      "buy": {
+        "value": "0.003%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      }
+    }
+  },
+  "exchange_txn": {
+    "value": "0.00297%",
+    "source_url": "https://nsearchives.nseindia.com/content/circulars/FA64232.pdf",
+    "verified_on": "2026-10-20"
+  },
+  "sebi": {
+    "value": "0.0001%",
+    "source_url": "https://zerodha.com/charges",
+    "verified_on": "2026-10-20"
+  },
+  "ipft": {
+    "value": "0.0001%",
+    "source_url": "https://nsearchives.nseindia.com/content/circulars/FA56129.pdf",
+    "verified_on": "2026-10-20"
+  },
+  "gst": {
+    "value": "18%",
+    "source_url": "https://dhan.co/pricing",
+    "verified_on": "2026-10-20"
+  }
+}

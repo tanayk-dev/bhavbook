@@ -1,0 +1,102 @@
+{
+  "kind": "statutory",
+  "exchange": "BSE",
+  "effective_from": "2024-10-01",
+  "notes": "BSE Rs 3.75 per lakh applies to group A, B and other non-exclusive scrips; other groups differ. BSE publishes no client IPFT charge in these sources. Reconciliation with broker statements corrects both.",
+  "stt": {
+    "DELIVERY": {
+      "buy": {
+        "value": "0.1%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0.1%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "MTF": {
+      "buy": {
+        "value": "0.1%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0.1%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "INTRADAY": {
+      "buy": {
+        "value": "0%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0.025%",
+        "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/how-is-the-securities-transaction-tax-stt-calculated",
+        "verified_on": "2026-10-20"
+      }
+    }
+  },
+  "stamp_duty": {
+    "DELIVERY": {
+      "buy": {
+        "value": "0.015%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "MTF": {
+      "buy": {
+        "value": "0.015%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "INTRADAY": {
+      "buy": {
+        "value": "0.003%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      },
+      "sell": {
+        "value": "0%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      }
+    }
+  },
+  "exchange_txn": {
+    "value": "0.00375%",
+    "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/exchange-transaction-charges",
+    "verified_on": "2026-10-20"
+  },
+  "sebi": {
+    "value": "0.0001%",
+    "source_url": "https://zerodha.com/charges",
+    "verified_on": "2026-10-20"
+  },
+  "ipft": {
+    "value": "0%",
+    "source_url": "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/exchange-transaction-charges",
+    "verified_on": "2026-10-20"
+  },
+  "gst": {
+    "value": "18%",
+    "source_url": "https://dhan.co/pricing",
+    "verified_on": "2026-10-20"
+  }
+}
