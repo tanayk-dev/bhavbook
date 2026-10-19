@@ -51,7 +51,8 @@
 | S7-1 | Import pipeline: schema 0002, preview, commit | S4, S5b, S6 | default | **yes** |
 | S7-2 | Import pipeline: undo, coverage | S7-1 | default | **yes** |
 | S8 | Instrument resolution | S7 | default | — |
-| S9 | Reconstruction core | S8 | **strongest** | — |
+| S9-1 | Reconstruction core: buckets, FIFO, positions (core) | S8 | **strongest** | — |
+| S9-2 | Reconstruction core: recompute, golden tests (server) | S9-1 | **strongest** | — |
 | S10a | Adjustments and opening-lot suggestions | S9 | **strongest** | — |
 | S10b | Corporate actions | S9 | **strongest** | — |
 | S10c | Journal anchors | S10a | default | — |
@@ -74,7 +75,7 @@ W3  S4 ∥ S5a
 W4  S5b ∥ S6 ∥ S11
 W5  S7-1 → S7-2
 W6  S8
-W7  S9
+W7  S9-1 → S9-2
 W8  S10a ∥ S10b ∥ S12a ∥ S13a
 W9  S10c ∥ S12b ∥ S13b
 W10 S13c ∥ S15a
@@ -828,6 +829,7 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
 
 ## Changelog
 
+- 2026-10-19 r6: S7-1, S7-2 and S8 merged. S9 split under the ~800-line rule: S9-1 is the pure core (tasks 1-4 with E1-E5, E11's netting, E12 and the properties); S9-2 is the server recompute (task 5), the golden tests against the real Dhan and Zerodha fixtures (task 6; they need the adapters, which core can't import), instrument re-keying and the benchmark. Two S8 notes carry into S9-2: run instrument resolution inside recompute, and treat rows whose alias has an open `conflict` issue as needing review.
 - 2026-10-19 r5: S5b, S6 and S11 merged (wave 4). S7 split into S7-1 (schema 0002, preview, commit) and S7-2 (undo, coverage) under the ~800-line rule.
   - Undo can't re-parse `raw_row`s as r4 planned: statement rows from spreadsheets have no raw text, a Dhan key's occurrence index depends on the whole file, and Journal CSVs can't be rebuilt without their (never stored) metadata block. Schema 0002 adds `batch_row`: each batch's own canonical copy of every row it contained, deduplicated or not. Undo re-inserts shared keys from the earliest surviving batch's copy, so the final state equals importing the remaining batches in order.
   - From S11 on, steps also get the `ecc:code-reviewer` pass the convention requires; PR titles use `<step-id>: <title>`.

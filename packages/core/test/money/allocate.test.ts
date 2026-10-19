@@ -1,4 +1,5 @@
 import fc from 'fast-check';
+import { splitByWeight } from '../../src/index.js';
 import { describe, expect, it } from 'vitest';
 import { allocateLargestRemainder } from '../../src/money/index.js';
 import { InvalidArgumentError } from '../../src/errors.js';
@@ -69,5 +70,22 @@ describe('allocateLargestRemainder', () => {
         },
       ),
     );
+  });
+});
+
+describe('splitByWeight', () => {
+  it('returns each item with its part, summing to the total', () => {
+    const parts = splitByWeight(
+      1_001n,
+      [
+        { id: 'a', qty: 4n },
+        { id: 'b', qty: 6n },
+      ],
+      (item) => item.qty,
+    );
+    expect(parts.map(({ item, part }) => [item.id, part])).toEqual([
+      ['a', 400n],
+      ['b', 601n],
+    ]);
   });
 });
