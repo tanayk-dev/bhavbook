@@ -32,7 +32,7 @@ import {
 } from './migrations.js';
 import { APPLICATION_ID, hardenConnection, referenceFingerprint, schemaFingerprint } from './schema.js';
 
-export type BackupReason = 'manual' | 'pre-import' | 'pre-migration' | 'pre-restore';
+export type BackupReason = 'manual' | 'pre-import' | 'pre-undo' | 'pre-migration' | 'pre-restore';
 /** Routine auto-backups kept per vault; pre-migration backups are never rotated away. */
 export const AUTO_BACKUP_KEEP = 10;
 /** Largest backup we will read (far beyond v1 use; bounded so a hostile file can't exhaust memory). */
@@ -143,6 +143,9 @@ function ensureBackupDir(vaultPath: string): string {
   return dir;
 }
 
+/** `auto-<stamp>-<reason>[-<n>].bhav`; group 1 is the reason. */
+const AUTO_NAME = /^auto-\d{8}T\d{9}Z-([a-z]+(?:-[a-z]+)*?)(?:-\d+)?\.bhav$/;
+
 /** Writes `<vault>.backups/auto-<UTC>-<reason>.bhav` and rotates routine backups. */
 export function autoBackup(
   db: Database.Database,
@@ -153,11 +156,18 @@ export function autoBackup(
   const dir = ensureBackupDir(vaultPath);
   const target = uniqueBackupPath(dir, 'auto', nowOf(options), reason, 'bhav');
   createBackup(db, target, options);
-  const routine = readdirSync(dir)
-    .filter((name) => /^auto-.*\.bhav$/.test(name) && !/-pre-migration(-\d+)?\.bhav$/.test(name))
-    .sort();
-  for (const name of routine.slice(0, Math.max(0, routine.length - AUTO_BACKUP_KEEP))) {
-    rmSync(path.join(dir, name), { force: true });
+  // Rotation is per reason, so frequent imports can't push out other restore points; pre-migration backups are
+  // kept forever (they are the only way back from a schema change).
+  const byReason = new Map<string, string[]>();
+  for (const name of readdirSync(dir).sort()) {
+    const reason = AUTO_NAME.exec(name)?.[1];
+    if (reason === undefined || reason === 'pre-migration') continue;
+    byReason.set(reason, [...(byReason.get(reason) ?? []), name]);
+  }
+  for (const names of byReason.values()) {
+    for (const name of names.slice(0, Math.max(0, names.length - AUTO_BACKUP_KEEP))) {
+      rmSync(path.join(dir, name), { force: true });
+    }
   }
   return target;
 }

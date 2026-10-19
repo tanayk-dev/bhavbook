@@ -19,7 +19,9 @@ function tablesHash(db: Database.Database): string {
   for (const table of tables) {
     hash.update(table);
     const rows = db.prepare(`SELECT * FROM "${table}" ORDER BY 1`).all();
-    hash.update(JSON.stringify(rows, (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value)));
+    hash.update(
+      JSON.stringify(rows, (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value)),
+    );
   }
   return hash.digest('hex');
 }
@@ -76,7 +78,9 @@ describe('undoImport', () => {
       await importFiles(service, ZERODHA, [csvWindow('zerodha', 'tradebook', 50, 121)]);
       const [first, second, third] = batchIds(db);
       const shared = db
-        .prepare('SELECT dedup_key FROM batch_row WHERE batch_id = ? AND target = ? ORDER BY id LIMIT 1 OFFSET 25')
+        .prepare(
+          'SELECT dedup_key FROM batch_row WHERE batch_id = ? AND target = ? ORDER BY id LIMIT 1 OFFSET 25',
+        )
         .pluck()
         .get(third ?? '', 'trade') as string;
       service.undoImport(first ?? '');
@@ -95,7 +99,9 @@ describe('undoImport', () => {
       const [first, second] = batchIds(db);
       service.undoImport(first ?? '');
       expect(count(db, 'statement_row', `batch_id = '${second ?? ''}'`)).toBe(80);
-      expect(db.prepare('SELECT data_json FROM statement_row ORDER BY dedup_key').pluck().all()).toEqual(data);
+      expect(db.prepare('SELECT data_json FROM statement_row ORDER BY dedup_key').pluck().all()).toEqual(
+        data,
+      );
     });
   });
 
@@ -116,7 +122,10 @@ describe('undoImport', () => {
       async ({ db, vaultPath, service }) => {
         await importFiles(service, ZERODHA, [fixtureFile('zerodha', 'tradebook')]);
         const [batch] = batchIds(db);
-        expect(service.undoImport(batch ?? '')).toEqual({ accountId: ZERODHA, removed: { rows: 121, statements: 0 } });
+        expect(service.undoImport(batch ?? '')).toEqual({
+          accountId: ZERODHA,
+          removed: { rows: 121, statements: 0 },
+        });
         expect(readdirSync(backupDir(vaultPath)).filter((name) => name.includes('pre-undo'))).toHaveLength(1);
         expect(changed).toEqual([ZERODHA, ZERODHA]);
         expect(() => service.undoImport(batch ?? '')).toThrow(ImportError);
@@ -142,7 +151,10 @@ describe('import/undo property (PRD §3.2 invariants 3 and 4)', () => {
 
   it('after any imports and undos, the rows equal importing the surviving files in order', async () => {
     const step = fc.oneof(
-      fc.record({ op: fc.constant('import' as const), index: fc.integer({ min: 0, max: WINDOWS.length - 1 }) }),
+      fc.record({
+        op: fc.constant('import' as const),
+        index: fc.integer({ min: 0, max: WINDOWS.length - 1 }),
+      }),
       fc.record({ op: fc.constant('undo' as const), pick: fc.nat() }),
     );
     await fc.assert(

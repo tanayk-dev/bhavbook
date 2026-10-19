@@ -11,6 +11,25 @@ export const MAX_IMPORT_BYTES = DEFAULT_LIMITS.maxBytes;
 const PROBE_TEXT_CHARS = 64 * 1024;
 const PROBE_SHEET_ROWS = 20;
 
+/**
+ * Text files are parsed on the main thread (only spreadsheets need the isolated worker), so their shape is bounded
+ * first: the same row limit as spreadsheets, and no line longer than a CSV row could reasonably be.
+ */
+export const MAX_TEXT_LINES = DEFAULT_LIMITS.maxRows;
+export const MAX_LINE_CHARS = 64 * 1024;
+
+function withinTextBounds(text: string): boolean {
+  let lines = 0;
+  for (let start = 0; start < text.length; lines += 1) {
+    if (lines >= MAX_TEXT_LINES) return false;
+    const end = text.indexOf('\n', start);
+    const stop = end === -1 ? text.length : end;
+    if (stop - start > MAX_LINE_CHARS) return false;
+    start = stop + 1;
+  }
+  return true;
+}
+
 export type ReadOutcome =
   | { readonly ok: true; readonly input: AdapterInput; readonly probe: FileProbe; readonly sha256: string }
   | { readonly ok: false; readonly reason: 'too_large' | 'malformed' };
@@ -43,6 +62,7 @@ export async function readImportFile(bytes: Buffer): Promise<ReadOutcome> {
     }
   }
   const text = decodeText(bytes);
+  if (!withinTextBounds(text)) return { ok: false, reason: 'too_large' };
   return {
     ok: true,
     input: { type: 'text', text },

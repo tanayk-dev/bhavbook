@@ -7,6 +7,7 @@ import type Database from 'better-sqlite3';
 import { toJson } from '../http/json.js';
 import { encodeStatementPayload, encodeTradePayload } from './payload.js';
 import type { ParsedFile, PreviewCounts } from './preview.js';
+import { INSERT_STATEMENT_SQL, INSERT_TRADE_SQL, tradeParams } from './rows.js';
 
 export interface CommittedBatch {
   readonly batchId: string;
@@ -37,20 +38,8 @@ function prepare(db: Database.Database): Statements {
     copy: db.prepare(
       'INSERT INTO batch_row (batch_id, target, kind, dedup_key, payload_json) VALUES (?, ?, ?, ?, ?)',
     ),
-    trade: db.prepare(
-      `INSERT INTO trade_row (account_id, batch_id, raw_row_id, dedup_key, granularity, source, external_order_id,
-         executed_at_utc, trade_date_ist, side, quantity, price_micro, trade_value_micro, value_authority, exchange,
-         isin, broker_symbol, broker_name, product_declared, flags_json)
-       VALUES (@accountId, @batchId, @rawRowId, @dedupKey, @granularity, @source, @externalOrderId, @executedAtUtc,
-         @tradeDateIst, @side, @quantity, @priceMicro, @tradeValueMicro, @valueAuthority, @exchange, @isin,
-         @brokerSymbol, @brokerName, @productDeclared, @flags)
-       ON CONFLICT (account_id, dedup_key) DO NOTHING`,
-    ),
-    statement: db.prepare(
-      `INSERT INTO statement_row (account_id, batch_id, kind, dedup_key, key_json, data_json)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT (account_id, kind, dedup_key) DO NOTHING`,
-    ),
+    trade: db.prepare(INSERT_TRADE_SQL),
+    statement: db.prepare(INSERT_STATEMENT_SQL),
   };
 }
 
@@ -61,31 +50,9 @@ function insertTrade(
   batchId: string,
   row: CanonicalRow,
 ): boolean {
-  const rawRowId = sql.raw.get(batchId, row.raw.line, row.raw.text) as bigint;
+  const rawRowId: unknown = sql.raw.get(batchId, row.raw.line, row.raw.text);
   sql.copy.run(batchId, 'trade', '', row.dedupKey, encodeTradePayload(row));
-  const params = {
-    accountId,
-    batchId,
-    rawRowId,
-    dedupKey: row.dedupKey,
-    granularity: row.granularity,
-    source: row.source,
-    externalOrderId: row.externalOrderId,
-    executedAtUtc: row.executedAtUtc,
-    tradeDateIst: row.tradeDateIst,
-    side: row.side,
-    quantity: row.quantity,
-    priceMicro: row.priceMicro,
-    tradeValueMicro: row.tradeValueMicro,
-    valueAuthority: row.valueAuthority,
-    exchange: row.exchange,
-    isin: row.isin,
-    brokerSymbol: row.brokerSymbol,
-    brokerName: row.brokerName,
-    productDeclared: row.productDeclared,
-    flags: JSON.stringify(row.flags),
-  };
-  return sql.trade.run(params).changes > 0;
+  return sql.trade.run(tradeParams(accountId, batchId, rawRowId, row)).changes > 0;
 }
 
 function insertStatement(
