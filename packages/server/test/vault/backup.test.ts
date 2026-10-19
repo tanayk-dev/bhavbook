@@ -87,7 +87,7 @@ describe('createBackup and restoreBackup', () => {
     withTempDir((dir) => {
       const { vaultPath, db } = seededVault(dir);
       const backupPath = path.join(dir, 'snap.bhav');
-      const created = createBackup(db, backupPath, APP);
+      const created = createBackup(db, backupPath, { appVersion: APP });
       expect(created.sha256).toMatch(/^[0-9a-f]{64}$/);
       db.prepare('DELETE FROM trade_row').run();
       db.close();
@@ -109,7 +109,7 @@ describe('createBackup and restoreBackup', () => {
     withTempDir((dir) => {
       const { vaultPath, db } = seededVault(dir);
       const backupPath = path.join(dir, 'snap.bhav');
-      createBackup(db, backupPath, APP);
+      createBackup(db, backupPath, { appVersion: APP });
       db.close();
       const bytes = readFileSync(backupPath);
       flipByte(bytes, bytes.length - 10);
@@ -175,7 +175,7 @@ describe('autoBackup', () => {
       const names = readdirSync(`${vaultPath}.backups`);
       expect(names.filter((name) => name.includes('pre-import'))).toHaveLength(10);
       expect(names.filter((name) => name.includes('pre-migration'))).toHaveLength(2);
-      expect(names.every((name) => /^auto-\d{8}T\d{6}Z-[a-z-]+\.bhav$/.test(name))).toBe(true);
+      expect(names.every((name) => /^auto-\d{8}T\d{9}Z-[a-z-]+(-\d+)?\.bhav$/.test(name))).toBe(true);
     });
   });
 });
