@@ -138,6 +138,7 @@ export const PERSONAL_PROPERTIES = [
 ] as const;
 const TEXT_EXTENSIONS = new Set(['.csv', '.txt', '.md', '.json', '.tsv', '.gitkeep', '']);
 const SHEET_EXTENSIONS = new Set(['.xls', '.xlsx']);
+const BINARY_EXTENSIONS = new Set(['.bhav', '.db', '.sqlite']);
 
 /** Masks a value: short values are hidden entirely, longer ones show only their first 2 characters. */
 export function mask(value: string): string {
@@ -255,14 +256,19 @@ export function scanContainer(bytes: Buffer, location: string, denyTerms: readon
     const where = `${location}#${container.FullPaths[index] ?? entry.name}`;
     const isXml = /\.(xml|rels|vml)$/i.test(entry.name);
     if (!isXml && /\.(png|jpe?g|gif|emf|wmf|bin)$/i.test(entry.name)) return [];
-    // Binary streams: latin1, plus UTF-16LE at both byte alignments (records can start at odd offsets).
-    // Unpaired surrogates from decoding binary as UTF-16 are dropped: personal data is never in them, and V8's
-    // case-insensitive regex engine can crash on long runs of them.
-    const decodings = isXml
-      ? [data.toString('utf8')]
-      : [data.toString('latin1'), utf16Text(data), utf16Text(data.subarray(1))];
-    return decodings.flatMap((text) => scanText(text, where, denyTerms, { raw: true }));
+    return isXml ? scanText(data.toString('utf8'), where, denyTerms, { raw: true }) : scanBinary(data, where, denyTerms);
   });
+}
+
+/**
+ * Raw scan of binary bytes: latin1, plus UTF-16LE at both byte alignments (records can start at odd offsets).
+ * Unpaired surrogates from decoding binary as UTF-16 are dropped: personal data is never in them, and V8's
+ * case-insensitive regex engine can crash on long runs of them.
+ */
+export function scanBinary(data: Buffer, location: string, denyTerms: readonly string[]): Finding[] {
+  return [data.toString('latin1'), utf16Text(data), utf16Text(data.subarray(1))].flatMap((text) =>
+    scanText(text, location, denyTerms, { raw: true }),
+  );
 }
 
 function listFiles(target: string): string[] {
@@ -291,6 +297,10 @@ export function scanPaths(targets: readonly string[], denyTerms: readonly string
       const bytes = readFileSync(file);
       return [...nameFindings, ...scanWorkbook(XLSX.read(bytes), file, denyTerms), ...scanContainer(bytes, file, denyTerms)];
     }
+    if (BINARY_EXTENSIONS.has(extension)) {
+      // Vault backups and databases: no structure to walk, so scan every byte (also catches leaked rows).
+      return [...nameFindings, ...scanBinary(readFileSync(file), file, denyTerms)];
+    }
     if (TEXT_EXTENSIONS.has(extension)) {
       const bytes = readFileSync(file);
       const texts = [bytes.toString('latin1'), bytes.toString('utf8')];
@@ -306,6 +316,7 @@ export function loadDenylist(): string[] {
   const file = process.env.BHAVBOOK_PII_DENYLIST ?? path.join(homedir(), '.bhavbook-pii-denylist');
   if (!existsSync(file)) return [];
   return readFileSync(file, 'utf8')
+    .replace(/^﻿/, '') // Windows PowerShell 5 writes UTF-8 with a BOM
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith('#'));

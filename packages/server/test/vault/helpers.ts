@@ -24,7 +24,9 @@ export function migratedMemoryDb(): Database.Database {
 
 /** Inserts a profile → account → import batch chain and returns their ids. */
 export function seedAccount(db: Database.Database): { accountId: string; batchId: string } {
-  db.prepare("INSERT INTO pan_entity (id, label, created_at) VALUES ('pan1', 'Default', '2026-10-19T00:00:00Z')").run();
+  db.prepare(
+    "INSERT INTO pan_entity (id, label, created_at) VALUES ('pan1', 'Default', '2026-10-19T00:00:00Z')",
+  ).run();
   db.prepare(
     "INSERT INTO profile (id, pan_entity_id, name, created_at) VALUES ('prof1', 'pan1', 'Swing', '2026-10-19T00:00:00Z')",
   ).run();

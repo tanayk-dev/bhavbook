@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import {
   autoBackup,
@@ -16,7 +16,17 @@ import {
 import { insertTrade, seedAccount, withTempDir } from './helpers.js';
 
 const APP = '0.0.0-test';
-const FIXTURE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'fixtures', 'vault-v0001.bhav');
+
+function flipByte(buffer: Buffer, index: number): void {
+  buffer.writeUInt8(buffer.readUInt8(index) ^ 0xff, index);
+}
+const FIXTURE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'fixtures',
+  'vault-v0001.bhav',
+);
 
 function seededVault(dir: string): { vaultPath: string; db: Database.Database } {
   const vaultPath = path.join(dir, 'vault.db');
@@ -39,7 +49,7 @@ describe('.bhav container', () => {
 
   it('rejects a corrupted database (hash mismatch)', () => {
     const file = encodeBhav(db, meta);
-    file[file.length - 1] ^= 0xff;
+    flipByte(file, file.length - 1);
     expect(() => decodeBhav(file)).toThrow(/checksum/);
   });
 
@@ -50,6 +60,18 @@ describe('.bhav container', () => {
     ['too short', () => Buffer.from('BHAV')],
   ])('rejects a %s file', (_label, mutate) => {
     expect(() => decodeBhav(mutate(encodeBhav(db, meta)))).toThrow(BackupError);
+  });
+
+  it('rejects a manifest that is not JSON or misses fields', () => {
+    const withManifest = (json: string): Buffer => {
+      const body = Buffer.from(json, 'utf8');
+      const length = Buffer.alloc(4);
+      length.writeUInt32LE(body.length, 0);
+      return Buffer.concat([Buffer.from('BHAV\u0001', 'latin1'), length, body, db]);
+    };
+    expect(() => decodeBhav(withManifest('{not json'))).toThrow(/not valid JSON/);
+    expect(() => decodeBhav(withManifest('{"format":1}'))).toThrow(/missing required fields/);
+    expect(() => decodeBhav(withManifest('null'))).toThrow(/missing required fields/);
   });
 
   it('rejects an oversized manifest without reading it', () => {
@@ -73,7 +95,9 @@ describe('createBackup and restoreBackup', () => {
       const restored = restoreBackup(backupPath, vaultPath, { appVersion: APP });
       expect(restored.schemaVersion).toBe(latestVersion());
       const reopened = openVault(vaultPath, { appVersion: APP });
-      const row = reopened.prepare('SELECT trade_value_micro FROM trade_row').get() as { trade_value_micro: bigint };
+      const row = reopened.prepare('SELECT trade_value_micro FROM trade_row').get() as {
+        trade_value_micro: bigint;
+      };
       expect(row.trade_value_micro).toBe(9_007_199_254_740_993_123n);
       reopened.close();
       const backups = readdirSync(`${vaultPath}.backups`);
@@ -88,12 +112,28 @@ describe('createBackup and restoreBackup', () => {
       createBackup(db, backupPath, APP);
       db.close();
       const bytes = readFileSync(backupPath);
-      bytes[bytes.length - 10] ^= 0xff;
+      flipByte(bytes, bytes.length - 10);
       writeFileSync(backupPath, bytes);
       const before = readFileSync(vaultPath);
       expect(() => restoreBackup(backupPath, vaultPath, { appVersion: APP })).toThrow(BackupError);
       expect(readFileSync(vaultPath).equals(before)).toBe(true);
       expect(readdirSync(dir).filter((name) => name.includes('.restore-'))).toEqual([]);
+    });
+  });
+
+  it('refuses a well-formed backup whose payload is not a SQLite database', () => {
+    withTempDir((dir) => {
+      const file = path.join(dir, 'fake.bhav');
+      writeFileSync(
+        file,
+        encodeBhav(Buffer.from('definitely not sqlite'), {
+          schemaVersion: 1,
+          appVersion: APP,
+          createdAt: 'x',
+        }),
+      );
+      expect(() => restoreBackup(file, path.join(dir, 'vault.db'), { appVersion: APP })).toThrow(/SQLite/);
+      expect(existsSync(path.join(dir, 'vault.db'))).toBe(false);
     });
   });
 
@@ -103,7 +143,11 @@ describe('createBackup and restoreBackup', () => {
       const raw = path.join(dir, 'raw.db');
       db.prepare('VACUUM INTO ?').run(raw);
       db.close();
-      const future = encodeBhav(readFileSync(raw), { schemaVersion: 999, appVersion: '9.9.9', createdAt: 'x' });
+      const future = encodeBhav(readFileSync(raw), {
+        schemaVersion: 999,
+        appVersion: '9.9.9',
+        createdAt: 'x',
+      });
       const file = path.join(dir, 'future.bhav');
       writeFileSync(file, future);
       expect(() => restoreBackup(file, path.join(dir, 'other.db'), { appVersion: APP })).toThrow(/newer/);

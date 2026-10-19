@@ -24,7 +24,10 @@ describe('0001_init schema', () => {
   it('types every *_micro column as INTEGER', () => {
     const db = migratedMemoryDb();
     for (const { name } of tables()) {
-      const columns = db.prepare(`SELECT name, type FROM pragma_table_info(?)`).all(name) as { name: string; type: string }[];
+      const columns = db.prepare(`SELECT name, type FROM pragma_table_info(?)`).all(name) as {
+        name: string;
+        type: string;
+      }[];
       for (const column of columns.filter((c) => c.name.endsWith('_micro'))) {
         expect(column.type, `${name}.${column.name}`).toBe('INTEGER');
       }
@@ -33,7 +36,8 @@ describe('0001_init schema', () => {
 
   it('has no column that could hold a personal identifier or an original file name (ADR-0019)', () => {
     const db = migratedMemoryDb();
-    const forbidden = /^(client_id|client_code|ucc|pan|pan_number|email|mobile|phone|full_name|person_name|file_name|filename|original_name|path)$/;
+    const forbidden =
+      /^(client_id|client_code|ucc|pan|pan_number|email|mobile|phone|full_name|person_name|file_name|filename|original_name|path)$/;
     for (const { name } of tables()) {
       const columns = db.prepare(`SELECT name FROM pragma_table_info(?)`).all(name) as { name: string }[];
       for (const column of columns) expect(column.name, `${name}.${column.name}`).not.toMatch(forbidden);

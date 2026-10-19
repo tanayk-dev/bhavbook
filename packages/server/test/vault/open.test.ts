@@ -26,7 +26,11 @@ describe('openVault', () => {
       openVault(vaultPath, { appVersion: APP, migrations: [first] }).close();
       expect(() => readdirSync(`${vaultPath}.backups`)).toThrow();
 
-      const next = { version: first.version + 1, name: 'extra', sql: 'CREATE TABLE extra (x INTEGER) STRICT;' };
+      const next = {
+        version: first.version + 1,
+        name: 'extra',
+        sql: 'CREATE TABLE extra (x INTEGER) STRICT;',
+      };
       const db = openVault(vaultPath, { appVersion: APP, migrations: [first, next] });
       expect(currentVersion(db)).toBe(next.version);
       db.close();

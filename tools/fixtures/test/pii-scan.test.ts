@@ -182,6 +182,15 @@ describe('scanPaths', () => {
     });
   });
 
+  it('scans vault backups and databases byte by byte', () => {
+    withTempDir((root) => {
+      writeFileSync(path.join(root, 'v.bhav'), Buffer.concat([Buffer.from('BHAV\u0001', 'latin1'), Buffer.from('mail real.person@gmail.com', 'utf16le')]));
+      writeFileSync(path.join(root, 'clean.db'), Buffer.from('SQLite format 3\u0000 nothing here'));
+      const findings = scanPaths([root], ['Jane Q Trader']);
+      expect(findings.map((finding) => finding.kind)).toEqual(['email']);
+    });
+  });
+
   it('decodes UTF-16 text files (BOM)', () => {
     withTempDir((root) => {
       const text = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Email,real.person@gmail.com', 'utf16le')]);
@@ -205,7 +214,8 @@ describe('loadDenylist', () => {
       const previous = process.env.BHAVBOOK_PII_DENYLIST;
       try {
         const file = path.join(root, 'deny');
-        writeFileSync(file, '# my identifiers\r\nJane Q Trader\r\n\r\n  AB1234  \n');
+        // Leading UTF-8 BOM, as Windows PowerShell 5 writes it.
+        writeFileSync(file, '\uFEFF# my identifiers\r\nJane Q Trader\r\n\r\n  AB1234  \n');
         process.env.BHAVBOOK_PII_DENYLIST = file;
         expect(loadDenylist()).toEqual(['Jane Q Trader', 'AB1234']);
         process.env.BHAVBOOK_PII_DENYLIST = path.join(root, 'absent');

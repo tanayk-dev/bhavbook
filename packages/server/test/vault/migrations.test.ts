@@ -69,7 +69,10 @@ describe('migrate', () => {
 
   it('rolls back a failing migration completely', () => {
     const db = memoryDb();
-    const broken = [...migrations, { version: 3, name: 'broken', sql: 'CREATE TABLE c (z INTEGER) STRICT; NOT SQL;' }];
+    const broken = [
+      ...migrations,
+      { version: 3, name: 'broken', sql: 'CREATE TABLE c (z INTEGER) STRICT; NOT SQL;' },
+    ];
     expect(() => migrate(db, broken)).toThrow();
     expect(currentVersion(db)).toBe(2);
     const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'c'").all();
