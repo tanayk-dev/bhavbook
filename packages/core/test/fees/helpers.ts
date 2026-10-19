@@ -20,7 +20,12 @@ export function chargeable(spec: FillSpec & { readonly exchange?: 'NSE' | 'BSE' 
 export function charge(
   broker: FeeBroker,
   fills: readonly ChargeableFill[],
-  overrides: readonly { accountId: string; instrumentKey: string; tradeDateIst: string; bucket: Bucket }[] = [],
+  overrides: readonly {
+    accountId: string;
+    instrumentKey: string;
+    tradeDateIst: string;
+    bucket: Bucket;
+  }[] = [],
 ) {
   const allocations = allocateBuckets(fills, overrides);
   return { allocations, ...computeCharges({ broker, fills, allocations, rules: bundledFeeRules() }) };
@@ -29,6 +34,10 @@ export function charge(
 /** Total of one component (all allocations, or those of one fill). */
 export function total(charges: readonly FillCharge[], component: ChargeComponent, fillId?: string): bigint {
   return charges
-    .filter((entry) => entry.component === component && (fillId === undefined || entry.allocationKey.startsWith(`${fillId}#`)))
+    .filter(
+      (entry) =>
+        entry.component === component &&
+        (fillId === undefined || entry.allocationKey.startsWith(`${fillId}#`)),
+    )
     .reduce((sum, entry) => sum + entry.amountMicro, 0n);
 }

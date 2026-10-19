@@ -5,10 +5,20 @@ import { bundledFeeRules, computeCharges } from '../../src/index.js';
 import { RUPEE } from '../fifo/helpers.js';
 import { charge, chargeable, PAISA, total } from './helpers.js';
 
-const buy = (qty: number, price: number | string, at: string, instrument = 'A', product: 'DELIVERY' | 'MTF' = 'DELIVERY') =>
-  chargeable({ side: 'BUY', qty, price, at, instrument, product });
-const sell = (qty: number, price: number | string, at: string, instrument = 'A', product: 'DELIVERY' | 'MTF' = 'DELIVERY') =>
-  chargeable({ side: 'SELL', qty, price, at, instrument, product });
+const buy = (
+  qty: number,
+  price: number | string,
+  at: string,
+  instrument = 'A',
+  product: 'DELIVERY' | 'MTF' = 'DELIVERY',
+) => chargeable({ side: 'BUY', qty, price, at, instrument, product });
+const sell = (
+  qty: number,
+  price: number | string,
+  at: string,
+  instrument = 'A',
+  product: 'DELIVERY' | 'MTF' = 'DELIVERY',
+) => chargeable({ side: 'SELL', qty, price, at, instrument, product });
 
 describe('contract-note statutory charges (Dhan, 22 Apr 2024: three delivery buys)', () => {
   const fills = [
@@ -17,7 +27,9 @@ describe('contract-note statutory charges (Dhan, 22 Apr 2024: three delivery buy
     buy(5, '1653.00', '2024-04-22 10:02', 'Sobha'),
   ];
   // Electrosteel's value is pinned to the statement's 15,257.50.
-  const pinned = fills.map((entry, index) => (index === 0 ? { ...entry, valueMicro: 15_257_500_000n } : entry));
+  const pinned = fills.map((entry, index) =>
+    index === 0 ? { ...entry, valueMicro: 15_257_500_000n } : entry,
+  );
   const { charges } = charge('dhan', pinned);
 
   it('STT: one rupee-rounded total per contract note (Rs 30.8701 -> Rs 31), split across the fills', () => {
@@ -50,7 +62,10 @@ describe('rule versions across 2024-10-01', () => {
   it('the same trade pays 0.00322% before and 0.00297% after', () => {
     const before = charge('dhan', [buy(1, 100_000, '2024-09-30 10:00')]).charges;
     const after = charge('dhan', [buy(1, 100_000, '2024-10-01 10:00')]).charges;
-    expect([total(before, 'exchange_txn'), total(after, 'exchange_txn')]).toEqual([322n * PAISA, 297n * PAISA]);
+    expect([total(before, 'exchange_txn'), total(after, 'exchange_txn')]).toEqual([
+      322n * PAISA,
+      297n * PAISA,
+    ]);
   });
 });
 
@@ -65,7 +80,10 @@ describe('intraday (same-day netting) and brokerage', () => {
   });
 
   it('E12: an MTF buy sold the same day is charged as intraday (no delivery STT on the buy)', () => {
-    const fills = [buy(100, 500, '2024-11-05 10:00', 'A', 'MTF'), sell(100, 510, '2024-11-05 14:00', 'A', 'MTF')];
+    const fills = [
+      buy(100, 500, '2024-11-05 10:00', 'A', 'MTF'),
+      sell(100, 510, '2024-11-05 14:00', 'A', 'MTF'),
+    ];
     const { charges } = charge('dhan', fills);
     expect(total(charges, 'stt')).toBe(13n * RUPEE); // 51,000 x 0.025% = 12.75 -> 13
     expect(total(charges, 'stamp_duty')).toBe(2n * RUPEE); // 50,000 x 0.003% = 1.50 -> 2
@@ -78,7 +96,9 @@ describe('intraday (same-day netting) and brokerage', () => {
 
   it('Zerodha MTF brokerage: 0.3% or Rs 20 per order; delivery stays free', () => {
     const mtf = [buy(10, 500, '2025-11-05 10:00', 'A', 'MTF')];
-    const override = [{ accountId: 'acc', instrumentKey: 'A', tradeDateIst: '2025-11-05', bucket: 'MTF' as const }];
+    const override = [
+      { accountId: 'acc', instrumentKey: 'A', tradeDateIst: '2025-11-05', bucket: 'MTF' as const },
+    ];
     expect(total(charge('zerodha', mtf, override).charges, 'brokerage')).toBe(15n * RUPEE); // 5000 x 0.3%
     expect(total(charge('zerodha', [buy(100, 500, '2025-11-05 10:00')]).charges, 'brokerage')).toBe(0n);
     const big = [buy(100, 500, '2025-11-05 10:00', 'A', 'MTF')];
@@ -88,7 +108,11 @@ describe('intraday (same-day netting) and brokerage', () => {
   it('fills of one Zerodha order share one brokerage cap', () => {
     const order = (qty: number, at: string) =>
       chargeable({ side: 'BUY', qty, price: 1000, at, instrument: 'A', order: 'o1', granularity: 'fill' });
-    const fills = [order(50, '2025-11-05 10:00'), order(50, '2025-11-05 10:00:01'), sell(100, 1000, '2025-11-05 14:00')];
+    const fills = [
+      order(50, '2025-11-05 10:00'),
+      order(50, '2025-11-05 10:00:01'),
+      sell(100, 1000, '2025-11-05 14:00'),
+    ];
     // Buy order 1,00,000 x 0.03% = 30 -> capped at 20; the sell order also 20.
     expect(total(charge('zerodha', fills).charges, 'brokerage')).toBe(40n * RUPEE);
   });
@@ -96,7 +120,11 @@ describe('intraday (same-day netting) and brokerage', () => {
 
 describe('DP charges per (instrument, delivery sell day), inclusive of their GST', () => {
   it('Dhan: Rs 12.50 + 18% GST = Rs 14.75 once per scrip per day, whatever the number of sells', () => {
-    const fills = [sell(5, 100, '2024-11-05 10:00'), sell(5, 100, '2024-11-05 11:00'), sell(1, 100, '2024-11-05 11:00', 'B')];
+    const fills = [
+      sell(5, 100, '2024-11-05 10:00'),
+      sell(5, 100, '2024-11-05 11:00'),
+      sell(1, 100, '2024-11-05 11:00', 'B'),
+    ];
     expect(total(charge('dhan', fills).charges, 'dp')).toBe(2n * 1475n * PAISA);
   });
 
@@ -114,7 +142,14 @@ describe('DP charges per (instrument, delivery sell day), inclusive of their GST
 describe('coverage of the rules', () => {
   it('fills with no rule version in force are reported unrated and get no charges', () => {
     const early = buy(1, 100, '2024-03-28 10:00');
-    const bse = chargeable({ side: 'BUY', qty: 1, price: 100, at: '2024-09-02 10:00', instrument: 'B', exchange: 'BSE' });
+    const bse = chargeable({
+      side: 'BUY',
+      qty: 1,
+      price: 100,
+      at: '2024-09-02 10:00',
+      instrument: 'B',
+      exchange: 'BSE',
+    });
     const { charges, unrated } = charge('dhan', [early, bse]);
     expect(charges).toEqual([]);
     expect(unrated).toEqual([early.id, bse.id]);
@@ -122,11 +157,15 @@ describe('coverage of the rules', () => {
 
   it('records the rule versions behind every charge', () => {
     const { charges } = charge('zerodha', [sell(1, 100, '2025-11-05 10:00')]);
-    expect(new Set(charges.map((entry) => entry.ruleVersion))).toEqual(new Set(['nse/2024-10-01+zerodha/2024-06-01']));
+    expect(new Set(charges.map((entry) => entry.ruleVersion))).toEqual(
+      new Set(['nse/2024-10-01+zerodha/2024-06-01']),
+    );
   });
 
   it('BSE trades use the BSE version', () => {
-    const fills = [chargeable({ side: 'BUY', qty: 1, price: 100_000, at: '2025-10-01 10:00', exchange: 'BSE' })];
+    const fills = [
+      chargeable({ side: 'BUY', qty: 1, price: 100_000, at: '2025-10-01 10:00', exchange: 'BSE' }),
+    ];
     expect(total(charge('zerodha', fills).charges, 'exchange_txn')).toBe(375n * PAISA);
   });
 });
@@ -171,6 +210,9 @@ describe('allocation', () => {
     const fills = [buy(1, 100, '2025-11-05 10:00')];
     const { allocations } = charge('dhan', fills);
     const synthetic = { ...allocations[0], key: 'adj:x#DELIVERY', fillId: 'adj:x', adjustmentId: 'x' };
-    expect(computeCharges({ broker: 'dhan', fills, allocations: [synthetic as never], rules: bundledFeeRules() }).charges).toEqual([]);
+    expect(
+      computeCharges({ broker: 'dhan', fills, allocations: [synthetic as never], rules: bundledFeeRules() })
+        .charges,
+    ).toEqual([]);
   });
 });

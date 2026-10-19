@@ -12,7 +12,11 @@ describe('bundled rule files', () => {
       'nse/2024-10-01',
       'nse/2026-03-01',
     ]);
-    expect(rules.broker.map((rule) => rule.id)).toEqual(['dhan/2024-04-01', 'zerodha/2024-04-01', 'zerodha/2024-06-01']);
+    expect(rules.broker.map((rule) => rule.id)).toEqual([
+      'dhan/2024-04-01',
+      'zerodha/2024-04-01',
+      'zerodha/2024-06-01',
+    ]);
     const text = JSON.stringify(nse20241001);
     expect(text.match(/"value"/g)?.length).toBe(text.match(/"source_url":"https:\/\//g)?.length);
   });
@@ -44,8 +48,14 @@ describe('selectFeeRules', () => {
 describe('parseFeeRules', () => {
   const good = structuredClone(nse20241001) as Record<string, unknown>;
   it.each<[string, (file: Record<string, unknown>) => unknown]>([
-    ['a rate without a source', (file) => ({ ...file, sebi: { value: '0.0001%', verified_on: '2026-10-20' } })],
-    ['a rate that is not a percentage', (file) => ({ ...file, sebi: { ...(file.sebi as object), value: '0.0001' } })],
+    [
+      'a rate without a source',
+      (file) => ({ ...file, sebi: { value: '0.0001%', verified_on: '2026-10-20' } }),
+    ],
+    [
+      'a rate that is not a percentage',
+      (file) => ({ ...file, sebi: { ...(file.sebi as object), value: '0.0001' } }),
+    ],
     ['an http source', (file) => ({ ...file, sebi: { ...(file.sebi as object), source_url: 'http://x' } })],
     ['a bad effective date', (file) => ({ ...file, effective_from: '2024-13-01' })],
     ['an unknown field', (file) => ({ ...file, extra: 1 })],
