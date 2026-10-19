@@ -1,15 +1,15 @@
 // What a corporate action would do, before it is stored (plan S10b task 2): the affected open lots before and
-// after, and any fraction of a share left over.
+// after, and any fraction of a share left over. Editing a stored action previews the new version in its place.
 import { baseAllocations } from '../adjustments/apply.js';
 import type { Adjustment } from '../adjustments/types.js';
 import type { Bucket, FillAllocation, TradeFill } from '../fifo/types.js';
 import {
   applyCorporateAction,
   checkCorporateAction,
+  compareCorporateActions,
   openAt,
   openValueOf,
   orderCorporateActions,
-  orderKey,
 } from './apply.js';
 import type { CorporateAction, Fraction } from './types.js';
 
@@ -39,7 +39,7 @@ function lotOf(allocation: FillAllocation, quantity: bigint, costMicro: bigint):
   };
 }
 
-/** Applies the actions that come before `action` (ex-date order), then shows what `action` changes. */
+/** Applies the stored actions that come before `action` (ex-date order), then shows what `action` changes. */
 export function previewCorporateAction(
   fills: readonly TradeFill[],
   adjustments: readonly Adjustment[],
@@ -48,18 +48,17 @@ export function previewCorporateAction(
 ): CorporateActionPreview {
   const target = checkCorporateAction(action);
   let allocations = baseAllocations(fills, adjustments);
-  for (const checked of orderCorporateActions(existing)) {
-    if (orderKey(checked.action) < orderKey(action))
+  for (const checked of orderCorporateActions(existing.filter((other) => other.id !== action.id))) {
+    if (compareCorporateActions(checked, target) < 0) {
       allocations = applyCorporateAction(allocations, checked).allocations;
+    }
   }
   const before = openAt(allocations, target).map((member) =>
     lotOf(member.allocation, member.open, openValueOf(member)),
   );
   const result = applyCorporateAction(allocations, target);
-  const after = result.allocations
-    .filter(
-      (allocation) => allocation.corporateActionId === action.id || allocation.key.endsWith(`~${action.id}`),
-    )
-    .map((allocation) => lotOf(allocation, allocation.quantity, allocation.valueMicro));
+  const after = result.created.map((allocation) =>
+    lotOf(allocation, allocation.quantity, allocation.valueMicro),
+  );
   return { before, after, fractions: result.fractions };
 }

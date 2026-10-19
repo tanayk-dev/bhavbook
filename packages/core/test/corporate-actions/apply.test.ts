@@ -101,6 +101,7 @@ describe('SPLIT (E8)', () => {
         bucket: 'DELIVERY',
         numerator: 2n,
         denominator: 3n,
+        costRemovedMicro: 0n,
       },
     ]);
   });
@@ -246,6 +247,7 @@ describe('reverse splits that leave lots empty', () => {
         bucket: 'DELIVERY',
         numerator: 3n,
         denominator: 10n,
+        costRemovedMicro: 300n * RUPEE,
       },
     ]);
   });

@@ -89,7 +89,7 @@ export interface MatchResult {
   readonly orphans: readonly Orphan[];
 }
 
-const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+export const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /** The one ordering rule (PRD §7.1): executed_at, then dedup_key. */
 export function compareFills(

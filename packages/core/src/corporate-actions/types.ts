@@ -10,7 +10,7 @@ export interface CorporateAction {
   /** CONVERSION: the new ISIN; DEMERGER: the child's ISIN. */
   readonly newIsin: string | null;
   readonly exDateIst: string;
-  /** BONUS: when the bonus shares were allotted (s.55(2)(aa)); defaults to the ex-date. */
+  /** BONUS only: when the bonus shares were allotted (s.55(2)(aa)); defaults to the ex-date. */
   readonly allotmentDateIst: string | null;
   /** New shares per old share is ratioNum / ratioDen (a 1:5 split is 5/1; a 1:1 bonus is 1/1 extra). */
   readonly ratioNum: bigint;
@@ -27,4 +27,6 @@ export interface Fraction {
   readonly bucket: Bucket;
   readonly numerator: bigint;
   readonly denominator: bigint;
+  /** The cost that left with the holding when it got no whole share at all (cash in lieu); else 0. */
+  readonly costRemovedMicro: bigint;
 }
