@@ -10,6 +10,7 @@ import {
   type RowError,
 } from '@bhavbook/adapters';
 import type Database from 'better-sqlite3';
+import type { IssueForecast } from '../recompute/index.js';
 import { readImportFile } from './read.js';
 
 /** How many row errors a preview shows; the total is always in `counts.errors`. */
@@ -45,8 +46,8 @@ export type FilePreview = Labelled &
         readonly errors: readonly RowError[];
         readonly coverage: ParseResult['coverage'];
         readonly warnings: readonly 'wrong_account'[];
-        /** Issues the commit would create or resolve; empty until recompute exists (S9). */
-        readonly issueForecast: readonly never[];
+        /** Issues the commit would create or resolve (empty when no forecaster is configured). */
+        readonly issueForecast: readonly IssueForecast[];
       }
     | {
         readonly status: 'ambiguous';
@@ -75,6 +76,7 @@ export interface ParsedFile {
 export interface PreviewContext {
   readonly db: Database.Database;
   readonly adapters: readonly BrokerAdapter[];
+  readonly forecast?: ((accountId: string, result: ParseResult) => readonly IssueForecast[]) | undefined;
 }
 
 /** Keys already seen in this preview, so a later file's copies count as duplicates. */
@@ -203,7 +205,7 @@ export async function previewFile(
     errors: result.errors.slice(0, ERROR_SAMPLE),
     coverage: result.coverage,
     warnings,
-    issueForecast: [],
+    issueForecast: context.forecast?.(account.id, result) ?? [],
   };
   const parsed = {
     kind: top.kind,
