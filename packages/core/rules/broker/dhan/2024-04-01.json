@@ -1,0 +1,52 @@
+{
+  "kind": "broker",
+  "broker": "dhan",
+  "effective_from": "2024-04-01",
+  "notes": "Dhan: delivery free; intraday and MTF Rs 20 or 0.03% per executed order; DP Rs 12.50 + GST per ISIN per sell day.",
+  "brokerage": {
+    "DELIVERY": {
+      "percent": {
+        "value": "0%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      },
+      "max_rupees": null
+    },
+    "INTRADAY": {
+      "percent": {
+        "value": "0.03%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      },
+      "max_rupees": {
+        "value": "20",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "MTF": {
+      "percent": {
+        "value": "0.03%",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      },
+      "max_rupees": {
+        "value": "20",
+        "source_url": "https://dhan.co/pricing",
+        "verified_on": "2026-10-20"
+      }
+    }
+  },
+  "dp": {
+    "per_scrip_sell_day_rupees": {
+      "value": "12.50",
+      "source_url": "https://dhan.co/pricing",
+      "verified_on": "2026-10-20"
+    },
+    "gst": {
+      "value": "18%",
+      "source_url": "https://dhan.co/pricing",
+      "verified_on": "2026-10-20"
+    }
+  }
+}

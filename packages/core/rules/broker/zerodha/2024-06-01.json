@@ -1,0 +1,52 @@
+{
+  "kind": "broker",
+  "broker": "zerodha",
+  "effective_from": "2024-06-01",
+  "notes": "Zerodha: DP Rs 13 + GST (Rs 15.34: Rs 3.5 CDSL + Rs 9.5 Zerodha + Rs 2.34 GST); MTF Rs 20 or 0.3% per order.",
+  "brokerage": {
+    "DELIVERY": {
+      "percent": {
+        "value": "0%",
+        "source_url": "https://zerodha.com/charges",
+        "verified_on": "2026-10-20"
+      },
+      "max_rupees": null
+    },
+    "INTRADAY": {
+      "percent": {
+        "value": "0.03%",
+        "source_url": "https://zerodha.com/charges",
+        "verified_on": "2026-10-20"
+      },
+      "max_rupees": {
+        "value": "20",
+        "source_url": "https://zerodha.com/charges",
+        "verified_on": "2026-10-20"
+      }
+    },
+    "MTF": {
+      "percent": {
+        "value": "0.3%",
+        "source_url": "https://zerodha.com/charges",
+        "verified_on": "2026-10-20"
+      },
+      "max_rupees": {
+        "value": "20",
+        "source_url": "https://zerodha.com/charges",
+        "verified_on": "2026-10-20"
+      }
+    }
+  },
+  "dp": {
+    "per_scrip_sell_day_rupees": {
+      "value": "13.00",
+      "source_url": "https://zerodha.com/charges",
+      "verified_on": "2026-10-20"
+    },
+    "gst": {
+      "value": "18%",
+      "source_url": "https://zerodha.com/charges",
+      "verified_on": "2026-10-20"
+    }
+  }
+}

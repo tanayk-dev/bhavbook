@@ -2,7 +2,7 @@
 // order (S12a), so fill-granularity rows group by their order id. Order-granularity rows (Dhan) pass through.
 import { compareFills, type Side, type TradeFill } from './types.js';
 
-export interface Order {
+export interface Order<F extends TradeFill = TradeFill> {
   readonly key: string;
   readonly accountId: string;
   readonly instrumentKey: string;
@@ -12,7 +12,7 @@ export interface Order {
   readonly quantity: bigint;
   readonly valueMicro: bigint;
   /** In execution order. */
-  readonly fills: readonly TradeFill[];
+  readonly fills: readonly F[];
 }
 
 function orderKey(fill: TradeFill): string {
@@ -22,11 +22,8 @@ function orderKey(fill: TradeFill): string {
 }
 
 /** Orders in execution order of their first fill (fills are grouped in execution order). */
-export function groupFillsIntoOrders(fills: readonly TradeFill[]): Order[] {
-  const builders = new Map<
-    string,
-    { first: TradeFill; fills: TradeFill[]; quantity: bigint; valueMicro: bigint }
-  >();
+export function groupFillsIntoOrders<F extends TradeFill>(fills: readonly F[]): Order<F>[] {
+  const builders = new Map<string, { first: F; fills: F[]; quantity: bigint; valueMicro: bigint }>();
   for (const fill of [...fills].sort(compareFills)) {
     const key = orderKey(fill);
     const builder = builders.get(key);

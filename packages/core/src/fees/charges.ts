@@ -1,0 +1,273 @@
+// The charge engine (plan S12a task 2, ADR-0016, PRD §8.1). Pure: the same fills, allocations and rule files
+// always give the same charges. Each component is computed at the unit the broker bills, with its rounding:
+//   brokerage              per executed order and bucket, capped, to the paisa
+//   STT, stamp duty        per contract note (account, IST date, exchange), one total across charge classes,
+//                          half-up to the rupee (A1: Dhan matches on 45/46 days and 46/46)
+//   txn, SEBI, IPFT        per contract note on its turnover, to the paisa
+//   GST                    per contract note, 18% of brokerage + txn + SEBI + IPFT (never STT or stamp duty)
+//   DP                     per (account, instrument, delivery sell day), stored inclusive of its own GST
+// Totals are split over the allocations by their exact share (largest remainder), so the parts sum exactly.
+// Charges attach to allocations of imported fills only (opening lots and corporate-action lots carry none).
+import { InvalidArgumentError } from '../errors.js';
+import { groupFillsIntoOrders } from '../fifo/orders.js';
+import {
+  compareAllocations,
+  compareFills,
+  groupBy,
+  sortedEntries,
+  type FillAllocation,
+  type TradeFill,
+} from '../fifo/types.js';
+import { splitByWeight } from '../money/allocate.js';
+import type { Rate } from '../money/rate.js';
+import { divRound } from '../money/rounding.js';
+import {
+  selectFeeRules,
+  type FeeExchange,
+  type FeeBroker,
+  type FeeRules,
+  type SelectedRules,
+} from './rules.js';
+
+export type ChargeComponent =
+  'brokerage' | 'stt' | 'exchange_txn' | 'sebi' | 'ipft' | 'stamp_duty' | 'gst' | 'dp';
+
+const COMPONENTS: readonly ChargeComponent[] = [
+  'brokerage',
+  'stt',
+  'exchange_txn',
+  'sebi',
+  'ipft',
+  'stamp_duty',
+  'gst',
+  'dp',
+];
+const PAISA = 10_000n;
+const RUPEE = 1_000_000n;
+
+/** A fill with the exchange it traded on (the contract note's third key). */
+export interface ChargeableFill extends TradeFill {
+  readonly exchange: FeeExchange;
+}
+
+export interface FillCharge {
+  readonly allocationKey: string;
+  readonly component: ChargeComponent;
+  readonly amountMicro: bigint;
+  /** `<statutory id>+<broker id>`, e.g. `nse/2024-10-01+dhan/2024-04-01`. */
+  readonly ruleVersion: string;
+}
+
+export interface ChargeInput {
+  readonly broker: FeeBroker;
+  readonly fills: readonly ChargeableFill[];
+  /** The bucketed allocations of `fills` (before corporate actions). */
+  readonly allocations: readonly FillAllocation[];
+  readonly rules: FeeRules;
+}
+
+export interface ChargeResult {
+  readonly charges: readonly FillCharge[];
+  /** Fills with no rule version in force on their trade date (ids, execution order): not charged. */
+  readonly unrated: readonly string[];
+}
+
+interface Rated {
+  readonly allocation: FillAllocation;
+  readonly fill: ChargeableFill;
+  readonly rules: SelectedRules;
+  readonly orderKey: string;
+}
+
+type Amounts = Map<string, bigint>;
+
+function lcm(a: bigint, b: bigint): bigint {
+  let [x, y] = [a, b];
+  while (y !== 0n) [x, y] = [y, x % y];
+  return (a / x) * b;
+}
+
+/** A member with its share of a total, or with what it was billed. */
+interface Weighted {
+  readonly member: Rated;
+  readonly weight: bigint;
+}
+
+/** Splits a total over the entries by weight (largest remainder: the parts sum exactly). */
+function split(totalMicro: bigint, entries: readonly Weighted[]): Amounts {
+  return new Map(
+    splitByWeight(totalMicro, entries, (entry) => entry.weight).map(({ item, part }) => [
+      item.member.allocation.key,
+      part,
+    ]),
+  );
+}
+
+const byValue = (members: readonly Rated[]): Weighted[] =>
+  members.map((member) => ({ member, weight: member.allocation.valueMicro }));
+
+/** Σ value × rate over the members, rounded half-up to `unit` once, split by each member's exact share. */
+function rated(members: readonly Rated[], rateOf: (member: Rated) => Rate, unit: bigint): Amounts {
+  const denominator = members.reduce((common, member) => lcm(common, rateOf(member).den), 1n);
+  const entries = members.map((member) => {
+    const rate = rateOf(member);
+    return { member, weight: member.allocation.valueMicro * rate.num * (denominator / rate.den) };
+  });
+  const exact = entries.reduce((sum, entry) => sum + entry.weight, 0n);
+  return split(divRound(exact, denominator * unit, 'half-up') * unit, entries);
+}
+
+/**
+ * Per executed order: each part's value x its bucket's rate (netting can split one order across buckets), to the
+ * paisa, capped once at the order's smallest cap; split over the parts by their exact brokerage.
+ */
+function brokerage(members: readonly Rated[]): Weighted[] {
+  const orders = groupBy(members, (member) => member.orderKey);
+  return sortedEntries(orders).flatMap(([, order]) => {
+    const parts = order.map((member) => ({
+      member,
+      rule: member.rules.broker.brokerage[member.allocation.bucket],
+    }));
+    const denominator = parts.reduce((common, { rule }) => lcm(common, rule.percent.den), 1n);
+    const entries = parts.map(({ member, rule }) => ({
+      member,
+      weight: member.allocation.valueMicro * rule.percent.num * (denominator / rule.percent.den),
+    }));
+    const exact = entries.reduce((sum, entry) => sum + entry.weight, 0n);
+    const rounded = divRound(exact, denominator * PAISA, 'half-up') * PAISA;
+    const cap = parts.reduce<bigint | null>(
+      (smallest, { rule }) =>
+        rule.maxMicro !== null && (smallest === null || rule.maxMicro < smallest) ? rule.maxMicro : smallest,
+      null,
+    );
+    const amount = cap !== null && rounded > cap ? cap : rounded;
+    return splitByWeight(amount, entries, (entry) => entry.weight).map(({ item, part }) => ({
+      member: item.member,
+      weight: part,
+    }));
+  });
+}
+
+/** Every component of one contract note, by allocation key. */
+function contractNote(members: readonly Rated[]): Map<ChargeComponent, Amounts> {
+  const [{ rules }] = members as [Rated, ...Rated[]];
+  const { statutory } = rules;
+  const side = (member: Rated) => member.allocation.side;
+  const billed = brokerage(members);
+  return new Map<ChargeComponent, Amounts>([
+    ['brokerage', new Map(billed.map((entry) => [entry.member.allocation.key, entry.weight]))],
+    ['stt', rated(members, (member) => statutory.stt[member.allocation.bucket][side(member)], RUPEE)],
+    [
+      'stamp_duty',
+      rated(members, (member) => statutory.stampDuty[member.allocation.bucket][side(member)], RUPEE),
+    ],
+    ['exchange_txn', rated(members, () => statutory.exchangeTxn, PAISA)],
+    ['sebi', rated(members, () => statutory.sebi, PAISA)],
+    ['ipft', rated(members, () => statutory.ipft, PAISA)],
+    ['gst', gst(billed, statutory)],
+  ]);
+}
+
+/**
+ * GST: 18% of the billed brokerage plus the exact (unrounded) txn, SEBI and IPFT of the contract note, to the
+ * paisa (fits 78/79 Dhan FY 2024-25 rows within Rs 0.01; rounded components fit 77/79).
+ */
+function gst(billed: readonly Weighted[], statutory: SelectedRules['statutory']): Amounts {
+  const levies = [statutory.exchangeTxn, statutory.sebi, statutory.ipft];
+  const denominator = levies.reduce((common, rate) => lcm(common, rate.den), 1n);
+  const perValue = levies.reduce((sum, rate) => sum + rate.num * (denominator / rate.den), 0n);
+  const entries = billed.map(({ member, weight: brokerageMicro }) => ({
+    member,
+    weight: brokerageMicro * denominator + member.allocation.valueMicro * perValue,
+  }));
+  const exact = entries.reduce((sum, entry) => sum + entry.weight, 0n);
+  const { num, den } = statutory.gst;
+  return split(divRound(exact * num, denominator * den * PAISA, 'half-up') * PAISA, entries);
+}
+
+/** DP once per (account, instrument, delivery sell day), with its GST, split over that day's sells by value. */
+function depository(members: readonly Rated[]): Amounts {
+  const sells = members.filter(
+    (member) => member.allocation.side === 'SELL' && member.allocation.bucket !== 'INTRADAY',
+  );
+  const amounts: Amounts = new Map();
+  const days = groupBy(sells, ({ allocation }) =>
+    [allocation.accountId, allocation.instrumentKey, allocation.tradeDateIst].join('\u0000'),
+  );
+  for (const [, group] of sortedEntries(days)) {
+    const [{ rules }] = group as [Rated, ...Rated[]];
+    const { dpMicro, dpGst } = rules.broker;
+    const amount = dpMicro + divRound(dpMicro * dpGst.num, dpGst.den * PAISA, 'half-up') * PAISA;
+    for (const [key, part] of split(amount, byValue(group))) amounts.set(key, part);
+  }
+  return amounts;
+}
+
+interface Known {
+  readonly fill: ChargeableFill;
+  readonly rules: SelectedRules | null;
+  readonly orderKey: string;
+}
+
+/** Every fill with its order and the rule versions in force on its trade date. Fill ids must be unique. */
+function knownFills(input: ChargeInput): Map<string, Known> {
+  const known = new Map<string, Known>();
+  for (const order of groupFillsIntoOrders(input.fills)) {
+    for (const fill of order.fills) {
+      if (known.has(fill.id)) throw new InvalidArgumentError('two fills with the same id');
+      const rules = selectFeeRules(input.rules, input.broker, fill.exchange, fill.tradeDateIst);
+      known.set(fill.id, { fill, rules, orderKey: order.key });
+    }
+  }
+  return known;
+}
+
+/**
+ * Rates each allocation of an imported fill, in allocation order (so ties split the same way whatever the input
+ * order). Opening-lot and corporate-action allocations are never charged; any other allocation must have its
+ * fill passed. Fills with no rules in force are unrated.
+ */
+function rateAll(input: ChargeInput): { rated: Rated[]; unrated: string[] } {
+  const known = knownFills(input);
+  const unrated = [...known.values()]
+    .filter((entry) => entry.rules === null)
+    .map((entry) => entry.fill)
+    .sort(compareFills)
+    .map((fill) => fill.id);
+  const members = input.allocations.flatMap((allocation) => {
+    if (allocation.adjustmentId !== null || allocation.corporateActionId !== null) return [];
+    const entry = known.get(allocation.fillId);
+    if (entry === undefined)
+      throw new InvalidArgumentError('an allocation refers to a fill that was not passed');
+    const { fill, rules, orderKey } = entry;
+    return rules === null ? [] : [{ allocation, fill, rules, orderKey }];
+  });
+  return { rated: members.sort((a, b) => compareAllocations(a.allocation, b.allocation)), unrated };
+}
+
+/**
+ * The charges of an account's fills (ADR-0016): every component at its billing unit and rounding, split exactly
+ * over the allocations. Pure and deterministic; fills with no rule version in force are listed, not charged.
+ */
+export function computeCharges(input: ChargeInput): ChargeResult {
+  const { rated: members, unrated } = rateAll(input);
+  const notes = groupBy(members, ({ allocation, fill }) =>
+    [allocation.accountId, allocation.tradeDateIst, fill.exchange].join('\u0000'),
+  );
+  const amounts = new Map<ChargeComponent, Amounts>(COMPONENTS.map((component) => [component, new Map()]));
+  for (const [, note] of sortedEntries(notes)) {
+    for (const [component, values] of contractNote(note)) {
+      for (const [key, value] of values) amounts.get(component)?.set(key, value);
+    }
+  }
+  amounts.set('dp', depository(members));
+  const charges = members.flatMap((member) =>
+    COMPONENTS.flatMap((component) => {
+      const amountMicro = amounts.get(component)?.get(member.allocation.key) ?? 0n;
+      if (amountMicro === 0n) return [];
+      const ruleVersion = `${member.rules.statutory.id}+${member.rules.broker.id}`;
+      return [{ allocationKey: member.allocation.key, component, amountMicro, ruleVersion }];
+    }),
+  );
+  return { charges, unrated };
+}
