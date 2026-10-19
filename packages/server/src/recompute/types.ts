@@ -8,6 +8,10 @@ export const RECOMPUTE_FAILED = 'recompute_failed';
 export const FILL_FROM_STATEMENT = 'fill_from_statement';
 /** An opening lot real fills now cover (E7). */
 export const OPENING_LOT_REDUNDANT = 'opening_lot_redundant';
+/** A pattern that suggests a corporate action the user hasn't entered (ADR-0015: never applied automatically). */
+export const CORPORATE_ACTION_SUSPECTED = 'corporate_action_suspected';
+/** A fraction of a share a corporate action left (paid as cash in lieu). */
+export const CASH_IN_LIEU = 'cash_in_lieu';
 
 export interface IssueForecast {
   readonly kind: typeof INCOMPLETE_POSITION;

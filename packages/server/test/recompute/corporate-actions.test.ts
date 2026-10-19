@@ -4,15 +4,12 @@ import type Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import {
   applyCorporateActionAndRecompute,
+  previewCorporateActionInVault,
   restoreCorporateActionAndRecompute,
   revertCorporateActionAndRecompute,
 } from '../../src/recompute/corporate-actions.js';
 import { recompute } from '../../src/recompute/index.js';
-import {
-  CorporateActionError,
-  createCorporateAction,
-  previewCorporateActionInVault,
-} from '../../src/services/corporate-actions.js';
+import { CorporateActionError, createCorporateAction } from '../../src/services/corporate-actions.js';
 import { count, importFiles, withVault, ZERODHA, type TestVault } from '../import/helpers.js';
 
 const now = (): Date => new Date('2026-10-20T12:00:00Z');
@@ -77,12 +74,21 @@ describe('allocations and anchors', () => {
       await importLines(service, [line('buy', 10, 100, '2025-01-02')]);
       const id = applyCorporateActionAndRecompute(
         db,
-        { type: 'BONUS', isin: TCS, exDateIst: '2025-03-01', allotmentDateIst: '2025-03-04', ratioNum: '1', ratioDen: '1' },
+        {
+          type: 'BONUS',
+          isin: TCS,
+          exDateIst: '2025-03-01',
+          allotmentDateIst: '2025-03-04',
+          ratioNum: '1',
+          ratioDen: '1',
+        },
         { now },
       );
       expect(
         db
-          .prepare('SELECT trade_row_id, adjustment_id, quantity, value_micro FROM fill_allocation WHERE corporate_action_id = ?')
+          .prepare(
+            'SELECT trade_row_id, adjustment_id, quantity, value_micro FROM fill_allocation WHERE corporate_action_id = ?',
+          )
           .all(id),
       ).toEqual([{ trade_row_id: null, adjustment_id: null, quantity: 10n, value_micro: 0n }]);
       expect(db.prepare('SELECT entry_date_ist FROM lot ORDER BY entry_date_ist').pluck().all()).toEqual([
@@ -103,14 +109,23 @@ describe('allocations and anchors', () => {
       ).run(ZERODHA, TCS, anchor);
       applyCorporateActionAndRecompute(
         db,
-        { type: 'CONVERSION', isin: TCS, newIsin: NEW, exDateIst: '2025-03-01', ratioNum: '1', ratioDen: '1' },
+        {
+          type: 'CONVERSION',
+          isin: TCS,
+          newIsin: NEW,
+          exDateIst: '2025-03-01',
+          ratioNum: '1',
+          ratioDen: '1',
+        },
         { now },
       );
       expect(db.prepare('SELECT instrument_key, state FROM position ORDER BY instrument_key').all()).toEqual([
         { instrument_key: NEW, state: 'OPEN' },
         { instrument_key: TCS, state: 'CLOSED' },
       ]);
-      expect(db.prepare("SELECT anchor_instrument_key FROM journal_entry WHERE id = 'j1'").pluck().get()).toBe(NEW);
+      expect(
+        db.prepare("SELECT anchor_instrument_key FROM journal_entry WHERE id = 'j1'").pluck().get(),
+      ).toBe(NEW);
     });
   });
 });
@@ -169,10 +184,16 @@ describe('the service', () => {
   it('refuses to revert what is not active, or restore what is not reverted', async () => {
     await withVault(({ db }) => {
       const id = createCorporateAction(db, split, { now });
-      expect(() => restoreCorporateActionAndRecompute(db, id, { now })).toThrow(CorporateActionError);
+      expect(() => {
+        restoreCorporateActionAndRecompute(db, id, { now });
+      }).toThrow(CorporateActionError);
       revertCorporateActionAndRecompute(db, id, { now });
-      expect(() => revertCorporateActionAndRecompute(db, id, { now })).toThrow(CorporateActionError);
-      expect(() => revertCorporateActionAndRecompute(db, 'nope', { now })).toThrow(CorporateActionError);
+      expect(() => {
+        revertCorporateActionAndRecompute(db, id, { now });
+      }).toThrow(CorporateActionError);
+      expect(() => {
+        revertCorporateActionAndRecompute(db, 'nope', { now });
+      }).toThrow(CorporateActionError);
     });
   });
 

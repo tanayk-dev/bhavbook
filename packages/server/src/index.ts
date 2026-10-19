@@ -8,3 +8,5 @@ export * from './services/instruments.js';
 export * from './recompute/index.js';
 export * from './recompute/actions.js';
 export * from './services/adjustments.js';
+export * from './recompute/corporate-actions.js';
+export * from './services/corporate-actions.js';
