@@ -375,6 +375,7 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
    - write nothing; return a preview token with a 15-minute TTL.
 2. `commitImport(token)`: auto-backup, then **one transaction** inserting `import_batch`, `raw_row` and `trade_row`/`statement_row` (`ON CONFLICT DO NOTHING`), then trigger a recompute (a no-op hook until S9).
 3. `undoImport(batchId)`: delete exactly that batch's rows, then recompute.
+   - **Overlap rule (found in S4):** `trade_row`/`statement_row` keep one row per dedup key, so a later overlapping batch inserts nothing for keys it shares with an earlier batch. Undoing the *earlier* batch would lose those rows. In the same transaction, re-parse the remaining batches' `raw_row`s for the deleted keys and re-insert them under the surviving batch. Test: import A, import overlapping B, undo A → B's overlapping trades are still present.
 4. `coverage(accountId)`: merged ranges per report kind, plus gaps.
 5. Tests:
    - re-import → 0 new rows;
@@ -546,6 +547,8 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
    - a random free port, bound to `127.0.0.1` only;
    - opens `http://127.0.0.1:<port>/?t=<token>`;
    - subcommands `backup <out>`, `restore <file>`, `doctor` (Node version ≥ 24.11, better-sqlite3 loads, `PRAGMA integrity_check`).
+   - **Single-instance vault lock (from the S4 review):** hold a lock file (`<vault>.lock`, O_EXCL with the PID) for the server's lifetime, so a restore or a second `npx bhavbook` can't touch an open vault. `restore` takes the same lock for the whole verify-and-swap.
+   - **Startup recovery (from the S4 review):** if the vault file is missing but a `.<vault>.old-*.tmp` exists (a crash mid-swap), move it back, plus its sidecars, before opening. Delete stale `.restore-*/.rebuilt-*/.snapshot-*` temp files.
 4. Tests:
    - no token → 401;
    - foreign `Host` → 403;
@@ -825,6 +828,10 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
 ## Changelog
 
 - 2026-10-19 r1: created from PRD Draft 1 + ADR-0001…0026.
+- 2026-10-19 r4: S3 and S2 merged; S4 in progress.
+  - Lessons from S2's three sanitizer rounds: personal data hides in hyperlink targets/tooltips, comments and their authors, document and custom properties (LastAuthor held a real name), and free-text narrations (a CDSL BOID). Raw container streams must be scanned at both UTF-16 alignments, after dropping unpaired surrogates (they crashed V8's regex engine). Names can't be pattern-matched, so `fixtures:make` fails closed without a local denylist.
+  - S4: the vault lives in `packages/server/src/vault`; migrations are SQL files in `packages/server/migrations/` (S16's bundler must ship them); `pii:scan` also covers `packages/server/fixtures` (`.bhav` scanned byte by byte). S7 gained the undo/overlap rule above.
+  - Commits use the GitHub no-reply address; history on `main` was rewritten once to remove a personal email.
 - 2026-10-19 r3: S1 executed. Invariant 1 now uses `pnpm verify`; repo scripts live in `scripts/`; pnpm 12 needs `allowBuilds` (esbuild) and a dated `minimumReleaseAgeExclude` (eslint 10.13.0).
 - 2026-10-19 r2: adversarial review (REWORK) applied.
   - Fixed the dependency graph (S7←S6, S9←S8, S12←S8/S10, S13←S12).

@@ -66,7 +66,7 @@ export default defineConfig(
     },
   },
   {
-    files: ['**/*.test.ts', 'tools/**/*.ts'],
+    files: ['**/*.test.ts', 'tools/**/*.ts', '**/scripts/**/*.ts'],
     rules: {
       'no-console': 'off',
     },
