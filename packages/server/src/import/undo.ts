@@ -37,6 +37,7 @@ function reinsertTrades(db: Database.Database, accountId: string, keys: readonly
     const next = successor.get(accountId, 'trade', '', key) as Successor | undefined;
     if (next === undefined) continue;
     const payload = decodeTradePayload(next.payload_json);
+    if (payload.dedupKey !== key) throw new ImportError('a stored batch copy does not match its key');
     const rawRowId: unknown = rawRow.get(next.batch_id, payload.raw.line);
     if (rawRowId === undefined) throw new ImportError('a surviving batch is missing its raw row');
     reinserted += insert.run(tradeParams(accountId, next.batch_id, rawRowId, payload)).changes;
@@ -56,6 +57,9 @@ function reinsertStatements(
     const next = successor.get(accountId, 'statement', kind, key) as Successor | undefined;
     if (next === undefined) continue;
     const payload = decodeStatementPayload(next.payload_json);
+    if (payload.dedupKey !== key || payload.kind !== kind) {
+      throw new ImportError('a stored batch copy does not match its key');
+    }
     const keyJson = JSON.stringify(payload.key);
     reinserted += insert.run(accountId, next.batch_id, kind, key, keyJson, payload.dataJson).changes;
   }

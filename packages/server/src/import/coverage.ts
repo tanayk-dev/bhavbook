@@ -20,9 +20,14 @@ function shiftDays(date: string, days: number): string {
   return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 }
 
+/** ISO dates and report kinds compare correctly as plain strings. */
+function compare(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export function mergeRanges(ranges: readonly DateRange[]): DateRange[] {
   const sorted = [...ranges].sort((a, b) =>
-    a.from === b.from ? a.to.localeCompare(b.to) : a.from.localeCompare(b.from),
+    a.from === b.from ? compare(a.to, b.to) : compare(a.from, b.from),
   );
   return sorted.reduce<DateRange[]>((merged, range) => {
     const last = merged.at(-1);
@@ -33,11 +38,19 @@ export function mergeRanges(ranges: readonly DateRange[]): DateRange[] {
   }, []);
 }
 
+/**
+ * Calendar days between consecutive merged ranges. Weekends and exchange holidays count as gaps here: there is no
+ * holiday calendar in v1, so the coverage view labels a gap and the user judges whether trades are missing.
+ */
 export function gapsBetween(ranges: readonly DateRange[]): DateRange[] {
-  return ranges.slice(1).map((range, index) => ({
-    from: shiftDays(ranges[index]?.to ?? range.from, 1),
-    to: shiftDays(range.from, -1),
-  }));
+  const gaps: DateRange[] = [];
+  for (let index = 1; index < ranges.length; index += 1) {
+    const previous = ranges[index - 1];
+    const current = ranges[index];
+    if (previous === undefined || current === undefined) throw new Error('unreachable: index within bounds');
+    gaps.push({ from: shiftDays(previous.to, 1), to: shiftDays(current.from, -1) });
+  }
+  return gaps;
 }
 
 export function accountCoverage(db: Database.Database, accountId: string): KindCoverage[] {
@@ -50,7 +63,7 @@ export function accountCoverage(db: Database.Database, accountId: string): KindC
   const byKind = new Map<string, DateRange[]>();
   for (const { kind, from, to } of rows) byKind.set(kind, [...(byKind.get(kind) ?? []), { from, to }]);
   return [...byKind.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => compare(a, b))
     .map(([kind, ranges]) => {
       const merged = mergeRanges(ranges);
       return { kind, ranges: merged, gaps: gapsBetween(merged) };

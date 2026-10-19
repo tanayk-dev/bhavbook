@@ -13,21 +13,37 @@ const PROBE_SHEET_ROWS = 20;
 
 /**
  * Text files are parsed on the main thread (only spreadsheets need the isolated worker), so their shape is bounded
- * first: the same row limit as spreadsheets, and no line longer than a CSV row could reasonably be.
+ * first, with the spreadsheet limits: rows, columns, and no line longer than a CSV row could reasonably be. Every
+ * line terminator counts (`\r\n`, `\r` and `\n`): csv-parse accepts a lone `\r` as the record delimiter.
  */
 export const MAX_TEXT_LINES = DEFAULT_LIMITS.maxRows;
 export const MAX_LINE_CHARS = 64 * 1024;
+export const MAX_TEXT_COLUMNS = DEFAULT_LIMITS.maxColumns;
+
+const NEWLINE = 0x0a;
+const RETURN = 0x0d;
+const COMMA = 0x2c;
+const TAB = 0x09;
 
 function withinTextBounds(text: string): boolean {
-  let lines = 0;
-  for (let start = 0; start < text.length; lines += 1) {
-    if (lines >= MAX_TEXT_LINES) return false;
-    const end = text.indexOf('\n', start);
-    const stop = end === -1 ? text.length : end;
-    if (stop - start > MAX_LINE_CHARS) return false;
-    start = stop + 1;
+  let lines = 1;
+  let lineStart = 0;
+  let separators = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code === COMMA || code === TAB) {
+      separators += 1;
+      if (separators >= MAX_TEXT_COLUMNS) return false;
+    } else if (code === NEWLINE || code === RETURN) {
+      if (index - lineStart > MAX_LINE_CHARS) return false;
+      if (code === RETURN && text.charCodeAt(index + 1) === NEWLINE) index += 1;
+      lineStart = index + 1;
+      separators = 0;
+      lines += 1;
+      if (lines > MAX_TEXT_LINES + 1) return false;
+    }
   }
-  return true;
+  return text.length - lineStart <= MAX_LINE_CHARS;
 }
 
 export type ReadOutcome =

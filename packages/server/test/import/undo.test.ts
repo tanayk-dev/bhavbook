@@ -30,6 +30,23 @@ function batchIds(db: Database.Database): string[] {
   return db.prepare('SELECT id FROM import_batch ORDER BY rowid').pluck().all() as string[];
 }
 
+/**
+ * Every trade row as `key | position of its owning batch in import order | raw text`, joined through its own
+ * batch's raw row: proves the values, the "earliest surviving batch owns it" rule and the raw linkage at once.
+ */
+function ownership(db: Database.Database, order: readonly string[]): string[] {
+  const rows = db
+    .prepare(
+      `SELECT t.dedup_key, t.batch_id, r.raw_text FROM trade_row t
+       LEFT JOIN raw_row r ON r.id = t.raw_row_id AND r.batch_id = t.batch_id
+       ORDER BY t.dedup_key`,
+    )
+    .all() as { dedup_key: string; batch_id: string; raw_text: string | null }[];
+  return rows.map(
+    (row) => `${row.dedup_key}|${String(order.indexOf(row.batch_id))}|${row.raw_text ?? 'MISSING'}`,
+  );
+}
+
 function ownerOf(db: Database.Database, dedupKey: string): string {
   return db.prepare('SELECT batch_id FROM trade_row WHERE dedup_key = ?').pluck().get(dedupKey) as string;
 }
@@ -172,13 +189,19 @@ describe('import/undo property (PRD §3.2 invariants 3 and 4)', () => {
               service.undoImport(victim?.id ?? '');
             }
           }
-          actual = tradeSet(db, ZERODHA);
+          actual = [
+            ...tradeSet(db, ZERODHA),
+            ...ownership(
+              db,
+              batches.map((batch) => batch.id),
+            ),
+          ];
           surviving = batches.map((batch) => batch.index);
         });
         let expected: string[] = [];
         await withVault(async ({ db, service }) => {
           for (const index of surviving) await importFiles(service, ZERODHA, [window(index)]);
-          expected = tradeSet(db, ZERODHA);
+          expected = [...tradeSet(db, ZERODHA), ...ownership(db, batchIds(db))];
         });
         expect(actual).toEqual(expected);
       }),

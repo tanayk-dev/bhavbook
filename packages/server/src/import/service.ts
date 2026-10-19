@@ -143,6 +143,10 @@ export function createImportService(options: ImportServiceOptions): ImportServic
     },
 
     undoImport(batchId) {
+      // Cheap check first, so an unknown or already-undone batch never costs a backup.
+      if (db.prepare('SELECT 1 FROM import_batch WHERE id = ?').get(batchId) === undefined) {
+        throw new ImportError('unknown import batch');
+      }
       const at = now();
       try {
         autoBackup(db, vaultPath, 'pre-undo', { appVersion, now: () => at });
