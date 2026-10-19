@@ -3,12 +3,13 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { acquireVaultLock, lockPath, STALE_LOCK_MS } from '../../src/vault/index.js';
 import { withTempDir } from './helpers.js';
 
-const LOCK_MODULE = fileURLToPath(new URL('../../src/vault/lock.ts', import.meta.url));
+// An ESM specifier must be a file:// URL (a bare Windows path like C:\... is read as a URL scheme).
+const LOCK_MODULE = pathToFileURL(fileURLToPath(new URL('../../src/vault/lock.ts', import.meta.url))).href;
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 function age(file: string, ms: number): void {
@@ -58,7 +59,7 @@ describe('vault lock: review follow-ups', () => {
       const go = path.join(dir, 'go');
       const script = `
         import { existsSync } from 'node:fs';
-        import { acquireVaultLock } from ${JSON.stringify(LOCK_MODULE.replaceAll('\\', '/'))};
+        import { acquireVaultLock } from ${JSON.stringify(LOCK_MODULE)};
         process.stdout.write('ready\\n');
         while (!existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 5));
         try {
@@ -77,14 +78,22 @@ describe('vault lock: review follow-ups', () => {
           new Promise<string>((resolve) => {
             let text = '';
             child.stdout.on('data', (chunk: Buffer) => (text += chunk.toString()));
-            child.on('close', () => resolve(text));
+            child.on('close', () => {
+              resolve(text);
+            });
           }),
       );
       await Promise.all(
         children.map(
           (child) =>
             new Promise<void>((resolve) => {
-              child.stdout.once('data', () => resolve());
+              child.stdout.once('data', () => {
+                resolve();
+              });
+              // A child that dies before it is ready must fail the test, not hang it.
+              child.once('close', () => {
+                resolve();
+              });
             }),
         ),
       );

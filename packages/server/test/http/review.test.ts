@@ -9,10 +9,13 @@ import { withTempDir } from '../vault/helpers.js';
 import { ORIGIN, PORT, send, testApp, TOKEN } from './helpers.js';
 
 describe('fetch metadata and unsafe methods', () => {
-  it.each(['cross-site', 'same-site'])('rejects Sec-Fetch-Site: %s (another localhost port) with 403', async (site) => {
-    const response = await send(testApp(), '/api/health', { headers: { 'sec-fetch-site': site } });
-    expect(response.status).toBe(403);
-  });
+  it.each(['cross-site', 'same-site'])(
+    'rejects Sec-Fetch-Site: %s (another localhost port) with 403',
+    async (site) => {
+      const response = await send(testApp(), '/api/health', { headers: { 'sec-fetch-site': site } });
+      expect(response.status).toBe(403);
+    },
+  );
 
   it.each(['same-origin', 'none'])('accepts Sec-Fetch-Site: %s', async (site) => {
     expect((await send(testApp(), '/api/health', { headers: { 'sec-fetch-site': site } })).status).toBe(200);
@@ -21,14 +24,18 @@ describe('fetch metadata and unsafe methods', () => {
   it('rejects a state-changing request without an Origin header', async () => {
     const response = await send(testApp(), '/api/imports', { method: 'POST', headers: { origin: null } });
     expect(response.status).toBe(403);
-    expect((await send(testApp(), '/api/imports', { method: 'POST', headers: { origin: ORIGIN } })).status).toBe(501);
+    expect(
+      (await send(testApp(), '/api/imports', { method: 'POST', headers: { origin: ORIGIN } })).status,
+    ).toBe(501);
   });
 
   it('names the session cookie per port, so two instances and other localhost apps do not collide', async () => {
     expect(sessionCookieName(PORT)).toBe(`bhavbook_session_${PORT}`);
     const launch = await send(testApp(), `/?t=${TOKEN}`, { headers: { cookie: null } });
     expect(launch.headers.get('set-cookie')).toContain(`bhavbook_session_${PORT}=`);
-    const other = await send(testApp(), '/api/health', { headers: { cookie: `bhavbook_session_${PORT + 1}=${TOKEN}` } });
+    const other = await send(testApp(), '/api/health', {
+      headers: { cookie: `bhavbook_session_${PORT + 1}=${TOKEN}` },
+    });
     expect(other.status).toBe(401);
   });
 });

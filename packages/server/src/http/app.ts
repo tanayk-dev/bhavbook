@@ -16,7 +16,14 @@ import { z } from 'zod';
 import { currentVersion } from '../vault/index.js';
 import { jsonResponse } from './json.js';
 import type { Logger } from './logger.js';
-import { checkOrigin, checkRequest, sameSecret, SECURITY_HEADERS, SESSION_COOKIE } from './security.js';
+import {
+  checkOrigin,
+  checkRequest,
+  sameSecret,
+  SECURITY_HEADERS,
+  sessionCookieName,
+  type RequestFacts,
+} from './security.js';
 
 /** Largest JSON request body (imports upload files through their own route in S7, not as JSON). */
 export const MAX_JSON_BYTES = 1024 * 1024;
@@ -31,8 +38,18 @@ export interface AppOptions {
   readonly staticRoot?: string | null;
 }
 
-const error = (code: string, status: 400 | 401 | 403 | 404 | 413 | 415 | 500 | 501 | 503): Response =>
-  jsonResponse({ error: code }, status);
+type ErrorStatus = 400 | 401 | 403 | 404 | 413 | 415 | 500 | 501 | 503;
+
+const error = (code: string, status: ErrorStatus): Response => jsonResponse({ error: code }, status);
+
+/** Fixed bodies for client errors raised as HTTPExceptions (by Hono helpers or handlers): the status is kept. */
+const CLIENT_ERRORS: ReadonlyMap<number, readonly [string, ErrorStatus]> = new Map([
+  [401, ['unauthorized', 401]],
+  [403, ['forbidden', 403]],
+  [404, ['not_found', 404]],
+  [413, ['payload_too_large', 413]],
+  [415, ['unsupported_media_type', 415]],
+]);
 
 const notImplemented = (): Response => error('not_implemented', 501);
 
@@ -103,8 +120,20 @@ const PLACEHOLDER_PAGE = `<!doctype html>
 function logAndHarden(logger: Logger): MiddlewareHandler {
   return async (c, next) => {
     const started = performance.now();
-    await next();
-    for (const [name, value] of Object.entries(SECURITY_HEADERS)) c.res.headers.set(name, value);
+    try {
+      await next();
+    } catch {
+      // Hono's onError only sees Error instances; anything else thrown ends up here.
+      logger.error('request_failed', { path: routePath(c, -1), error: 'non_error' });
+      c.res = error('internal_error', 500);
+    }
+    try {
+      for (const [name, value] of Object.entries(SECURITY_HEADERS)) c.res.headers.set(name, value);
+    } catch {
+      // Some responses (e.g. Response.redirect) have immutable headers: copy, then harden.
+      c.res = new Response(c.res.body, c.res);
+      for (const [name, value] of Object.entries(SECURITY_HEADERS)) c.res.headers.set(name, value);
+    }
     logger.info('request', {
       method: c.req.method,
       // The matched route pattern (`/api/positions/:id`), never the raw path or query string.
@@ -117,9 +146,11 @@ function logAndHarden(logger: Logger): MiddlewareHandler {
 
 function guard(options: AppOptions): MiddlewareHandler {
   return async (c, next) => {
-    const facts = {
+    const facts: RequestFacts = {
+      method: c.req.method,
       host: c.req.header('host'),
       origin: c.req.header('origin'),
+      fetchSite: c.req.header('sec-fetch-site'),
       cookie: c.req.header('cookie'),
     };
     const port = options.port();
@@ -127,7 +158,7 @@ function guard(options: AppOptions): MiddlewareHandler {
     const launchToken = c.req.method === 'GET' && c.req.path === '/' ? c.req.query('t') : undefined;
     if (launchToken !== undefined) {
       if (!sameSecret(launchToken, options.token)) return error('unauthorized', 401);
-      setCookie(c, SESSION_COOKIE, options.token, { httpOnly: true, sameSite: 'Strict', path: '/' });
+      setCookie(c, sessionCookieName(port), options.token, { httpOnly: true, sameSite: 'Strict', path: '/' });
       return c.redirect('/', 302);
     }
     const result = checkRequest(facts, port, options.token);
@@ -137,8 +168,22 @@ function guard(options: AppOptions): MiddlewareHandler {
   };
 }
 
+/** True when any path segment (after percent-decoding) starts with a dot: `.env`, `.git/`, `..`. */
+function hasDotSegment(requestPath: string): boolean {
+  try {
+    return requestPath.split('/').some((segment) => decodeURIComponent(segment).startsWith('.'));
+  } catch {
+    return true;
+  }
+}
+
 function webRoutes(app: Hono, staticRoot: string | null | undefined): void {
   if (staticRoot != null && existsSync(staticRoot)) {
+    app.get('*', async (c, next) => {
+      if (hasDotSegment(c.req.path)) return error('not_found', 404);
+      await next();
+      return undefined;
+    });
     app.get('*', serveStatic({ root: staticRoot }));
     return;
   }
@@ -153,7 +198,10 @@ export function createApp(options: AppOptions): Hono {
   webRoutes(app, options.staticRoot);
   app.notFound(() => error('not_found', 404));
   app.onError((cause, c) => {
-    if (cause instanceof HTTPException && cause.status < 500) return error('invalid_request', 400);
+    if (cause instanceof HTTPException && cause.status < 500) {
+      const [code, status] = CLIENT_ERRORS.get(cause.status) ?? ['invalid_request', 400];
+      return error(code, status);
+    }
     // The error's name only: messages can quote file content or request data.
     options.logger.error('request_failed', { path: routePath(c, -1), error: cause.name });
     return error('internal_error', 500);

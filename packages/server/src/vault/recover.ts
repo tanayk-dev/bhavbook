@@ -30,6 +30,15 @@ function listDir(dir: string): string[] {
   }
 }
 
+/** A file's mtime, or 0 when it vanished meanwhile. */
+function mtimeOf(file: string): number {
+  try {
+    return statSync(file).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
 function newestOldVault(dir: string, names: readonly string[], pattern: RegExp): string | null {
   const candidates = names
     .filter((name) => {
@@ -37,7 +46,7 @@ function newestOldVault(dir: string, names: readonly string[], pattern: RegExp):
       return match?.[1] === 'old' && match[3] === undefined;
     })
     .map((name) => path.join(dir, name))
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+    .sort((a, b) => mtimeOf(b) - mtimeOf(a));
   return candidates[0] ?? null;
 }
 
@@ -49,7 +58,9 @@ export function recoverInterruptedRestore(vaultPath: string): RecoveryResult {
     const old = newestOldVault(dir, listDir(dir), pattern);
     if (old !== null) {
       for (const suffix of SIDECARS) {
+        // A sidecar at the target that the old vault doesn't have belongs to some other file: never pair it.
         if (existsSync(`${old}${suffix}`)) renameSync(`${old}${suffix}`, `${vaultPath}${suffix}`);
+        else rmSync(`${vaultPath}${suffix}`, { force: true });
       }
       restoredOldVault = true;
     }

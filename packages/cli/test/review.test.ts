@@ -50,16 +50,19 @@ describe('backup safety', () => {
     expect(await main(['backup', out, '--vault', vault, '--force'], io())).toBe(0);
   });
 
-  it.each(['', '-wal', '-shm', '.lock'])('never writes a backup over the vault%s, even with --force', async (suffix) => {
-    openVault(vault, { appVersion: 'test' }).close();
-    const target = `${vault}${suffix}`;
-    if (!existsSync(target)) writeFileSync(target, 'x');
-    const before = readFileSync(target);
-    const result = io();
-    expect(await main(['backup', target, '--vault', vault, '--force'], result)).toBe(1);
-    expect(result.stderr.join('\n')).toMatch(/vault/);
-    expect(readFileSync(target)).toEqual(before);
-  });
+  it.each(['', '-wal', '-shm', '.lock'])(
+    'never writes a backup over the vault%s, even with --force',
+    async (suffix) => {
+      openVault(vault, { appVersion: 'test' }).close();
+      const target = `${vault}${suffix}`;
+      if (!existsSync(target)) writeFileSync(target, 'x');
+      const before = readFileSync(target);
+      const result = io();
+      expect(await main(['backup', target, '--vault', vault, '--force'], result)).toBe(1);
+      expect(result.stderr.join('\n')).toMatch(/vault/);
+      expect(readFileSync(target)).toEqual(before);
+    },
+  );
 
   it('backs up read-only while another process holds the vault lock', async () => {
     openVault(vault, { appVersion: 'test' }).close();
@@ -101,7 +104,9 @@ describe('the real entry point', () => {
       let stdout = '';
       child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('server did not start')), 30_000);
+        const timer = setTimeout(() => {
+          reject(new Error('server did not start'));
+        }, 30_000);
         child.stdout.on('data', () => {
           if (stdout.includes('running at')) {
             clearTimeout(timer);

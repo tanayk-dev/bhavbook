@@ -10,7 +10,9 @@ import {
   acquireVaultLock,
   createBackup,
   createLogger,
+  isVaultFile,
   openVault,
+  openVaultReadOnly,
   recoverInterruptedRestore,
   restoreBackup,
   startServer,
@@ -31,7 +33,7 @@ const MIN_NODE: readonly [number, number] = [24, 11];
 
 const USAGE = `usage:
   bhavbook [--vault <path>] [--port <n>] [--no-open]   start BhavBook and open it in your browser
-  bhavbook backup <out.bhav> [--vault <path>]          write a backup of the vault
+  bhavbook backup <out.bhav> [--vault <path>] [--force] write a backup of the vault
   bhavbook restore <file.bhav> [--vault <path>]        replace the vault with a backup
   bhavbook doctor [--vault <path>]                     check Node, SQLite and the vault`;
 
@@ -59,6 +61,7 @@ interface Parsed {
   readonly vault: string;
   readonly port: number;
   readonly open: boolean;
+  readonly force: boolean;
 }
 
 function parse(argv: readonly string[], io: CliIo): Parsed {
@@ -73,16 +76,23 @@ function parse(argv: readonly string[], io: CliIo): Parsed {
         port: { type: 'string' },
         'no-open': { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
+        force: { type: 'boolean' },
       },
     }));
   } catch {
     throw new UsageError('unknown option');
   }
   const vault = path.resolve(values.vault ?? defaultVaultPath(io.homedir()));
+  const help = { vault, port: 0, open: false, force: false, command: 'help', file: null } as const;
+  if (values.help === true) return help;
   const portText = values.port ?? '0';
   if (!/^\d{1,5}$/.test(portText) || Number.parseInt(portText, 10) > 65_535) throw new UsageError('bad port');
-  const base = { vault, port: Number.parseInt(portText, 10), open: values['no-open'] !== true };
-  if (values.help === true) return { ...base, command: 'help', file: null };
+  const base = {
+    vault,
+    port: Number.parseInt(portText, 10),
+    open: values['no-open'] !== true,
+    force: values.force === true,
+  };
   const [command, file, ...extra] = positionals;
   if (extra.length > 0) throw new UsageError('too many arguments');
   if (command === undefined) return { ...base, command: 'serve', file: null };
@@ -95,7 +105,7 @@ function parse(argv: readonly string[], io: CliIo): Parsed {
 
 /** Runs `work` holding the vault lock, after recovering from an interrupted restore. */
 async function withVaultLock<T>(vault: string, io: CliIo, work: () => Promise<T> | T): Promise<T> {
-  mkdirSync(path.dirname(vault), { recursive: true });
+  mkdirSync(path.dirname(vault), { recursive: true, mode: 0o700 });
   const lock = acquireVaultLock(vault);
   try {
     const recovery = recoverInterruptedRestore(vault);
@@ -134,9 +144,15 @@ async function serveCommand(args: Parsed, io: CliIo): Promise<number> {
   });
 }
 
+/** Read-only, so it is safe while the server runs; it never creates, migrates or overwrites the vault. */
 function backupCommand(args: Parsed, out: string, io: CliIo): number {
+  if (isVaultFile(out, args.vault))
+    throw new VaultError('refusing to write a backup over the vault or its files');
+  if (existsSync(out) && !args.force) {
+    throw new VaultError('the output file already exists; pass --force to overwrite it');
+  }
   if (!existsSync(args.vault)) throw new VaultError('there is no vault at that path');
-  const db = openVault(args.vault, { appVersion: APP_VERSION });
+  const db = openVaultReadOnly(args.vault);
   try {
     const result = createBackup(db, out, { appVersion: APP_VERSION });
     io.out(`Backup written to ${result.path} (sha256 ${result.sha256}).`);

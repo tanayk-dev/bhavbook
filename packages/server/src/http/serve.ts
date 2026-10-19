@@ -39,11 +39,14 @@ function handleUpgrade(request: IncomingMessage, socket: Duplex, port: number, t
     const value = request.headers[name];
     return Array.isArray(value) ? value[0] : value;
   };
-  const result = checkRequest(
-    { host: header('host'), origin: header('origin'), cookie: header('cookie') },
-    port,
-    token,
-  );
+  const facts = {
+    method: request.method ?? 'GET',
+    host: header('host'),
+    origin: header('origin'),
+    fetchSite: header('sec-fetch-site'),
+    cookie: header('cookie'),
+  };
+  const result = checkRequest(facts, port, token);
   refuseUpgrade(socket, result.ok ? 501 : result.status);
 }
 
