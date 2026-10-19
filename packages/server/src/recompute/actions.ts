@@ -5,6 +5,9 @@ import { z } from 'zod';
 import {
   AdjustmentError,
   createAdjustment,
+  isoDateSchema,
+  microSchema,
+  quantitySchema,
   restoreAdjustment,
   revertAdjustment,
   supersedeAdjustment,
@@ -29,14 +32,27 @@ function openIssue(db: Database.Database, issueId: string, kind: string): OpenIs
 
 const suggestionSchema = z
   .object({
-    instrumentKey: z.string(),
+    instrumentKey: z.string().min(1).max(256),
     bucket: z.enum(['DELIVERY', 'MTF']),
-    quantity: z.string(),
-    totalCostMicro: z.string(),
-    entryDateIst: z.string(),
-    statementKey: z.string(),
+    quantity: quantitySchema,
+    totalCostMicro: microSchema,
+    entryDateIst: isoDateSchema,
+    statementKey: z.string().min(1).max(256),
   })
   .strict();
+
+/** An issue's stored suggestion, read as untrusted data. */
+function suggestionOf(issue: OpenIssue): z.infer<typeof suggestionSchema> {
+  let value: unknown;
+  try {
+    value = JSON.parse(issue.subject_json);
+  } catch (error) {
+    throw new AdjustmentError('invalid suggestion', { cause: error });
+  }
+  const parsed = suggestionSchema.safeParse(value);
+  if (!parsed.success) throw new AdjustmentError('invalid suggestion');
+  return parsed.data;
+}
 
 /** Stores an adjustment and recomputes its account. Returns the adjustment id. */
 export function applyAdjustment(
@@ -60,7 +76,7 @@ export function acceptStatementSuggestion(
 ): string {
   return db.transaction(() => {
     const issue = openIssue(db, issueId, FILL_FROM_STATEMENT);
-    const suggestion = suggestionSchema.parse(JSON.parse(issue.subject_json));
+    const suggestion = suggestionOf(issue);
     const id = createAdjustment(
       db,
       issue.account_id,
@@ -71,6 +87,7 @@ export function acceptStatementSuggestion(
         quantity: suggestion.quantity,
         totalCostMicro: suggestion.totalCostMicro,
         entryDateIst: suggestion.entryDateIst,
+        statementKey: suggestion.statementKey,
       },
       { ...options, source: 'broker_statement' },
     );
@@ -87,7 +104,7 @@ export function replaceRedundantLot(
 ): void {
   db.transaction(() => {
     const issue = openIssue(db, issueId, OPENING_LOT_REDUNDANT);
-    supersedeAdjustment(db, issue.fingerprint);
+    supersedeAdjustment(db, issue.fingerprint, issue.account_id);
     recompute(db, issue.account_id, options);
   })();
 }
@@ -114,7 +131,7 @@ export function restoreAndRecompute(
   })();
 }
 
-/** Dismisses an open issue; recomputes never re-open it. */
+/** Dismisses an open issue of any kind (the user acknowledges it); recomputes never re-open it. */
 export function dismissIssue(db: Database.Database, issueId: string): void {
   const changes = db
     .prepare("UPDATE issue SET status = 'dismissed' WHERE id = ? AND status = 'open'")

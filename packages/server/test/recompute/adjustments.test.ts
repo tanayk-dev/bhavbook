@@ -288,3 +288,104 @@ describe('validation and actions', () => {
     });
   });
 });
+
+describe('S10a-2 review follow-ups', () => {
+  const lotInput = {
+    kind: 'opening_lot',
+    instrumentKey: 'INE467B01029',
+    bucket: 'DELIVERY',
+    quantity: '10',
+    totalCostMicro: '800000000',
+    beforeDateIst: '2025-09-12',
+  };
+
+  it('rejects amounts and quantities that could overflow the 64-bit columns', async () => {
+    await withVault(({ db }) => {
+      expect(() =>
+        createAdjustment(db, ZERODHA, { ...lotInput, totalCostMicro: '99999999999999999999' }, { now }),
+      ).toThrow(AdjustmentError);
+      expect(() =>
+        createAdjustment(db, ZERODHA, { ...lotInput, quantity: '999999999999999' }, { now }),
+      ).toThrow(AdjustmentError);
+      expect(count(db, 'adjustment')).toBe(0);
+    });
+  });
+
+  it('stores a double submit once', async () => {
+    await withVault(({ db }) => {
+      const first = createAdjustment(db, ZERODHA, lotInput, { now });
+      expect(createAdjustment(db, ZERODHA, lotInput, { now })).toBe(first);
+      expect(count(db, 'adjustment')).toBe(1);
+    });
+  });
+
+  it('reports a corrupt stored adjustment as a fixed AdjustmentError, without its content', async () => {
+    await withVault(({ db }) => {
+      const id = createAdjustment(db, ZERODHA, lotInput, { now });
+      db.prepare(
+        'UPDATE adjustment SET payload_json = \'{"kind":"opening_lot","MARKER":1\' WHERE id = ?',
+      ).run(id);
+      try {
+        recompute(db, ZERODHA, { now });
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(AdjustmentError);
+        expect((error as Error).message).not.toContain('MARKER');
+      }
+    });
+  });
+
+  it('refuses a malformed statement suggestion, storing nothing', async () => {
+    await withVault(({ db }) => {
+      db.prepare(
+        `INSERT INTO issue (id, account_id, kind, fingerprint, subject_json, status, created_at)
+         VALUES ('i1', ?, 'fill_from_statement', 'x', '{"instrumentKey":"X","bucket":"DELIVERY","quantity":"1","totalCostMicro":"1","entryDateIst":"not a date","statementKey":"s"}', 'open', 'x')`,
+      ).run(ZERODHA);
+      expect(() => acceptStatementSuggestion(db, 'i1', { now })).toThrow(AdjustmentError);
+      db.prepare("UPDATE issue SET subject_json = '{broken' WHERE id = 'i1'").run();
+      expect(() => acceptStatementSuggestion(db, 'i1', { now })).toThrow(AdjustmentError);
+      expect(count(db, 'adjustment')).toBe(0);
+    });
+  });
+
+  it('restoring a reverted override supersedes the newer one for the same day (never two active)', async () => {
+    await withVault(async ({ db, service }) => {
+      const buy = 'TCS,INE467B01029,2025-09-12,NSE,EQ,EQ,buy,false,10,100,1,10,2025-09-12T10:00:00';
+      await importFiles(service, ZERODHA, [{ bytes: Buffer.from(`${ZERODHA_HEADER}\r\n${buy}`) }]);
+      const override = {
+        kind: 'product_override',
+        instrumentKey: 'INE467B01029',
+        tradeDateIst: '2025-09-12',
+      } as const;
+      const a = applyAdjustment(db, ZERODHA, { ...override, bucket: 'DELIVERY' }, { now });
+      revertAndRecompute(db, a, { now });
+      const b = applyAdjustment(db, ZERODHA, { ...override, bucket: 'MTF' }, { now });
+      restoreAndRecompute(db, a, { now });
+      expect(db.prepare('SELECT status FROM adjustment WHERE id = ?').pluck().get(b)).toBe('superseded');
+      expect(db.prepare('SELECT DISTINCT bucket FROM position').pluck().all()).toEqual(['DELIVERY']);
+    });
+  });
+
+  it('never offers a statement lot that already backs an active opening lot', async () => {
+    await withVault(async ({ db, service }) => {
+      const lines = fixtureBytes('dhan', 'trade_history')
+        .toString('utf8')
+        .split(/\r?\n/)
+        .filter((line) => !line.startsWith('2024-09-17,09:22:16,Bajaj Housing Finance'));
+      // A second orphan of the same ISIN and quantity, the next day.
+      lines.push(
+        '2024-09-19,10:00:00,Bajaj Housing Finance,SELL,DELIVERY,NSE,Equity,200,170.00,34000.00,Traded',
+      );
+      await importFiles(service, DHAN, [
+        { bytes: Buffer.from(lines.join('\r\n')) },
+        fixtureFile('dhan', 'tax_report', 'tax.xls'),
+      ]);
+      recompute(db, DHAN, { now });
+      const offers = openIssues(db, 'fill_from_statement');
+      expect(offers).toHaveLength(1);
+      acceptStatementSuggestion(db, offers[0]?.id ?? '', { now });
+      expect(openIssues(db, 'fill_from_statement')).toEqual([]);
+      expect(count(db, 'position', 'incomplete = 1')).toBe(1);
+    });
+  });
+});

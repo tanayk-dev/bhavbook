@@ -19,9 +19,10 @@ import {
   type TradeFill,
 } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
+import { z } from 'zod';
 import { writeBatches } from '../import/commit.js';
 import type { PreviewCounts } from '../import/preview.js';
-import { activeAdjustments } from '../services/adjustments.js';
+import { activeAdjustments, isoDateSchema, statementKeysInUse } from '../services/adjustments.js';
 import {
   mapInstrumentManually,
   resolveInstruments,
@@ -288,29 +289,46 @@ function incompleteFindings(positions: readonly Position[]): Map<string, string>
   );
 }
 
-/** Broker-statement lots of the account (Dhan Tax Report, Zerodha Tax P&L) with an ISIN. */
-function statementLots(db: Database.Database, accountId: string): StatementLot[] {
+const statementKeySchema = z.object({
+  isin: z.string().regex(/^[A-Z]{2}[A-Z0-9]{9}\d$/),
+  quantity: z.string().regex(/^[1-9]\d{0,11}$/),
+  buy_date: isoDateSchema.optional(),
+  entry_date: isoDateSchema.optional(),
+  sell_date: isoDateSchema.optional(),
+  exit_date: isoDateSchema.optional(),
+});
+const statementDataSchema = z.object({ buy_value_micro: z.string().regex(/^\d{1,18}$/) });
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Broker-statement lots of the account (Dhan Tax Report, Zerodha Tax P&L); malformed rows are skipped. */
+function statementLots(db: Database.Database, accountId: string, inUse: ReadonlySet<string>): StatementLot[] {
   const rows = db
     .prepare(
       "SELECT kind, dedup_key, key_json, data_json FROM statement_row WHERE account_id = ? AND kind IN ('dhan.tax.lot', 'zerodha.tax_pnl.lot')",
     )
     .all(accountId) as { kind: string; dedup_key: string; key_json: string; data_json: string }[];
   return rows.flatMap((row) => {
-    const key = JSON.parse(row.key_json) as Record<string, string | undefined>;
-    const data = JSON.parse(row.data_json) as Record<string, string | null | undefined>;
-    const buyDate = key.buy_date ?? key.entry_date;
-    const sellDate = key.sell_date ?? key.exit_date ?? null;
-    const quantity = key.quantity ?? '';
-    const value = data.buy_value_micro ?? '';
-    if (!key.isin || buyDate === undefined || !/^\d+$/.test(quantity) || !/^\d+$/.test(value)) return [];
+    const statementKey = `${row.kind}:${row.dedup_key}`;
+    const key = statementKeySchema.safeParse(parseJson(row.key_json));
+    const data = statementDataSchema.safeParse(parseJson(row.data_json));
+    if (!key.success || !data.success || inUse.has(statementKey)) return [];
+    const buyDate = key.data.buy_date ?? key.data.entry_date;
+    if (buyDate === undefined) return [];
     return [
       {
-        statementKey: `${row.kind}:${row.dedup_key}`,
-        isin: key.isin,
-        quantity: BigInt(quantity),
+        statementKey,
+        isin: key.data.isin,
+        quantity: BigInt(key.data.quantity),
         buyDateIst: buyDate,
-        sellDateIst: sellDate,
-        buyValueMicro: BigInt(value),
+        sellDateIst: key.data.sell_date ?? key.data.exit_date ?? null,
+        buyValueMicro: BigInt(data.data.buy_value_micro),
       },
     ];
   });
@@ -322,16 +340,23 @@ function statementFindings(
   accountId: string,
   positions: readonly Position[],
 ): Map<string, string> {
-  const orphans = positions
-    .filter((position) => position.incomplete && position.orphans.length > 0)
-    .map((position) => ({
-      anchorKey: position.anchorKey,
-      instrumentKey: position.instrumentKey,
-      bucket: position.bucket,
-      quantity: position.orphanQty,
-      dateIst: position.orphans[0]?.dateIst ?? '',
-    }));
-  const suggestions = suggestOpeningLots(orphans, statementLots(db, accountId));
+  // One suggestion per orphan sell (a run of orphan sells needs one lot each), keyed by position anchor and sell time.
+  const orphans = positions.flatMap((position) =>
+    position.incomplete
+      ? position.orphans.map((orphan) => ({
+          anchorKey: `${position.anchorKey}@${orphan.atUtc}`,
+          instrumentKey: position.instrumentKey,
+          bucket: position.bucket,
+          quantity: orphan.quantity,
+          dateIst: orphan.dateIst,
+        }))
+      : [],
+  );
+  if (orphans.length === 0) return new Map();
+  const suggestions = suggestOpeningLots(
+    orphans,
+    statementLots(db, accountId, statementKeysInUse(db, accountId)),
+  );
   return new Map(
     suggestions.map((suggestion) => [
       suggestion.anchorKey,
