@@ -11,6 +11,7 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -67,12 +68,35 @@ function writeAtomic(target: string, bytes: Buffer): void {
   }
 }
 
+/** A path in canonical form for comparison: resolved, symlinks followed when it exists, case-folded where the
+ * file system usually is case-insensitive (erring towards "same" only ever refuses a backup). */
+function canonical(file: string): string {
+  let resolved = path.resolve(file);
+  try {
+    resolved = realpathSync.native(resolved);
+  } catch {
+    // Not there yet: compare the resolved path.
+  }
+  return process.platform === 'win32' || process.platform === 'darwin' ? resolved.toLowerCase() : resolved;
+}
+
+const VAULT_FILE_SUFFIXES = ['', '-wal', '-shm', '-journal', '.lock'] as const;
+
+/** Whether `file` is the vault at `vaultPath` or one of its sidecar / lock files. */
+export function isVaultFile(file: string, vaultPath: string): boolean {
+  if (vaultPath === '' || vaultPath === ':memory:') return false;
+  const target = canonical(file);
+  return VAULT_FILE_SUFFIXES.some((suffix) => target === canonical(`${vaultPath}${suffix}`));
+}
+
 /** Snapshots the open vault into a `.bhav` file. */
 export function createBackup(
   db: Database.Database,
   outPath: string,
   options: BackupOptions,
 ): { path: string; sha256: string; bytes: number } {
+  if (isVaultFile(outPath, db.name))
+    throw new BackupError('refusing to write a backup over the vault or its files');
   const snapshot = tempPath(outPath, 'snapshot');
   try {
     // VACUUM INTO gives a transactionally consistent copy; the path is bound, never interpolated.

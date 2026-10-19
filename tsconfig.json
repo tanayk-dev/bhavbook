@@ -5,5 +5,5 @@
     "allowJs": true,
     "checkJs": false
   },
-  "include": ["*.ts", "*.mjs", "scripts/*.mjs"]
+  "include": ["*.ts", "*.mjs", "scripts/*.mjs", "scripts/*.ts"]
 }

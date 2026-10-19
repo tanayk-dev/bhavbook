@@ -3,6 +3,7 @@ export {
   autoBackup,
   backupDir,
   createBackup,
+  isVaultFile,
   MAX_BACKUP_BYTES,
   restoreBackup,
   type BackupOptions,
@@ -30,5 +31,7 @@ export {
   type Migration,
   type MigrateOptions,
 } from './migrations.js';
-export { openVault, type OpenVaultOptions } from './open.js';
+export { openVault, openVaultReadOnly, type OpenVaultOptions } from './open.js';
 export { APPLICATION_ID, hardenConnection, referenceFingerprint, schemaFingerprint } from './schema.js';
+export { acquireVaultLock, lockPath, STALE_LOCK_MS, type VaultLock } from './lock.js';
+export { recoverInterruptedRestore, type RecoveryResult } from './recover.js';

@@ -12,5 +12,13 @@
   },
   "scripts": {
     "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "@bhavbook/server": "workspace:*",
+    "better-sqlite3": "13.0.3",
+    "open": "11.0.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0"
   }
 }
