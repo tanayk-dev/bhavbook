@@ -5,13 +5,22 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { loadMigrations, migrate } from '../../src/vault/index.js';
 
+/** Runs `run` in a fresh temp directory and removes it afterwards (after the promise settles, for async tests). */
 export function withTempDir<T>(run: (dir: string) => T): T {
   const dir = mkdtempSync(path.join(tmpdir(), 'bhavbook-vault-'));
-  try {
-    return run(dir);
-  } finally {
+  const cleanup = (): void => {
     rmSync(dir, { recursive: true, force: true });
+  };
+  let result: T;
+  try {
+    result = run(dir);
+  } catch (error) {
+    cleanup();
+    throw error;
   }
+  if (result instanceof Promise) return result.finally(cleanup) as T;
+  cleanup();
+  return result;
 }
 
 export function migratedMemoryDb(): Database.Database {

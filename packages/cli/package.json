@@ -12,5 +12,9 @@
   },
   "scripts": {
     "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "@bhavbook/server": "workspace:*",
+    "open": "11.0.4"
   }
 }

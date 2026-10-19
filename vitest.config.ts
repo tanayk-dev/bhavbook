@@ -1,11 +1,39 @@
-import { defineConfig } from 'vitest/config';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { defineConfig, type TestProjectInlineConfiguration } from 'vitest/config';
+
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
+
+// Every project's tests fail on any non-loopback network connection (plan invariant 5).
+const NO_OUTBOUND = path.join(ROOT, 'scripts', 'no-outbound-sockets.ts');
+
+// Per-package test settings. Core runs in a non-IST timezone so any accidental use of the machine timezone fails
+// (ADR-0005).
+const OVERRIDES: Readonly<Record<string, TestProjectInlineConfiguration['test']>> = {
+  '@bhavbook/core': { env: { TZ: 'America/New_York' } },
+};
+
+/** One project per package and tool, inheriting this root config (setup files) via `extends: true`. */
+function projects(): TestProjectInlineConfiguration[] {
+  return ['packages', 'tools'].flatMap((base) =>
+    readdirSync(path.join(ROOT, base))
+      .map((name) => path.join(ROOT, base, name))
+      .filter((dir) => existsSync(path.join(dir, 'package.json')))
+      .map((dir) => {
+        const { name } = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name: string };
+        return { extends: true, test: { name, root: dir, ...OVERRIDES[name] } };
+      }),
+  );
+}
 
 // One root config: every package and tool is a Vitest project.
 // Coverage thresholds follow plan invariant 4 (80% overall, 100% branches for money, fees and FIFO).
 export default defineConfig({
   test: {
-    projects: ['packages/*', 'tools/*'],
+    projects: projects(),
     passWithNoTests: true,
+    setupFiles: [NO_OUTBOUND],
     coverage: {
       provider: 'v8',
       include: ['packages/*/src/**', 'tools/*/src/**'],
