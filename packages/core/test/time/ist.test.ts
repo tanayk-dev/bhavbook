@@ -1,7 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { formatIstDate, holdingDays, istDateOf, istDayBounds, parseIstLocal } from '../../src/time/index.js';
-import { ParseError } from '../../src/errors.js';
+import { InvalidArgumentError, ParseError } from '../../src/errors.js';
 
 describe('the test environment', () => {
   it('runs outside IST so machine-timezone bugs surface', () => {
@@ -89,7 +89,7 @@ describe('holdingDays', () => {
   });
 
   it('rejects an exit before the entry', () => {
-    expect(() => holdingDays('2024-09-18', '2024-09-17')).toThrow(RangeError);
+    expect(() => holdingDays('2024-09-18', '2024-09-17')).toThrow(InvalidArgumentError);
   });
 });
 

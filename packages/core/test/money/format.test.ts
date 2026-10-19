@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatINR } from '../../src/money/index.js';
+import { InvalidArgumentError } from '../../src/errors.js';
 
 describe('formatINR (Indian digit grouping)', () => {
   it.each([
@@ -25,5 +26,9 @@ describe('formatINR (Indian digit grouping)', () => {
   it('can omit the currency symbol', () => {
     expect(formatINR(123_456_780_000n, { symbol: false })).toBe('1,23,456.78');
     expect(formatINR(-1_500_000n, { symbol: false })).toBe('-1.50');
+  });
+
+  it('rejects an unsupported dp at runtime', () => {
+    expect(() => formatINR(1n, { dp: 3 as 2 })).toThrow(InvalidArgumentError);
   });
 });

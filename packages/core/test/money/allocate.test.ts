@@ -1,6 +1,7 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { allocateLargestRemainder } from '../../src/money/index.js';
+import { InvalidArgumentError } from '../../src/errors.js';
 
 describe('allocateLargestRemainder', () => {
   it.each([
@@ -13,6 +14,7 @@ describe('allocateLargestRemainder', () => {
     [5n, [0n, 1n], [0n, 5n]],
     [0n, [], []],
     [0n, [0n, 0n], [0n, 0n]],
+    [5n, [1n, 3n, 3n], [1n, 2n, 2n]],
   ])('allocates %s over %s as %s', (total, weights, expected) => {
     expect(allocateLargestRemainder(total, weights)).toEqual(expected);
   });
@@ -26,12 +28,26 @@ describe('allocateLargestRemainder', () => {
   });
 
   it('rejects a non-zero total with no weight to carry it', () => {
-    expect(() => allocateLargestRemainder(5n, [])).toThrow(RangeError);
-    expect(() => allocateLargestRemainder(5n, [0n, 0n])).toThrow(RangeError);
+    expect(() => allocateLargestRemainder(5n, [])).toThrow(InvalidArgumentError);
+    expect(() => allocateLargestRemainder(5n, [0n, 0n])).toThrow(InvalidArgumentError);
+  });
+
+  it('mirrors a negative total exactly (property)', () => {
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 0n, max: 10n ** 15n }),
+        fc.array(fc.bigInt({ min: 1n, max: 10n ** 12n }), { minLength: 1, maxLength: 8 }),
+        (total, weights) => {
+          const positive = allocateLargestRemainder(total, weights);
+          const negative = allocateLargestRemainder(-total, weights);
+          expect(negative).toEqual(positive.map((part) => -part));
+        },
+      ),
+    );
   });
 
   it('rejects negative weights', () => {
-    expect(() => allocateLargestRemainder(5n, [1n, -1n])).toThrow(RangeError);
+    expect(() => allocateLargestRemainder(5n, [1n, -1n])).toThrow(InvalidArgumentError);
   });
 
   it('always sums exactly and stays within one unit of the exact share (property)', () => {

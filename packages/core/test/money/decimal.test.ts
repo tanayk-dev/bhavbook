@@ -7,7 +7,7 @@ import {
   parseDecimalToMicro,
   roundMicro,
 } from '../../src/money/index.js';
-import { ParseError, PrecisionError } from '../../src/errors.js';
+import { InvalidArgumentError, ParseError, PrecisionError } from '../../src/errors.js';
 
 describe('constants', () => {
   it('defines rupee and paisa in micro-rupees', () => {
@@ -84,8 +84,8 @@ describe('normaliseDecimalString', () => {
     expect(normaliseDecimalString(input, dp, mode)).toBe(expected);
   });
 
-  it('rejects a negative dp', () => {
-    expect(() => normaliseDecimalString('1.5', -1, 'half-up')).toThrow(RangeError);
+  it.each([-1, 1.5, Number.NaN])('rejects dp %s', (dp) => {
+    expect(() => normaliseDecimalString('1.5', dp, 'half-up')).toThrow(InvalidArgumentError);
   });
 
   it('rejects malformed input', () => {
@@ -111,8 +111,8 @@ describe('roundMicro', () => {
   });
 
   it('rejects a non-positive unit', () => {
-    expect(() => roundMicro(1n, 0n, 'half-up')).toThrow(RangeError);
-    expect(() => roundMicro(1n, -5n, 'half-up')).toThrow(RangeError);
+    expect(() => roundMicro(1n, 0n, 'half-up')).toThrow(InvalidArgumentError);
+    expect(() => roundMicro(1n, -5n, 'half-up')).toThrow(InvalidArgumentError);
   });
 
   it('always returns a multiple of the unit within one unit of the input (property)', () => {

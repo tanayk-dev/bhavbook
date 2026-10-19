@@ -7,7 +7,7 @@ import {
   rateFromPercentString,
   roundMicro,
 } from '../../src/money/index.js';
-import { ParseError } from '../../src/errors.js';
+import { InvalidArgumentError, ParseError } from '../../src/errors.js';
 
 const ONE_LAKH_MICRO = 100_000_000_000n;
 
@@ -26,16 +26,16 @@ describe('rates', () => {
 
   it('builds a rate from a fraction', () => {
     expect(rateFromFraction(6n, 8n)).toEqual({ num: 3n, den: 4n });
-    expect(() => rateFromFraction(1n, 0n)).toThrow(RangeError);
-    expect(() => rateFromFraction(-1n, 2n)).toThrow(RangeError);
+    expect(() => rateFromFraction(1n, 0n)).toThrow(InvalidArgumentError);
+    expect(() => rateFromFraction(-1n, 2n)).toThrow(InvalidArgumentError);
   });
 
   it.each(['0.1', 'abc%', '%', '1e-3%', '-0.1%'])('rejects %j as a percentage', (input) => {
-    expect(() => rateFromPercentString(input)).toThrow(input === '-0.1%' ? RangeError : ParseError);
+    expect(() => rateFromPercentString(input)).toThrow(ParseError);
   });
 
   it('rejects negative decimal rates', () => {
-    expect(() => rateFromDecimalString('-0.18')).toThrow(RangeError);
+    expect(() => rateFromDecimalString('-0.18')).toThrow(ParseError);
   });
 });
 
