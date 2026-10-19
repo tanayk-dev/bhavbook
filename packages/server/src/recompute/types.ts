@@ -4,6 +4,10 @@ import type { Bucket } from '@bhavbook/core';
 
 export const INCOMPLETE_POSITION = 'incomplete_position';
 export const RECOMPUTE_FAILED = 'recompute_failed';
+/** An INCOMPLETE position a broker-statement lot could fill (ADR-0013 "Fill from broker statement"). */
+export const FILL_FROM_STATEMENT = 'fill_from_statement';
+/** An opening lot real fills now cover (E7). */
+export const OPENING_LOT_REDUNDANT = 'opening_lot_redundant';
 
 export interface IssueForecast {
   readonly kind: typeof INCOMPLETE_POSITION;
