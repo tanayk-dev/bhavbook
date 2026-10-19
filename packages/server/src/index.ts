@@ -6,3 +6,5 @@ export * from './vault/index.js';
 export * from './import/index.js';
 export * from './services/instruments.js';
 export * from './recompute/index.js';
+export * from './recompute/actions.js';
+export * from './services/adjustments.js';

@@ -1,31 +1,41 @@
-// Recompute (plan S9 task 5, ADR-0007): derived state is a pure function of the imported rows. For one account:
-// resolve instruments (S8), key every row (ISIN, else its alias, else a broker-local id), run the core pipeline,
-// and replace the account's allocations, positions and lots in one transaction. INCOMPLETE positions are kept in
-// step with `incomplete_position` issues. Imported rows are never edited.
+// Recompute (plan S9 task 5, ADR-0007): derived state is a pure function of the imported rows and the active
+// adjustments. For one account: resolve instruments (S8), key every row (ISIN, else its alias, else a broker-local
+// id), run the core pipeline with the active adjustments (S10a), and replace the account's allocations, positions
+// and lots in one transaction. Issues are kept in step: INCOMPLETE positions, statement lots that could fill them,
+// and opening lots real fills now cover. Imported rows are never edited.
 //
-// Scope today: trade-row allocations only. Adjustment and corporate-action allocations (S10a/S10b), user
-// exclusions (`position.excluded`, S10a) and charges (S12a) are added by those steps and must be rebuilt here too.
+// Not yet here: corporate-action allocations (S10b) and charges (S12a); those steps extend this rebuild.
 import { createHash } from 'node:crypto';
 import type { ParseResult } from '@bhavbook/adapters';
 import {
-  allocateBuckets,
-  buildPositions,
-  matchFifo,
+  reconstructAccount,
+  redundantOpeningLots,
+  suggestOpeningLots,
+  type Adjustment,
   type Bucket,
   type FillAllocation,
   type Position,
+  type StatementLot,
   type TradeFill,
 } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
+import { z } from 'zod';
 import { writeBatches } from '../import/commit.js';
 import type { PreviewCounts } from '../import/preview.js';
+import { activeAdjustments, isoDateSchema, statementKeysInUse } from '../services/adjustments.js';
 import {
   mapInstrumentManually,
   resolveInstruments,
   type AliasRef,
   type ManualTarget,
 } from '../services/instruments.js';
-import { INCOMPLETE_POSITION, RECOMPUTE_FAILED, type IssueForecast } from './types.js';
+import {
+  FILL_FROM_STATEMENT,
+  INCOMPLETE_POSITION,
+  OPENING_LOT_REDUNDANT,
+  RECOMPUTE_FAILED,
+  type IssueForecast,
+} from './types.js';
 
 export * from './types.js';
 
@@ -122,13 +132,12 @@ function loadFills(db: Database.Database, accountId: string, broker: string): Tr
   }));
 }
 
-/** Pure: the positions an account's fills reconstruct to (no product overrides until S10a). */
-export function reconstruct(fills: readonly TradeFill[]): {
-  allocations: FillAllocation[];
-  positions: Position[];
-} {
-  const allocations = allocateBuckets(fills, []);
-  return { allocations, positions: buildPositions(allocations, matchFifo(allocations)) };
+/** Pure: the positions an account's fills and active adjustments reconstruct to. */
+export function reconstruct(
+  fills: readonly TradeFill[],
+  adjustments: readonly Adjustment[] = [],
+): { allocations: readonly FillAllocation[]; positions: readonly Position[] } {
+  return reconstructAccount(fills, adjustments);
 }
 
 function idOf(ids: ReadonlyMap<string, bigint>, key: string): bigint {
@@ -145,19 +154,23 @@ function writeDerived(
 ): void {
   // Children go with their parents (lots, reconciliation, charges cascade); allocations last.
   db.prepare('DELETE FROM position WHERE account_id = ?').run(accountId);
-  db.prepare('DELETE FROM fill_allocation WHERE account_id = ? AND trade_row_id IS NOT NULL').run(accountId);
+  db.prepare('DELETE FROM fill_allocation WHERE account_id = ? AND corporate_action_id IS NULL').run(
+    accountId,
+  );
   const insertAllocation = db
     .prepare(
-      `INSERT INTO fill_allocation (account_id, trade_row_id, instrument_key, bucket, side, quantity, value_micro,
-         inferred)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      `INSERT INTO fill_allocation (account_id, trade_row_id, adjustment_id, instrument_key, bucket, side, quantity,
+         value_micro, inferred)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     )
     .pluck();
   const allocationIds = new Map<string, bigint>();
   for (const allocation of allocations) {
+    const fromAdjustment = allocation.adjustmentId !== null;
     const id: unknown = insertAllocation.get(
       accountId,
-      BigInt(allocation.fillId),
+      fromAdjustment ? null : BigInt(allocation.fillId),
+      allocation.adjustmentId,
       allocation.instrumentKey,
       allocation.bucket,
       allocation.side,
@@ -169,9 +182,9 @@ function writeDerived(
     allocationIds.set(allocation.key, id);
   }
   const insertPosition = db.prepare(
-    `INSERT INTO position (id, account_id, instrument_key, bucket, state, incomplete, orphan_qty, opened_at_utc,
-       closed_at_utc, anchor_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO position (id, account_id, instrument_key, bucket, state, incomplete, excluded, orphan_qty,
+       opened_at_utc, closed_at_utc, anchor_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertLot = db.prepare(
     `INSERT INTO lot (position_id, entry_allocation_id, exit_allocation_id, quantity, entry_value_micro,
@@ -190,6 +203,7 @@ function writeDerived(
       position.bucket,
       position.state,
       position.incomplete ? 1n : 0n,
+      position.excluded ? 1n : 0n,
       position.orphanQty,
       position.openedAtUtc,
       position.closedAtUtc,
@@ -223,31 +237,19 @@ interface IssueRow {
 }
 
 /**
- * One open issue per INCOMPLETE position, fingerprinted by the position's anchor (opening fill + bucket), which
- * survives re-keying; issues of positions no longer incomplete are resolved; dismissed ones stay dismissed.
+ * Keeps one kind of issue in step with the current findings (fingerprint -> subject): new ones open, ones no
+ * longer found are resolved, resolved ones found again re-open, and dismissed ones stay dismissed.
  */
-function syncIncompleteIssues(
+function syncIssues(
   db: Database.Database,
   accountId: string,
-  positions: readonly Position[],
+  kind: string,
+  current: ReadonlyMap<string, string>,
   at: string,
 ): void {
-  const current = new Map(
-    positions
-      .filter((position) => position.incomplete)
-      .map((position) => [
-        position.anchorKey,
-        JSON.stringify({
-          instrumentKey: position.instrumentKey,
-          bucket: position.bucket,
-          orphanQty: position.orphanQty.toString(),
-          openedAtUtc: position.openedAtUtc,
-        }),
-      ]),
-  );
   const existing = db
     .prepare('SELECT id, fingerprint, status, subject_json FROM issue WHERE account_id = ? AND kind = ?')
-    .all(accountId, INCOMPLETE_POSITION) as IssueRow[];
+    .all(accountId, kind) as IssueRow[];
   const known = new Map(existing.map((issue) => [issue.fingerprint, issue]));
   const insert = db.prepare(
     `INSERT INTO issue (id, account_id, kind, fingerprint, subject_json, status, created_at)
@@ -260,24 +262,124 @@ function syncIncompleteIssues(
   const resolve = db.prepare("UPDATE issue SET status = 'resolved', resolved_at = ? WHERE id = ?");
   for (const [fingerprint, subject] of current) {
     const issue = known.get(fingerprint);
-    if (issue === undefined) {
-      insert.run(
-        `iss_${digest(accountId, INCOMPLETE_POSITION, fingerprint)}`,
-        accountId,
-        INCOMPLETE_POSITION,
-        fingerprint,
-        subject,
-        at,
-      );
-    } else if (issue.status === 'resolved') {
-      reopen.run(subject, issue.id);
-    } else if (issue.subject_json !== subject) {
-      refresh.run(subject, issue.id);
-    }
+    if (issue === undefined)
+      insert.run(`iss_${digest(accountId, kind, fingerprint)}`, accountId, kind, fingerprint, subject, at);
+    else if (issue.status === 'resolved') reopen.run(subject, issue.id);
+    else if (issue.subject_json !== subject) refresh.run(subject, issue.id);
   }
   for (const issue of existing) {
     if (issue.status === 'open' && !current.has(issue.fingerprint)) resolve.run(at, issue.id);
   }
+}
+
+/** One per INCOMPLETE position, fingerprinted by its anchor (which survives re-keying). */
+function incompleteFindings(positions: readonly Position[]): Map<string, string> {
+  return new Map(
+    positions
+      .filter((position) => position.incomplete)
+      .map((position) => [
+        position.anchorKey,
+        JSON.stringify({
+          instrumentKey: position.instrumentKey,
+          bucket: position.bucket,
+          orphanQty: position.orphanQty.toString(),
+          openedAtUtc: position.openedAtUtc,
+        }),
+      ]),
+  );
+}
+
+const statementKeySchema = z.object({
+  isin: z.string().regex(/^[A-Z]{2}[A-Z0-9]{9}\d$/),
+  quantity: z.string().regex(/^[1-9]\d{0,11}$/),
+  buy_date: isoDateSchema.optional(),
+  entry_date: isoDateSchema.optional(),
+  sell_date: isoDateSchema.optional(),
+  exit_date: isoDateSchema.optional(),
+});
+const statementDataSchema = z.object({ buy_value_micro: z.string().regex(/^\d{1,18}$/) });
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Broker-statement lots of the account (Dhan Tax Report, Zerodha Tax P&L); malformed rows are skipped. */
+function statementLots(db: Database.Database, accountId: string, inUse: ReadonlySet<string>): StatementLot[] {
+  const rows = db
+    .prepare(
+      "SELECT kind, dedup_key, key_json, data_json FROM statement_row WHERE account_id = ? AND kind IN ('dhan.tax.lot', 'zerodha.tax_pnl.lot')",
+    )
+    .all(accountId) as { kind: string; dedup_key: string; key_json: string; data_json: string }[];
+  return rows.flatMap((row) => {
+    const statementKey = `${row.kind}:${row.dedup_key}`;
+    const key = statementKeySchema.safeParse(parseJson(row.key_json));
+    const data = statementDataSchema.safeParse(parseJson(row.data_json));
+    if (!key.success || !data.success || inUse.has(statementKey)) return [];
+    const buyDate = key.data.buy_date ?? key.data.entry_date;
+    if (buyDate === undefined) return [];
+    return [
+      {
+        statementKey,
+        isin: key.data.isin,
+        quantity: BigInt(key.data.quantity),
+        buyDateIst: buyDate,
+        sellDateIst: key.data.sell_date ?? key.data.exit_date ?? null,
+        buyValueMicro: BigInt(data.data.buy_value_micro),
+      },
+    ];
+  });
+}
+
+/** INCOMPLETE positions a statement lot could fill: "Fill from broker statement" (ADR-0013). */
+function statementFindings(
+  db: Database.Database,
+  accountId: string,
+  positions: readonly Position[],
+): Map<string, string> {
+  // One suggestion per orphan sell (a run of orphan sells needs one lot each), keyed by position anchor and sell time.
+  const orphans = positions.flatMap((position) =>
+    position.incomplete
+      ? position.orphans.map((orphan) => ({
+          anchorKey: `${position.anchorKey}@${orphan.atUtc}`,
+          instrumentKey: position.instrumentKey,
+          bucket: position.bucket,
+          quantity: orphan.quantity,
+          dateIst: orphan.dateIst,
+        }))
+      : [],
+  );
+  if (orphans.length === 0) return new Map();
+  const suggestions = suggestOpeningLots(
+    orphans,
+    statementLots(db, accountId, statementKeysInUse(db, accountId)),
+  );
+  return new Map(
+    suggestions.map((suggestion) => [
+      suggestion.anchorKey,
+      JSON.stringify({
+        instrumentKey: suggestion.instrumentKey,
+        bucket: suggestion.bucket,
+        quantity: suggestion.quantity.toString(),
+        totalCostMicro: suggestion.totalCostMicro.toString(),
+        entryDateIst: suggestion.entryDateIst,
+        statementKey: suggestion.statementKey,
+      }),
+    ]),
+  );
+}
+
+/** Opening lots that real fills now cover (E7): offered for replacement, never replaced automatically. */
+function redundantFindings(
+  fills: readonly TradeFill[],
+  adjustments: readonly Adjustment[],
+): Map<string, string> {
+  return new Map(
+    redundantOpeningLots(fills, adjustments).map((id) => [id, JSON.stringify({ adjustmentId: id })]),
+  );
 }
 
 function timestamp(options: RecomputeOptions): string {
@@ -294,9 +396,13 @@ export function recompute(
   return db.transaction(() => {
     const broker = brokerOf(db, accountId);
     resolveInstruments(db, accountId, { now: () => new Date(at) });
-    const { allocations, positions } = reconstruct(loadFills(db, accountId, broker));
+    const fills = loadFills(db, accountId, broker);
+    const adjustments = activeAdjustments(db, accountId);
+    const { allocations, positions } = reconstruct(fills, adjustments);
     writeDerived(db, accountId, allocations, positions);
-    syncIncompleteIssues(db, accountId, positions, at);
+    syncIssues(db, accountId, INCOMPLETE_POSITION, incompleteFindings(positions), at);
+    syncIssues(db, accountId, FILL_FROM_STATEMENT, statementFindings(db, accountId, positions), at);
+    syncIssues(db, accountId, OPENING_LOT_REDUNDANT, redundantFindings(fills, adjustments), at);
     db.prepare(
       "UPDATE issue SET status = 'resolved', resolved_at = ? WHERE account_id = ? AND kind = ? AND status = 'open'",
     ).run(at, accountId, RECOMPUTE_FAILED);
@@ -374,10 +480,10 @@ const EMPTY_COUNTS: PreviewCounts = {
 };
 
 /** Positions as a recompute would build them now (instrument resolution included). Call inside a transaction. */
-function currentPositions(db: Database.Database, accountId: string, at: string): Position[] {
+function currentPositions(db: Database.Database, accountId: string, at: string): readonly Position[] {
   const broker = brokerOf(db, accountId);
   resolveInstruments(db, accountId, { now: () => new Date(at) });
-  return reconstruct(loadFills(db, accountId, broker)).positions;
+  return reconstruct(loadFills(db, accountId, broker), activeAdjustments(db, accountId)).positions;
 }
 
 /**
