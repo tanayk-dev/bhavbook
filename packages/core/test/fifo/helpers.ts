@@ -29,7 +29,14 @@ export function fill(spec: FillSpec): TradeFill {
   const [date = '', time = '00:00'] = spec.at.split(' ');
   const [hours = '0', minutes = '0', seconds = '0'] = time.split(':');
   const utc = new Date(
-    Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10)), Number(hours), Number(minutes), Number(seconds)) -
+    Date.UTC(
+      Number(date.slice(0, 4)),
+      Number(date.slice(5, 7)) - 1,
+      Number(date.slice(8, 10)),
+      Number(hours),
+      Number(minutes),
+      Number(seconds),
+    ) -
       330 * 60_000,
   )
     .toISOString()
@@ -56,4 +63,11 @@ export function rupees(value: bigint): string {
   const magnitude = value < 0n ? -value : value;
   const paise = magnitude % RUPEE;
   return `${sign}${String(magnitude / RUPEE)}${paise === 0n ? '' : `.${paise.toString().padStart(6, '0').replace(/0+$/, '')}`}`;
+}
+
+/** The first element, or a test failure. */
+export function first<T>(items: readonly T[]): T {
+  const [item] = items;
+  if (item === undefined) throw new Error('expected at least one item');
+  return item;
 }

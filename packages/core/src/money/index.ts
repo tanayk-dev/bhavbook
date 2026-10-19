@@ -1,4 +1,4 @@
-export { allocateLargestRemainder } from './allocate.js';
+export { allocateLargestRemainder, splitByWeight } from './allocate.js';
 export {
   MICRO_PER_PAISA,
   MICRO_PER_RUPEE,

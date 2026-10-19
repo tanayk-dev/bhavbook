@@ -10,7 +10,7 @@ import {
   type ProductOverride,
   type TradeFill,
 } from '../../src/index.js';
-import { fill, rupees } from './helpers.js';
+import { fill, first, rupees } from './helpers.js';
 
 function reconstruct(fills: readonly TradeFill[], overrides: readonly ProductOverride[] = []): Position[] {
   const allocations = allocateBuckets(fills, overrides);
@@ -59,9 +59,18 @@ describe('PRD §7.5 worked examples', () => {
       ],
       [],
     );
-    expect(allocations.every((allocation) => allocation.bucket === 'INTRADAY' && allocation.inferred)).toBe(true);
+    expect(allocations.every((allocation) => allocation.bucket === 'INTRADAY' && allocation.inferred)).toBe(
+      true,
+    );
     expect(buildPositions(allocations, matchFifo(allocations)).map(summary)).toEqual([
-      { bucket: 'INTRADAY', state: 'CLOSED', incomplete: false, orphanQty: 0n, lots: ['20 2000->2020'], gross: '20' },
+      {
+        bucket: 'INTRADAY',
+        state: 'CLOSED',
+        incomplete: false,
+        orphanQty: 0n,
+        lots: ['20 2000->2020'],
+        gross: '20',
+      },
     ]);
   });
 
@@ -72,8 +81,22 @@ describe('PRD §7.5 worked examples', () => {
       fill({ side: 'SELL', qty: 5, price: 112, at: '2025-01-02 11:00' }),
     ]);
     expect(positions.map(summary)).toEqual([
-      { bucket: 'DELIVERY', state: 'OPEN', incomplete: false, orphanQty: 0n, lots: ['10 1000->open'], gross: '0' },
-      { bucket: 'INTRADAY', state: 'CLOSED', incomplete: false, orphanQty: 0n, lots: ['5 550->560'], gross: '10' },
+      {
+        bucket: 'DELIVERY',
+        state: 'OPEN',
+        incomplete: false,
+        orphanQty: 0n,
+        lots: ['10 1000->open'],
+        gross: '0',
+      },
+      {
+        bucket: 'INTRADAY',
+        state: 'CLOSED',
+        incomplete: false,
+        orphanQty: 0n,
+        lots: ['5 550->560'],
+        gross: '10',
+      },
     ]);
   });
 
@@ -83,7 +106,7 @@ describe('PRD §7.5 worked examples', () => {
       fill({ side: 'SELL', qty: 10, price: 105, at: '2025-01-05 10:00', product: 'DELIVERY' }),
     ]);
     expect(positions).toHaveLength(1);
-    expect(summary(positions[0] as Position)).toMatchObject({ gross: '50', state: 'CLOSED' });
+    expect(summary(first(positions))).toMatchObject({ gross: '50', state: 'CLOSED' });
   });
 
   it('E5: a sell with no prior buy is an INCOMPLETE position with the orphan quantity', () => {
@@ -101,7 +124,14 @@ describe('PRD §7.5 worked examples', () => {
     ]);
     expect(positions.map(summary)).toEqual([
       { bucket: 'DELIVERY', state: 'CLOSED', incomplete: true, orphanQty: 200n, lots: [], gross: '0' },
-      { bucket: 'INTRADAY', state: 'CLOSED', incomplete: false, orphanQty: 0n, lots: ['100 18100->17350'], gross: '-750' },
+      {
+        bucket: 'INTRADAY',
+        state: 'CLOSED',
+        incomplete: false,
+        orphanQty: 0n,
+        lots: ['100 18100->17350'],
+        gross: '-750',
+      },
     ]);
   });
 
@@ -117,7 +147,7 @@ describe('PRD §7.5 worked examples', () => {
       ['INTRADAY', false],
       ['INTRADAY', false],
     ]);
-    expect(summary(buildPositions(allocations, matchFifo(allocations))[0] as Position).gross).toBe('38.8');
+    expect(summary(first(buildPositions(allocations, matchFifo(allocations)))).gross).toBe('38.8');
   });
 });
 
@@ -131,10 +161,12 @@ describe('same-day netting (ADR-0012)', () => {
       [],
     );
     const buys = allocations.filter((allocation) => allocation.side === 'BUY');
-    expect(buys.map((allocation) => [allocation.bucket, allocation.quantity, allocation.valueMicro])).toEqual([
-      ['INTRADAY', 4n, 400_400_000n],
-      ['DELIVERY', 6n, 600_600_000n],
-    ]);
+    expect(buys.map((allocation) => [allocation.bucket, allocation.quantity, allocation.valueMicro])).toEqual(
+      [
+        ['INTRADAY', 4n, 400_400_000n],
+        ['DELIVERY', 6n, 600_600_000n],
+      ],
+    );
   });
 
   it('takes the intraday quantity from the earliest sells, whatever the buy times', () => {
@@ -147,7 +179,13 @@ describe('same-day netting (ADR-0012)', () => {
       [],
     );
     const sells = allocations.filter((allocation) => allocation.side === 'SELL');
-    expect(sells.map((allocation) => [allocation.executedAtUtc.slice(11, 16), allocation.bucket, allocation.quantity])).toEqual([
+    expect(
+      sells.map((allocation) => [
+        allocation.executedAtUtc.slice(11, 16),
+        allocation.bucket,
+        allocation.quantity,
+      ]),
+    ).toEqual([
       ['04:00', 'INTRADAY', 3n],
       ['05:30', 'INTRADAY', 2n],
       ['05:30', 'DELIVERY', 1n],
@@ -159,16 +197,23 @@ describe('same-day netting (ADR-0012)', () => {
       [
         fill({ side: 'BUY', qty: 10, price: 100, at: '2025-01-02 10:00', product: 'MTF', instrument: 'A' }),
         fill({ side: 'SELL', qty: 4, price: 100, at: '2025-01-02 11:00', product: 'MTF', instrument: 'A' }),
-        fill({ side: 'BUY', qty: 7, price: 100, at: '2025-01-02 10:00', product: 'INTRADAY', instrument: 'B' }),
+        fill({
+          side: 'BUY',
+          qty: 7,
+          price: 100,
+          at: '2025-01-02 10:00',
+          product: 'INTRADAY',
+          instrument: 'B',
+        }),
       ],
       [],
     );
-    expect(allocations.map((allocation) => `${allocation.instrumentKey} ${allocation.side} ${allocation.bucket} ${String(allocation.quantity)}`)).toEqual([
-      'A BUY INTRADAY 4',
-      'A BUY MTF 6',
-      'B BUY DELIVERY 7',
-      'A SELL INTRADAY 4',
-    ]);
+    expect(
+      allocations.map(
+        (allocation) =>
+          `${allocation.instrumentKey} ${allocation.side} ${allocation.bucket} ${String(allocation.quantity)}`,
+      ),
+    ).toEqual(['A BUY INTRADAY 4', 'A BUY MTF 6', 'B BUY DELIVERY 7', 'A SELL INTRADAY 4']);
   });
 
   it('applies a product override to the whole (account, instrument, day), not inferred', () => {
@@ -176,7 +221,12 @@ describe('same-day netting (ADR-0012)', () => {
       fill({ side: 'BUY', qty: 10, price: 100, at: '2025-01-02 10:00' }),
       fill({ side: 'SELL', qty: 10, price: 101, at: '2025-01-02 11:00' }),
     ];
-    const override: ProductOverride = { accountId: 'acc', instrumentKey: 'INE000000001', tradeDateIst: '2025-01-02', bucket: 'DELIVERY' };
+    const override: ProductOverride = {
+      accountId: 'acc',
+      instrumentKey: 'INE000000001',
+      tradeDateIst: '2025-01-02',
+      bucket: 'DELIVERY',
+    };
     const allocations = allocateBuckets(fills, [override]);
     expect(allocations.map((allocation) => [allocation.bucket, allocation.inferred])).toEqual([
       ['DELIVERY', false],
@@ -192,7 +242,14 @@ describe('intraday shorts', () => {
       fill({ side: 'BUY', qty: 10, price: 100, at: '2025-01-02 11:00' }),
     ]);
     expect(positions.map(summary)).toEqual([
-      { bucket: 'INTRADAY', state: 'CLOSED', incomplete: false, orphanQty: 0n, lots: ['10 1000->1050'], gross: '50' },
+      {
+        bucket: 'INTRADAY',
+        state: 'CLOSED',
+        incomplete: false,
+        orphanQty: 0n,
+        lots: ['10 1000->1050'],
+        gross: '50',
+      },
     ]);
   });
 
@@ -212,10 +269,31 @@ describe('isolation (ADR-0011)', () => {
     const positions = reconstruct([
       fill({ side: 'BUY', qty: 10, price: 100, at: '2025-01-01 10:00', account: 'A', product: 'DELIVERY' }),
       fill({ side: 'SELL', qty: 10, price: 110, at: '2025-01-03 10:00', account: 'B', product: 'DELIVERY' }),
-      fill({ side: 'BUY', qty: 5, price: 100, at: '2025-01-01 10:00', account: 'A', product: 'MTF', instrument: 'X' }),
-      fill({ side: 'SELL', qty: 5, price: 110, at: '2025-01-03 10:00', account: 'A', product: 'DELIVERY', instrument: 'X' }),
+      fill({
+        side: 'BUY',
+        qty: 5,
+        price: 100,
+        at: '2025-01-01 10:00',
+        account: 'A',
+        product: 'MTF',
+        instrument: 'X',
+      }),
+      fill({
+        side: 'SELL',
+        qty: 5,
+        price: 110,
+        at: '2025-01-03 10:00',
+        account: 'A',
+        product: 'DELIVERY',
+        instrument: 'X',
+      }),
     ]);
-    expect(positions.map((position) => `${position.accountId} ${position.instrumentKey} ${position.bucket} ${position.state} ${String(position.incomplete)}`)).toEqual([
+    expect(
+      positions.map(
+        (position) =>
+          `${position.accountId} ${position.instrumentKey} ${position.bucket} ${position.state} ${String(position.incomplete)}`,
+      ),
+    ).toEqual([
       'A INE000000001 DELIVERY OPEN false',
       'A X DELIVERY CLOSED true',
       'A X MTF OPEN false',
@@ -231,7 +309,14 @@ describe('isolation (ADR-0011)', () => {
       fill({ side: 'SELL', qty: 12, price: 110, at: '2025-01-05 10:00', product: 'DELIVERY' }),
       fill({ side: 'BUY', qty: 4, price: 100, at: '2025-01-07 10:00', product: 'DELIVERY' }),
     ]);
-    expect(positions.map((position) => [position.state, position.incomplete, position.orphanQty, position.lots.length])).toEqual([
+    expect(
+      positions.map((position) => [
+        position.state,
+        position.incomplete,
+        position.orphanQty,
+        position.lots.length,
+      ]),
+    ).toEqual([
       ['CLOSED', true, 5n, 0],
       ['CLOSED', true, 2n, 1],
       ['OPEN', false, 0n, 1],
@@ -253,5 +338,4 @@ describe('position identity', () => {
     expect(first?.openedAtUtc).toBe(fills[0]?.executedAtUtc);
     expect(first?.closedAtUtc).toBe(fills[1]?.executedAtUtc);
   });
-
 });

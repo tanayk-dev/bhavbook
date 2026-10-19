@@ -5,3 +5,5 @@ export * from './errors.js';
 export * from './money/index.js';
 export * from './time/index.js';
 export * from './instruments/index.js';
+export * from './fifo/index.js';
+export * from './positions/index.js';

@@ -75,7 +75,8 @@ describe('reconstruction properties', () => {
             expect(asEntry.reduce((sum, lot) => sum + lot.entryValueMicro, 0n)).toBe(allocation.valueMicro);
           } else {
             const quantity =
-              asExit.reduce((sum, lot) => sum + lot.quantity, 0n) + asOrphan.reduce((sum, orphan) => sum + orphan.quantity, 0n);
+              asExit.reduce((sum, lot) => sum + lot.quantity, 0n) +
+              asOrphan.reduce((sum, orphan) => sum + orphan.quantity, 0n);
             const value =
               asExit.reduce((sum, lot) => sum + (lot.exitValueMicro ?? 0n), 0n) +
               asOrphan.reduce((sum, orphan) => sum + orphan.valueMicro, 0n);
@@ -86,7 +87,9 @@ describe('reconstruction properties', () => {
         // Holdings never go negative at any point.
         const positions = buildPositions(allocations, { lots, orphans });
         for (const position of positions) {
-          const open = position.lots.filter((lot) => lot.exit === null).reduce((sum, lot) => sum + lot.quantity, 0n);
+          const open = position.lots
+            .filter((lot) => lot.exit === null)
+            .reduce((sum, lot) => sum + lot.quantity, 0n);
           expect(open >= 0n).toBe(true);
           expect(position.state === 'OPEN').toBe(open > 0n);
         }
@@ -97,7 +100,10 @@ describe('reconstruction properties', () => {
 
   it('gives the same result for any input order', () => {
     const shuffledPair = fillsArbitrary.chain((fills) =>
-      fc.tuple(fc.constant(fills), fc.shuffledSubarray(fills, { minLength: fills.length, maxLength: fills.length })),
+      fc.tuple(
+        fc.constant(fills),
+        fc.shuffledSubarray(fills, { minLength: fills.length, maxLength: fills.length }),
+      ),
     );
     fc.assert(
       fc.property(shuffledPair, ([fills, shuffled]) => {
@@ -122,12 +128,14 @@ describe('groupFillsIntoOrders', () => {
       fill({ side: 'BUY', qty: 1, price: 99, at: '2025-01-02 12:30' }),
     ];
     const orders = groupFillsIntoOrders(fills);
-    expect(orders.map((order) => [order.side, order.quantity, order.valueMicro, order.fills.length])).toEqual([
-      ['BUY', 5n, 502_000_000n, 2],
-      ['SELL', 5n, 510_000_000n, 1],
-      ['BUY', 7n, 693_000_000n, 1],
-      ['BUY', 1n, 99_000_000n, 1],
-    ]);
+    expect(orders.map((order) => [order.side, order.quantity, order.valueMicro, order.fills.length])).toEqual(
+      [
+        ['BUY', 5n, 502_000_000n, 2],
+        ['SELL', 5n, 510_000_000n, 1],
+        ['BUY', 7n, 693_000_000n, 1],
+        ['BUY', 1n, 99_000_000n, 1],
+      ],
+    );
     expect(new Set(orders.map((order) => order.key)).size).toBe(4);
   });
 });
