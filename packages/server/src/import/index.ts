@@ -1,4 +1,5 @@
 export type { CommittedBatch } from './commit.js';
+export { gapsBetween, mergeRanges, type DateRange, type KindCoverage } from './coverage.js';
 export {
   ERROR_SAMPLE,
   WRONG_ACCOUNT_SHARE,
@@ -14,7 +15,8 @@ export {
   encodeTradePayload,
   type TradePayload,
 } from './payload.js';
-export { MAX_IMPORT_BYTES } from './read.js';
+export { MAX_IMPORT_BYTES, MAX_LINE_CHARS, MAX_TEXT_COLUMNS, MAX_TEXT_LINES } from './read.js';
+export type { UndoResult } from './undo.js';
 export {
   createImportService,
   DEFAULT_ADAPTERS,

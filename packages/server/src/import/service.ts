@@ -5,9 +5,11 @@ import { dhanAdapter, zerodhaAdapter, type BrokerAdapter } from '@bhavbook/adapt
 import type Database from 'better-sqlite3';
 import { autoBackup } from '../vault/index.js';
 import { writeBatches, type CommittedBatch } from './commit.js';
+import { accountCoverage, type KindCoverage } from './coverage.js';
 import { ImportError } from './errors.js';
 import { previewFile, type FilePreview, type ImportFile, type ParsedFile, type SeenKeys } from './preview.js';
 import { MAX_IMPORT_BYTES } from './read.js';
+import { removeBatch, type UndoResult } from './undo.js';
 
 export const PREVIEW_TTL_MS = 15 * 60 * 1000;
 /** Previews kept at once; the oldest is dropped first (each holds parsed files in memory). */
@@ -44,6 +46,9 @@ export interface CommitResult {
 export interface ImportService {
   previewImport(accountId: string, files: readonly ImportFile[]): Promise<ImportPreview>;
   commitImport(token: string): CommitResult;
+  /** Removes one committed batch (pre-undo backup, one transaction, then the recompute hook). */
+  undoImport(batchId: string): UndoResult;
+  coverage(accountId: string): KindCoverage[];
 }
 
 interface Pending {
@@ -135,6 +140,35 @@ export function createImportService(options: ImportServiceOptions): ImportServic
       pending.delete(token);
       options.onChanged?.(entry.accountId);
       return { batches };
+    },
+
+    undoImport(batchId) {
+      // Cheap check first, so an unknown or already-undone batch never costs a backup.
+      if (db.prepare('SELECT 1 FROM import_batch WHERE id = ?').get(batchId) === undefined) {
+        throw new ImportError('unknown import batch');
+      }
+      const at = now();
+      try {
+        autoBackup(db, vaultPath, 'pre-undo', { appVersion, now: () => at });
+      } catch (error) {
+        throw new ImportError('could not back up the vault before the undo; nothing was changed', {
+          cause: error,
+        });
+      }
+      let result: UndoResult;
+      try {
+        result = db.transaction(() => removeBatch(db, batchId))();
+      } catch (error) {
+        if (error instanceof ImportError) throw error;
+        throw new ImportError('the undo failed; nothing was changed', { cause: error });
+      }
+      options.onChanged?.(result.accountId);
+      return result;
+    },
+
+    coverage(accountId) {
+      accountOf(accountId);
+      return accountCoverage(db, accountId);
     },
   };
 }

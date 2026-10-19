@@ -32,7 +32,7 @@ import {
 } from './migrations.js';
 import { APPLICATION_ID, hardenConnection, referenceFingerprint, schemaFingerprint } from './schema.js';
 
-export type BackupReason = 'manual' | 'pre-import' | 'pre-migration' | 'pre-restore';
+export type BackupReason = 'manual' | 'pre-import' | 'pre-undo' | 'pre-migration' | 'pre-restore';
 /** Routine auto-backups kept per vault; pre-migration backups are never rotated away. */
 export const AUTO_BACKUP_KEEP = 10;
 /** Largest backup we will read (far beyond v1 use; bounded so a hostile file can't exhaust memory). */
@@ -131,10 +131,17 @@ function uniqueBackupPath(
   extension: string,
 ): string {
   const base = `${prefix}-${stamp(date)}-${reason}`;
-  let candidate = path.join(dir, `${base}.${extension}`);
-  for (let counter = 2; existsSync(candidate); counter += 1)
-    candidate = path.join(dir, `${base}-${String(counter)}.${extension}`);
-  return candidate;
+  // Above the highest counter in use for this stamp, never a freed one (the bare name counts as 1): rotation
+  // orders same-millisecond backups by counter, so a reused name would look older than it is.
+  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`^${escaped}(?:-(\\d+))?\\.${extension}$`);
+  const highest = readdirSync(dir).reduce((max, name) => {
+    const match = pattern.exec(name);
+    const counter = match === null ? 0 : Number.parseInt(match[1] ?? '1', 10);
+    return counter > max ? counter : max;
+  }, 0);
+  if (highest === 0) return path.join(dir, `${base}.${extension}`);
+  return path.join(dir, `${base}-${String(highest + 1)}.${extension}`);
 }
 
 function ensureBackupDir(vaultPath: string): string {
@@ -142,6 +149,9 @@ function ensureBackupDir(vaultPath: string): string {
   mkdirSync(dir, { recursive: true, mode: OWNER_ONLY_DIR });
   return dir;
 }
+
+/** `auto-<stamp>-<reason>[-<n>].bhav`: stamp, reason, collision counter. Other names are never rotated. */
+const AUTO_NAME = /^auto-(\d{8}T\d{9}Z)-([a-z]+(?:-[a-z]+)*?)(?:-(\d+))?\.bhav$/;
 
 /** Writes `<vault>.backups/auto-<UTC>-<reason>.bhav` and rotates routine backups. */
 export function autoBackup(
@@ -153,11 +163,24 @@ export function autoBackup(
   const dir = ensureBackupDir(vaultPath);
   const target = uniqueBackupPath(dir, 'auto', nowOf(options), reason, 'bhav');
   createBackup(db, target, options);
-  const routine = readdirSync(dir)
-    .filter((name) => /^auto-.*\.bhav$/.test(name) && !/-pre-migration(-\d+)?\.bhav$/.test(name))
-    .sort();
-  for (const name of routine.slice(0, Math.max(0, routine.length - AUTO_BACKUP_KEEP))) {
-    rmSync(path.join(dir, name), { force: true });
+  // Rotation is per reason, so frequent imports can't push out other restore points; pre-migration backups are
+  // kept forever (they are the only way back from a schema change).
+  const byReason = new Map<string, { name: string; stamp: string; counter: number }[]>();
+  for (const name of readdirSync(dir)) {
+    const match = AUTO_NAME.exec(name);
+    const [, stamp = '', reason = '', counter = '1'] = match ?? [];
+    if (match === null || reason === 'pre-migration') continue;
+    const entry = { name, stamp, counter: Number.parseInt(counter, 10) };
+    byReason.set(reason, [...(byReason.get(reason) ?? []), entry]);
+  }
+  for (const entries of byReason.values()) {
+    // Oldest first: by time stamp, then by collision counter within the same millisecond.
+    const ordered = [...entries].sort((a, b) =>
+      a.stamp === b.stamp ? a.counter - b.counter : a.stamp < b.stamp ? -1 : 1,
+    );
+    for (const { name } of ordered.slice(0, Math.max(0, ordered.length - AUTO_BACKUP_KEEP))) {
+      rmSync(path.join(dir, name), { force: true });
+    }
   }
   return target;
 }
