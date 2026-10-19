@@ -1,12 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import {
-  formatIstDate,
-  holdingDays,
-  istDateOf,
-  istDayBounds,
-  parseIstLocal,
-} from '../../src/time/index.js';
+import { formatIstDate, holdingDays, istDateOf, istDayBounds, parseIstLocal } from '../../src/time/index.js';
 import { ParseError } from '../../src/errors.js';
 
 describe('the test environment', () => {
@@ -50,14 +44,23 @@ describe('istDateOf', () => {
 
   it('inverts parseIstLocal for every instant (property)', () => {
     fc.assert(
-      fc.property(fc.date({ min: new Date('2000-01-01T00:00:00Z'), max: new Date('2099-12-31T00:00:00Z'), noInvalidDate: true }), (date) => {
-        const ist = new Date(date.getTime() + 330 * 60_000);
-        const day = ist.toISOString().slice(0, 10);
-        const local = `${day}T${ist.toISOString().slice(11, 19)}`;
-        const utc = parseIstLocal(local);
-        expect(istDateOf(utc)).toBe(day);
-        expect(utc).toBe(`${new Date(Math.floor(date.getTime() / 1000) * 1000).toISOString().slice(0, 19)}Z`);
-      }),
+      fc.property(
+        fc.date({
+          min: new Date('2000-01-01T00:00:00Z'),
+          max: new Date('2099-12-31T00:00:00Z'),
+          noInvalidDate: true,
+        }),
+        (date) => {
+          const ist = new Date(date.getTime() + 330 * 60_000);
+          const day = ist.toISOString().slice(0, 10);
+          const local = `${day}T${ist.toISOString().slice(11, 19)}`;
+          const utc = parseIstLocal(local);
+          expect(istDateOf(utc)).toBe(day);
+          expect(utc).toBe(
+            `${new Date(Math.floor(date.getTime() / 1000) * 1000).toISOString().slice(0, 19)}Z`,
+          );
+        },
+      ),
     );
   });
 });

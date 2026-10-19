@@ -12,7 +12,8 @@ describe('allocateLargestRemainder', () => {
     [-7n, [1n, 1n], [-4n, -3n]],
     [5n, [0n, 1n], [0n, 5n]],
     [0n, [], []],
-  ])('allocates %s over %j as %j', (total, weights, expected) => {
+    [0n, [0n, 0n], [0n, 0n]],
+  ])('allocates %s over %s as %s', (total, weights, expected) => {
     expect(allocateLargestRemainder(total, weights)).toEqual(expected);
   });
 

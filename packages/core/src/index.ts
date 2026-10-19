@@ -1,3 +1,6 @@
-// Pure domain logic: money, time, FIFO, positions, fees, analytics (no I/O).
-// Placeholder until its plan step (see plans/bhavbook-v1.md).
+// Pure domain logic for BhavBook: no I/O (plan invariant 6).
 export const PACKAGE_NAME = '@bhavbook/core';
+
+export * from './errors.js';
+export * from './money/index.js';
+export * from './time/index.js';
