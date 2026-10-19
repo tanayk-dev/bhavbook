@@ -1,23 +1,28 @@
 // User actions on corporate actions (plan S10b tasks 2 and 4). A corporate action is a fact about a security, so
-// every change recomputes every account, in one transaction; nothing is applied without the user's confirmation.
-import { previewCorporateAction, type CorporateActionPreview } from '@bhavbook/core';
+// every change recomputes every account in one transaction: if any account fails, nothing changes, and the error
+// names that account (by id only, ADR-0019). Nothing is applied without the user's confirmation.
 import type Database from 'better-sqlite3';
 import {
-  activeCorporateActions,
+  CorporateActionError,
   createCorporateAction,
-  parseCorporateAction,
   restoreCorporateAction,
   revertCorporateAction,
 } from '../services/corporate-actions.js';
-import { activeAdjustments } from '../services/adjustments.js';
-import { brokerOf, loadFills, recompute, type RecomputeOptions } from './index.js';
+import { recompute, type RecomputeOptions } from './index.js';
 
-function accountIds(db: Database.Database): string[] {
-  return db.prepare('SELECT id FROM broker_account ORDER BY id').pluck().all() as string[];
-}
+export { previewCorporateActionInVault } from './index.js';
 
 function recomputeAll(db: Database.Database, options: RecomputeOptions): void {
-  for (const accountId of accountIds(db)) recompute(db, accountId, options);
+  const accounts = db.prepare('SELECT id FROM broker_account ORDER BY id').pluck().all();
+  for (const accountId of accounts) {
+    if (typeof accountId !== 'string') throw new CorporateActionError('an account id is unreadable');
+    try {
+      recompute(db, accountId, options);
+    } catch (error) {
+      if (error instanceof CorporateActionError && error.corporateActionId !== undefined) throw error;
+      throw new CorporateActionError('an account could not be recomputed', { accountId });
+    }
+  }
 }
 
 /** Stores a corporate action and recomputes every account. Returns its id. */
@@ -53,26 +58,4 @@ export function restoreCorporateActionAndRecompute(
     restoreCorporateAction(db, id);
     recomputeAll(db, options);
   })();
-}
-
-/**
- * What a corporate action would do across the vault (PRD §7.4 preview), from the stored state: every account's
- * affected open lots before and after, and the fractions. Stores nothing.
- */
-export function previewCorporateActionInVault(db: Database.Database, input: unknown): CorporateActionPreview {
-  const action = parseCorporateAction(input);
-  const existing = activeCorporateActions(db);
-  const previews = accountIds(db).map((accountId) =>
-    previewCorporateAction(
-      loadFills(db, accountId, brokerOf(db, accountId)),
-      activeAdjustments(db, accountId),
-      action,
-      existing,
-    ),
-  );
-  return {
-    before: previews.flatMap((preview) => preview.before),
-    after: previews.flatMap((preview) => preview.after),
-    fractions: previews.flatMap((preview) => preview.fractions),
-  };
 }

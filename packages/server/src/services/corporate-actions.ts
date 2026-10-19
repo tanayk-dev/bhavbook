@@ -1,8 +1,9 @@
 // Corporate actions, stored (ADR-0015, PRD §7.4): entered by the user, revertible, applied by ISIN to every
 // account (the table has no account: a split is a fact about the security). active <-> reverted.
 // Inputs are validated twice: by schema here, and by core's rules before anything is stored. Stored rows are read
-// back as untrusted data. Does not recompute (the callers in recompute/corporate-actions.ts do).
-import { randomUUID } from 'node:crypto';
+// back as untrusted data, and errors carry ids only, never stored content (ADR-0019). At most one active action
+// holds the same facts. Does not recompute: callers use recompute/corporate-actions.ts.
+import { randomBytes } from 'node:crypto';
 import { reconstructAccount, type CorporateAction } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
@@ -10,6 +11,15 @@ import { isoDateSchema } from './adjustments.js';
 
 export class CorporateActionError extends Error {
   override readonly name = 'CorporateActionError';
+  /** The stored action or the account involved, when there is one (ids only). */
+  readonly corporateActionId: string | undefined;
+  readonly accountId: string | undefined;
+
+  constructor(message: string, ids: { corporateActionId?: string; accountId?: string } = {}) {
+    super(message);
+    this.corporateActionId = ids.corporateActionId;
+    this.accountId = ids.accountId;
+  }
 }
 
 const isin = z.string().regex(/^[A-Z]{2}[A-Z0-9]{9}\d$/);
@@ -35,17 +45,18 @@ const inputSchema = z
 
 export type CorporateActionInput = z.infer<typeof inputSchema>;
 
-interface Row {
-  readonly id: string;
-  readonly type: string;
-  readonly isin: string;
-  readonly new_isin: string | null;
-  readonly ex_date: string;
-  readonly allotment_date: string | null;
-  readonly ratio_num: bigint;
-  readonly ratio_den: bigint;
-  readonly cost_split_bp: bigint | null;
-}
+/** A stored row (better-sqlite3 reads integers as bigint); core checks the rest. */
+const rowSchema = z.object({
+  id: z.string(),
+  type: z.enum(['SPLIT', 'BONUS', 'CONVERSION', 'DEMERGER']),
+  isin: z.string(),
+  new_isin: z.string().nullable(),
+  ex_date: z.string(),
+  allotment_date: z.string().nullable(),
+  ratio_num: z.bigint(),
+  ratio_den: z.bigint(),
+  cost_split_bp: z.bigint().nullable(),
+});
 
 const COLUMNS = 'id, type, isin, new_isin, ex_date, allotment_date, ratio_num, ratio_den, cost_split_bp';
 
@@ -63,11 +74,28 @@ function fromInput(id: string, input: CorporateActionInput): CorporateAction {
   };
 }
 
-function fromRow(row: Row): CorporateAction {
-  // Read as untrusted: core checks every field (the type cast is checked there).
-  return {
+/** Core's rules for one action; true when it passes. */
+function passesCore(action: CorporateAction): boolean {
+  try {
+    reconstructAccount([], [], [action]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A stored row as core's action; an unreadable one is a fixed error naming only its id. */
+function fromRow(value: unknown, index: number): CorporateAction {
+  const parsed = rowSchema.safeParse(value);
+  const id = parsed.success ? parsed.data.id : `#${String(index)}`;
+  const unreadable = new CorporateActionError('a stored corporate action is unreadable', {
+    corporateActionId: id,
+  });
+  if (!parsed.success) throw unreadable;
+  const row = parsed.data;
+  const action: CorporateAction = {
     id: row.id,
-    type: row.type as CorporateAction['type'],
+    type: row.type,
     isin: row.isin,
     newIsin: row.new_isin,
     exDateIst: row.ex_date,
@@ -76,27 +104,30 @@ function fromRow(row: Row): CorporateAction {
     ratioDen: row.ratio_den,
     costSplitBp: row.cost_split_bp,
   };
-}
-
-/** Core's rules (one action, or a set: ids unique). */
-function checkWithCore(actions: readonly CorporateAction[]): void {
-  reconstructAccount([], [], actions);
-}
-
-/** A validated input as core's action (`id` is a placeholder until stored). */
-export function parseCorporateAction(input: unknown, id = 'preview'): CorporateAction {
-  const parsed = inputSchema.safeParse(input);
-  if (!parsed.success) throw new CorporateActionError('invalid corporate action');
-  const action = fromInput(id, parsed.data);
-  try {
-    checkWithCore([action]);
-  } catch (error) {
-    throw new CorporateActionError('invalid corporate action', { cause: error });
-  }
+  if (!passesCore(action)) throw unreadable;
   return action;
 }
 
-function sameFacts(a: CorporateAction, b: CorporateAction): boolean {
+/**
+ * Ids sort in creation order (actions on the same ex-date apply in id order): `ca_<creation time>_<random>`.
+ * A preview uses PREVIEW_ID, which sorts after every stored id: as if created now.
+ */
+function newId(at: string): string {
+  return `ca_${at.replace(/[^0-9]/g, '').slice(0, 17)}_${randomBytes(6).toString('hex')}`;
+}
+const PREVIEW_ID = 'ca_99999999999999999_preview';
+
+/** A validated input as core's action (with the preview id until stored). */
+export function parseCorporateAction(input: unknown, id = PREVIEW_ID): CorporateAction {
+  const parsed = inputSchema.safeParse(input);
+  if (!parsed.success) throw new CorporateActionError('invalid corporate action');
+  const action = fromInput(id, parsed.data);
+  if (!passesCore(action)) throw new CorporateActionError('invalid corporate action');
+  return action;
+}
+
+/** Same facts (everything but the id). */
+export function sameFacts(a: CorporateAction, b: CorporateAction): boolean {
   const facts = (action: CorporateAction): string =>
     JSON.stringify({ ...action, id: '' }, (_, value: unknown) =>
       typeof value === 'bigint' ? value.toString() : value,
@@ -104,25 +135,12 @@ function sameFacts(a: CorporateAction, b: CorporateAction): boolean {
   return facts(a) === facts(b);
 }
 
-function activeRows(db: Database.Database): Row[] {
-  return db
-    .prepare(`SELECT ${COLUMNS} FROM corporate_action WHERE status = 'active' ORDER BY rowid`)
-    .all() as Row[];
-}
-
-/** Every active action; an unreadable one is a fixed error naming nothing from its content. */
+/** Every active action, in id (creation) order. */
 export function activeCorporateActions(db: Database.Database): CorporateAction[] {
-  const actions = activeRows(db).map(fromRow);
-  for (const action of actions) {
-    try {
-      checkWithCore([action]);
-    } catch (error) {
-      throw new CorporateActionError('a stored corporate action is unreadable', {
-        cause: { corporateActionId: action.id, error },
-      });
-    }
-  }
-  return actions;
+  const rows: unknown[] = db
+    .prepare(`SELECT ${COLUMNS} FROM corporate_action WHERE status = 'active' ORDER BY id`)
+    .all();
+  return rows.map(fromRow);
 }
 
 export interface CorporateActionCreateOptions {
@@ -138,8 +156,8 @@ export function createCorporateAction(
   input: unknown,
   options: CorporateActionCreateOptions = {},
 ): string {
-  const action = parseCorporateAction(input, `ca_${randomUUID()}`);
   const at = (options.now?.() ?? new Date()).toISOString();
+  const action = parseCorporateAction(input, newId(at));
   return db.transaction(() => {
     const same = activeCorporateActions(db).find((other) => sameFacts(other, action));
     if (same !== undefined) return same.id;
@@ -171,10 +189,21 @@ function transition(db: Database.Database, id: string, from: Status, to: Status)
   if (changed.changes !== 1) throw new CorporateActionError(`no ${from} corporate action with that id`);
 }
 
+/** active -> reverted. Does not recompute. */
 export function revertCorporateAction(db: Database.Database, id: string): void {
   transition(db, id, 'active', 'reverted');
 }
 
+/** reverted -> active, unless an identical action is already active. Does not recompute. */
 export function restoreCorporateAction(db: Database.Database, id: string): void {
-  transition(db, id, 'reverted', 'active');
+  db.transaction(() => {
+    transition(db, id, 'reverted', 'active');
+    const actions = activeCorporateActions(db);
+    const restored = actions.find((action) => action.id === id);
+    if (actions.some((other) => other.id !== id && restored !== undefined && sameFacts(other, restored))) {
+      throw new CorporateActionError('an identical corporate action is already active', {
+        corporateActionId: id,
+      });
+    }
+  })();
 }

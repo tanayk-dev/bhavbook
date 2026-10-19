@@ -1,5 +1,6 @@
 // S10b-2 (plan S10b tasks 2-4): corporate actions stored, applied in every account's recompute, revertible;
 // suspicions and fractions surface as issues.
+import { inspect } from 'node:util';
 import type Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import {
@@ -8,7 +9,7 @@ import {
   restoreCorporateActionAndRecompute,
   revertCorporateActionAndRecompute,
 } from '../../src/recompute/corporate-actions.js';
-import { recompute } from '../../src/recompute/index.js';
+import { recompute, recomputeBroker } from '../../src/recompute/index.js';
 import { CorporateActionError, createCorporateAction } from '../../src/services/corporate-actions.js';
 import { count, importFiles, withVault, ZERODHA, type TestVault } from '../import/helpers.js';
 
@@ -222,6 +223,149 @@ describe('the service', () => {
       ]);
       expect(preview.after.map((lot) => lot.quantity)).toEqual([30n]);
       expect(count(db, 'corporate_action')).toBe(0);
+    });
+  });
+});
+
+describe('S10b-2 review follow-ups', () => {
+  const demerger = {
+    type: 'DEMERGER',
+    isin: TCS,
+    newIsin: NEW,
+    exDateIst: '2025-03-01',
+    ratioNum: '1',
+    ratioDen: '1',
+    costSplitBp: '3115',
+  } as const;
+
+  it('a demerger stores the child against its action, keeps real fills on their trade rows, and leaves the journal on the parent', async () => {
+    await withVault(async ({ db, service }) => {
+      await importLines(service, [line('buy', 100, 800, '2025-01-02')]);
+      recompute(db, ZERODHA, { now });
+      const anchor = db.prepare('SELECT anchor_key FROM position').pluck().get() as string;
+      db.prepare(
+        `INSERT INTO journal_entry (id, anchor_account_id, anchor_instrument_key, anchor_bucket, anchor_key, status,
+           created_at, updated_at) VALUES ('j1', ?, ?, 'DELIVERY', ?, 'attached', 'x', 'x')`,
+      ).run(ZERODHA, TCS, anchor);
+      const id = applyCorporateActionAndRecompute(db, demerger, { now });
+      expect(
+        db
+          .prepare(
+            `SELECT instrument_key, trade_row_id IS NOT NULL AS from_trade, corporate_action_id, value_micro
+             FROM fill_allocation ORDER BY instrument_key`,
+          )
+          .all(),
+      ).toEqual([
+        { instrument_key: NEW, from_trade: 0n, corporate_action_id: id, value_micro: 24_920_000_000n },
+        { instrument_key: TCS, from_trade: 1n, corporate_action_id: null, value_micro: 55_080_000_000n },
+      ]);
+      expect(
+        db.prepare("SELECT anchor_instrument_key FROM journal_entry WHERE id = 'j1'").pluck().get(),
+      ).toBe(TCS);
+    });
+  });
+
+  it('a failing account rolls the whole change back and is named (by id only)', async () => {
+    await withVault(async ({ db, service }) => {
+      await importLines(service, [line('buy', 10, 100, '2025-01-02')]);
+      db.prepare(
+        `INSERT INTO adjustment (id, account_id, type, payload_json, source, status, created_at)
+         VALUES ('bad', ?, 'exclude', '{broken', 'manual', 'active', 'x')`,
+      ).run(ZERODHA);
+      let caught: unknown;
+      try {
+        applyCorporateActionAndRecompute(db, split, { now });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(CorporateActionError);
+      expect((caught as CorporateActionError).accountId).toBe(ZERODHA);
+      expect(count(db, 'corporate_action')).toBe(0);
+    });
+  });
+
+  it('records which stored action is unreadable on the recompute_failed issue', async () => {
+    await withVault(async ({ db, service }) => {
+      await importLines(service, [line('buy', 10, 100, '2025-01-02')]);
+      const id = createCorporateAction(db, split, { now });
+      db.prepare("UPDATE corporate_action SET ex_date = 'MARKER' WHERE id = ?").run(id);
+      recomputeBroker(db, ZERODHA, { now });
+      const subject = db
+        .prepare("SELECT subject_json FROM issue WHERE kind = 'recompute_failed'")
+        .pluck()
+        .get() as string;
+      expect(JSON.parse(subject)).toEqual({ error: 'CorporateActionError', corporateActionId: id });
+      expect(subject).not.toContain('MARKER');
+    });
+  });
+
+  it('never carries stored content in an error cause', async () => {
+    await withVault(({ db }) => {
+      const id = createCorporateAction(db, split, { now });
+      db.prepare("UPDATE corporate_action SET ex_date = 'MARKER' WHERE id = ?").run(id);
+      let caught: unknown;
+      try {
+        createCorporateAction(db, { ...split, ratioNum: '2' }, { now });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(CorporateActionError);
+      expect(inspect(caught, { depth: 10 })).not.toContain('MARKER');
+    });
+  });
+
+  it('refuses to restore an action identical to an active one', async () => {
+    await withVault(({ db }) => {
+      const first = createCorporateAction(db, split, { now });
+      revertCorporateActionAndRecompute(db, first, { now });
+      createCorporateAction(db, split, { now });
+      expect(() => {
+        restoreCorporateActionAndRecompute(db, first, { now });
+      }).toThrow(CorporateActionError);
+      expect(count(db, 'corporate_action', "status = 'active'")).toBe(1);
+    });
+  });
+
+  it('orders same-day actions by creation, and the preview treats the new action as the latest', async () => {
+    await withVault(async ({ db, service }) => {
+      await importLines(service, [line('buy', 10, 100, '2025-01-02')]);
+      const later = (): Date => new Date('2026-10-21T12:00:00Z');
+      const bonus = {
+        type: 'BONUS',
+        isin: TCS,
+        exDateIst: '2025-03-01',
+        ratioNum: '1',
+        ratioDen: '1',
+      } as const;
+      applyCorporateActionAndRecompute(db, { ...split, ratioNum: '2' }, { now });
+      // Bonus on the split holding (20), whatever the random part of the ids.
+      expect(previewCorporateActionInVault(db, bonus).after.map((lot) => lot.quantity)).toEqual([20n]);
+      applyCorporateActionAndRecompute(db, bonus, { now: later });
+      expect(db.prepare('SELECT sum(quantity) FROM fill_allocation').pluck().get()).toBe(40n);
+    });
+  });
+
+  it('previews an exact duplicate of an active action as applied once', async () => {
+    await withVault(async ({ db, service }) => {
+      await importLines(service, [line('buy', 10, 100, '2025-01-02')]);
+      applyCorporateActionAndRecompute(db, split, { now });
+      expect(previewCorporateActionInVault(db, split).after.map((lot) => lot.quantity)).toEqual([50n]);
+    });
+  });
+
+  it('rejects an invalid preview', async () => {
+    await withVault(({ db }) => {
+      expect(() => previewCorporateActionInVault(db, { ...split, isin: 'x' })).toThrow(CorporateActionError);
+    });
+  });
+
+  it('a dismissed suspicion stays dismissed', async () => {
+    await withVault(async ({ db, service }) => {
+      await importLines(service, [line('buy', 10, 500, '2025-01-02'), line('sell', 50, 110, '2025-04-01')]);
+      recompute(db, ZERODHA, { now });
+      db.prepare("UPDATE issue SET status = 'dismissed' WHERE kind = 'corporate_action_suspected'").run();
+      recompute(db, ZERODHA, { now });
+      expect(issues(db, 'corporate_action_suspected').map((issue) => issue.status)).toEqual(['dismissed']);
     });
   });
 });

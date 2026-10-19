@@ -18,6 +18,8 @@ import {
   type CorporateAction,
   type CorporateActionSuspicion,
   type Fraction,
+  previewCorporateAction,
+  type CorporateActionPreview,
   type FillAllocation,
   type Position,
   type StatementLot,
@@ -28,7 +30,12 @@ import { z } from 'zod';
 import { writeBatches } from '../import/commit.js';
 import type { PreviewCounts } from '../import/preview.js';
 import { activeAdjustments, isoDateSchema, statementKeysInUse } from '../services/adjustments.js';
-import { activeCorporateActions } from '../services/corporate-actions.js';
+import {
+  activeCorporateActions,
+  CorporateActionError,
+  parseCorporateAction,
+  sameFacts,
+} from '../services/corporate-actions.js';
 import {
   mapInstrumentManually,
   resolveInstruments,
@@ -108,13 +115,13 @@ export function instrumentKeyOf(
   return aliases.get(alias) ?? `local:${broker}:${alias}`;
 }
 
-export function brokerOf(db: Database.Database, accountId: string): string {
+function brokerOf(db: Database.Database, accountId: string): string {
   const broker: unknown = db.prepare('SELECT broker FROM broker_account WHERE id = ?').pluck().get(accountId);
   if (typeof broker !== 'string') throw new Error('unknown account');
   return broker;
 }
 
-export function loadFills(db: Database.Database, accountId: string, broker: string): TradeFill[] {
+function loadFills(db: Database.Database, accountId: string, broker: string): TradeFill[] {
   const aliases = aliasKeys(db, broker);
   // side, granularity and product_declared are enforced by CHECK constraints (0001_init.sql).
   const rows = db
@@ -153,14 +160,27 @@ export function reconstruct(
   return reconstructAccount(fills, adjustments, corporateActions);
 }
 
+/** Bonus and demerger-child lots (core gives them `ca:` fill ids); reshaped parts of real fills keep theirs. */
+const CORPORATE_ACTION_FILL = 'ca:';
+
 /** Where an allocation comes from: exactly one of a trade row, an adjustment or a corporate action. */
-function sourceOf(allocation: FillAllocation): [bigint | null, string | null, string | null] {
-  if (allocation.adjustmentId !== null) return [null, allocation.adjustmentId, null];
-  // Bonus and demerger-child lots have synthetic fill ids; reshaped parts of real fills keep theirs.
-  if (allocation.corporateActionId !== null && allocation.fillId.startsWith('ca:')) {
-    return [null, null, allocation.corporateActionId];
+function sourceOf(allocation: FillAllocation): {
+  tradeRowId: bigint | null;
+  adjustmentId: string | null;
+  corporateActionId: string | null;
+} {
+  if (allocation.adjustmentId !== null) {
+    return { tradeRowId: null, adjustmentId: allocation.adjustmentId, corporateActionId: null };
   }
-  return [BigInt(allocation.fillId), null, null];
+  if (allocation.corporateActionId !== null && allocation.fillId.startsWith(CORPORATE_ACTION_FILL)) {
+    return { tradeRowId: null, adjustmentId: null, corporateActionId: allocation.corporateActionId };
+  }
+  return { tradeRowId: BigInt(allocation.fillId), adjustmentId: null, corporateActionId: null };
+}
+
+function sourceColumns(allocation: FillAllocation): [bigint | null, string | null, string | null] {
+  const { tradeRowId, adjustmentId, corporateActionId } = sourceOf(allocation);
+  return [tradeRowId, adjustmentId, corporateActionId];
 }
 
 /** Closed positions first (oldest close first), open ones last: the live position of an anchor is written last. */
@@ -196,7 +216,7 @@ function writeDerived(
   for (const allocation of allocations) {
     const id: unknown = insertAllocation.get(
       accountId,
-      ...sourceOf(allocation),
+      ...sourceColumns(allocation),
       allocation.instrumentKey,
       allocation.bucket,
       allocation.side,
@@ -217,10 +237,6 @@ function writeDerived(
        exit_value_micro, entry_date_ist, exit_date_ist)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  // Journal entries follow their position across a re-key (migration 0001: anchor_instrument_key is refreshed).
-  const refreshAnchor = db.prepare(
-    'UPDATE journal_entry SET anchor_instrument_key = ? WHERE anchor_account_id = ? AND anchor_key = ?',
-  );
   for (const position of positions) {
     insertPosition.run(
       position.id,
@@ -235,7 +251,6 @@ function writeDerived(
       position.closedAtUtc,
       position.anchorKey,
     );
-    refreshAnchor.run(position.instrumentKey, accountId, position.anchorKey);
     for (const lot of position.lots) {
       insertLot.run(
         position.id,
@@ -253,12 +268,17 @@ function writeDerived(
 
 /**
  * Journal entries follow their position across a re-key (migration 0001: anchor_instrument_key is refreshed).
- * Positions can share an anchor across instruments (the sold part of a converted lot stays on the old ISIN), so
- * the live one is written last.
+ * Positions can share an anchor across instruments: the sold part of a converted lot stays on the old ISIN (the
+ * live one is written last), and a demerger child shares its parent's anchor (an entry on an open position of its
+ * current instrument stays there).
  */
 function refreshAnchors(db: Database.Database, accountId: string, positions: readonly Position[]): void {
   const refresh = db.prepare(
-    'UPDATE journal_entry SET anchor_instrument_key = ? WHERE anchor_account_id = ? AND anchor_key = ?',
+    `UPDATE journal_entry SET anchor_instrument_key = ?
+     WHERE anchor_account_id = ? AND anchor_key = ?
+       AND NOT EXISTS (SELECT 1 FROM position p WHERE p.account_id = journal_entry.anchor_account_id
+         AND p.anchor_key = journal_entry.anchor_key AND p.instrument_key = journal_entry.anchor_instrument_key
+         AND p.state = 'OPEN')`,
   );
   for (const position of [...positions].sort(liveLast)) {
     refresh.run(position.instrumentKey, accountId, position.anchorKey);
@@ -452,7 +472,7 @@ function suspicionFindings(
 function fractionFindings(fractions: readonly Fraction[]): Map<string, string> {
   return new Map(
     fractions.map((fraction) => [
-      [fraction.actionId, fraction.instrumentKey, fraction.bucket].join('|'),
+      digest(fraction.actionId, fraction.instrumentKey, fraction.bucket),
       JSON.stringify({
         actionId: fraction.actionId,
         instrumentKey: fraction.instrumentKey,
@@ -510,7 +530,12 @@ export function recompute(
 }
 
 function recordFailure(db: Database.Database, accountId: string, error: unknown, at: string): void {
-  const subject = JSON.stringify({ error: error instanceof Error ? error.name : 'non_error' });
+  // Ids only (ADR-0019): the stored action to revert, when one is unreadable.
+  const corporateActionId = error instanceof CorporateActionError ? error.corporateActionId : undefined;
+  const subject = JSON.stringify({
+    error: error instanceof Error ? error.name : 'non_error',
+    corporateActionId,
+  });
   db.prepare(
     `INSERT INTO issue (id, account_id, kind, fingerprint, subject_json, status, created_at)
      VALUES (?, ?, ?, 'recompute', ?, 'open', ?)
@@ -639,5 +664,32 @@ export function recomputeHooks(
       recomputeBroker(db, accountId, options);
     },
     forecast: (accountId, result) => forecastIssues(db, accountId, result, options),
+  };
+}
+
+/**
+ * What a corporate action would do across the vault (PRD §7.4 preview), from the stored state: every account's
+ * affected open lots before and after, and the fractions. An identical active action is left out (storing this
+ * one would return it instead). Stores nothing.
+ */
+export function previewCorporateActionInVault(db: Database.Database, input: unknown): CorporateActionPreview {
+  const action = parseCorporateAction(input);
+  const existing = activeCorporateActions(db).filter((other) => !sameFacts(other, action));
+  const accounts = db.prepare('SELECT id, broker FROM broker_account ORDER BY id').all() as {
+    id: string;
+    broker: string;
+  }[];
+  const previews = accounts.map((account) =>
+    previewCorporateAction(
+      loadFills(db, account.id, account.broker),
+      activeAdjustments(db, account.id),
+      action,
+      existing,
+    ),
+  );
+  return {
+    before: previews.flatMap((preview) => preview.before),
+    after: previews.flatMap((preview) => preview.after),
+    fractions: previews.flatMap((preview) => preview.fractions),
   };
 }
