@@ -34,7 +34,9 @@ describe('no-outbound-sockets', () => {
   });
 
   it('classifies hosts', () => {
-    for (const host of ['localhost', '127.0.0.1', '127.8.9.10', '::1', 'LOCALHOST']) expect(isLoopbackHost(host)).toBe(true);
-    for (const host of ['example.com', '10.0.0.1', '0.0.0.0', '127.0.0.1.evil.example', '']) expect(isLoopbackHost(host)).toBe(false);
+    for (const host of ['localhost', '127.0.0.1', '127.8.9.10', '::1', 'LOCALHOST'])
+      expect(isLoopbackHost(host)).toBe(true);
+    for (const host of ['example.com', '10.0.0.1', '0.0.0.0', '127.0.0.1.evil.example', ''])
+      expect(isLoopbackHost(host)).toBe(false);
   });
 });

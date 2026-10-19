@@ -26,7 +26,7 @@ export function testApp(overrides: Partial<AppOptions> = {}, db: Database.Databa
 export interface RequestOptions {
   readonly method?: string;
   readonly headers?: Record<string, string | null>;
-  readonly body?: string;
+  readonly body?: string | undefined;
 }
 
 /** A request with a valid Host header and session cookie unless a test overrides them (null removes one). */

@@ -9,7 +9,12 @@ const TOKEN = 't'.repeat(43);
 const running: RunningServer[] = [];
 
 async function start(): Promise<RunningServer> {
-  const server = await startServer({ token: TOKEN, logger: createLogger(() => undefined), vault: null, port: 0 });
+  const server = await startServer({
+    token: TOKEN,
+    logger: createLogger(() => undefined),
+    vault: null,
+    port: 0,
+  });
   running.push(server);
   return server;
 }
@@ -88,7 +93,9 @@ describe('WebSocket upgrades', () => {
 
   it('rejects an upgrade with a foreign Host (403) or without the token (401)', async () => {
     const server = await start();
-    expect(await upgradeStatus(server.port, { host: 'evil.example', cookie: `${SESSION_COOKIE}=${TOKEN}` })).toBe(403);
+    expect(
+      await upgradeStatus(server.port, { host: 'evil.example', cookie: `${SESSION_COOKIE}=${TOKEN}` }),
+    ).toBe(403);
     expect(await upgradeStatus(server.port, {})).toBe(401);
   });
 

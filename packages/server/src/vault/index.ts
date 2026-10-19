@@ -32,3 +32,5 @@ export {
 } from './migrations.js';
 export { openVault, type OpenVaultOptions } from './open.js';
 export { APPLICATION_ID, hardenConnection, referenceFingerprint, schemaFingerprint } from './schema.js';
+export { acquireVaultLock, lockPath, type VaultLock } from './lock.js';
+export { recoverInterruptedRestore, type RecoveryResult } from './recover.js';

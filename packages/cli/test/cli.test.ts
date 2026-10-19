@@ -23,7 +23,9 @@ interface FakeIo extends CliIo {
   readonly opened: string[];
 }
 
-function fakeIo(options: { onRunning?: (server: RunningServer) => Promise<void>; openFails?: boolean } = {}): FakeIo {
+function fakeIo(
+  options: { onRunning?: (server: RunningServer) => Promise<void>; openFails?: boolean } = {},
+): FakeIo {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const opened: string[] = [];
@@ -64,14 +66,18 @@ describe('helpers', () => {
 });
 
 describe('arguments', () => {
-  it.each([[['--port', 'abc']], [['--port', '70000']], [['frobnicate']], [['--nope']], [['backup']], [['restore']]])(
-    'rejects %j with usage and exit code 2',
-    async (argv) => {
-      const io = fakeIo();
-      expect(await main(argv, io)).toBe(2);
-      expect(io.stderr.join('\n')).toMatch(/usage/i);
-    },
-  );
+  it.each([
+    [['--port', 'abc']],
+    [['--port', '70000']],
+    [['frobnicate']],
+    [['--nope']],
+    [['backup']],
+    [['restore']],
+  ])('rejects %j with usage and exit code 2', async (argv) => {
+    const io = fakeIo();
+    expect(await main(argv, io)).toBe(2);
+    expect(io.stderr.join('\n')).toMatch(/usage/i);
+  });
 
   it('prints help with exit code 0', async () => {
     const io = fakeIo();

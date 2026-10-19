@@ -23,7 +23,11 @@ describe('route tree', () => {
     ['PUT', '/api/settings'],
     ['GET', '/api/analytics/summary'],
   ])('%s %s answers 501 until its step implements it', async (method, target) => {
-    const response = await send(testApp(), target, { method, body: method === 'GET' ? undefined : '{}', headers: { 'content-type': 'application/json' } });
+    const response = await send(testApp(), target, {
+      method,
+      body: method === 'GET' ? undefined : '{}',
+      headers: { 'content-type': 'application/json' },
+    });
     expect(response.status).toBe(501);
     expect(await response.json()).toEqual({ error: 'not_implemented' });
   });
@@ -48,11 +52,14 @@ describe('route tree', () => {
 });
 
 describe('input validation', () => {
-  it('rejects a malformed id parameter with 400', async () => {
-    const response = await send(testApp(), '/api/positions/abc');
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'invalid_request' });
-  });
+  it.each([['x'.repeat(65)], ['a%20b'], ['a%3Bb'], ['%E2%82%B9']])(
+    'rejects the malformed id %s with 400',
+    async (id) => {
+      const response = await send(testApp(), `/api/positions/${id}`);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'invalid_request' });
+    },
+  );
 
   it('rejects malformed JSON without echoing it', async () => {
     const response = await send(testApp(), '/api/journal', {
@@ -65,7 +72,11 @@ describe('input validation', () => {
   });
 
   it('rejects a non-JSON content type on JSON routes', async () => {
-    const response = await send(testApp(), '/api/journal', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}' });
+    const response = await send(testApp(), '/api/journal', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: '{}',
+    });
     expect(response.status).toBe(415);
   });
 
@@ -86,7 +97,10 @@ describe('logging and error policy (ADR-0019)', () => {
       const body = await c.req.text();
       throw new Error(`failed while handling ${body}`);
     });
-    const response = await send(test, '/api/test-boom', { method: 'POST', body: 'MARKER-91c2 PAN ABCDE1234F' });
+    const response = await send(test, '/api/test-boom', {
+      method: 'POST',
+      body: 'MARKER-91c2 PAN ABCDE1234F',
+    });
     expect(response.status).toBe(500);
     const text = await response.text();
     expect(JSON.parse(text)).toEqual({ error: 'internal_error' });
@@ -104,7 +118,13 @@ describe('logging and error policy (ADR-0019)', () => {
     expect(log).not.toContain(TOKEN);
     expect(log).not.toContain('MARKER');
     const entry = JSON.parse(test.lines.at(-1) ?? '{}') as Record<string, unknown>;
-    expect(entry).toMatchObject({ level: 'info', event: 'request', method: 'GET', path: '/api/positions/:id', status: 501 });
+    expect(entry).toMatchObject({
+      level: 'info',
+      event: 'request',
+      method: 'GET',
+      path: '/api/positions/:id',
+      status: 501,
+    });
     expect(Object.keys(entry).sort()).toEqual(['event', 'level', 'method', 'ms', 'path', 'status', 'time']);
   });
 

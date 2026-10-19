@@ -12,7 +12,9 @@ describe('session token', () => {
 
   it('rejects a wrong token, including one that is a prefix of the real one', async () => {
     for (const value of ['nope', TOKEN.slice(0, -1), `${TOKEN}x`]) {
-      const response = await send(testApp(), '/api/health', { headers: { cookie: `${SESSION_COOKIE}=${value}` } });
+      const response = await send(testApp(), '/api/health', {
+        headers: { cookie: `${SESSION_COOKIE}=${value}` },
+      });
       expect(response.status).toBe(401);
     }
   });
@@ -61,11 +63,15 @@ describe('Host allowlist', () => {
   });
 
   it('accepts localhost on the same port', async () => {
-    expect((await send(testApp(), '/api/health', { headers: { host: `localhost:${PORT}` } })).status).toBe(200);
+    expect((await send(testApp(), '/api/health', { headers: { host: `localhost:${PORT}` } })).status).toBe(
+      200,
+    );
   });
 
   it('checks Host before the token, so a rebinding page learns nothing', async () => {
-    const response = await send(testApp(), '/api/health', { headers: { host: 'evil.example', cookie: null } });
+    const response = await send(testApp(), '/api/health', {
+      headers: { host: 'evil.example', cookie: null },
+    });
     expect(response.status).toBe(403);
   });
 });
@@ -97,7 +103,10 @@ describe('Origin allowlist and no CORS', () => {
 
 describe('response headers', () => {
   it('sets the hardening headers on every response, including rejections', async () => {
-    for (const response of [await send(testApp(), '/api/health'), await send(testApp(), '/api/health', { headers: { cookie: null } })]) {
+    for (const response of [
+      await send(testApp(), '/api/health'),
+      await send(testApp(), '/api/health', { headers: { cookie: null } }),
+    ]) {
       expect(response.headers.get('x-content-type-options')).toBe('nosniff');
       expect(response.headers.get('referrer-policy')).toBe('no-referrer');
       expect(response.headers.get('x-frame-options')).toBe('DENY');

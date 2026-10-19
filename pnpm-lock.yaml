@@ -233,9 +233,16 @@ importers:
       '@bhavbook/server':
         specifier: workspace:*
         version: link:../server
+      better-sqlite3:
+        specifier: 13.0.3
+        version: 13.0.3
       open:
         specifier: 11.0.4
         version: 11.0.4
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: 9.6.0
+        version: 9.6.0
 
   packages/core: {}
 

@@ -63,7 +63,12 @@ describe('recoverInterruptedRestore', () => {
     withTempDir((dir) => {
       const vault = path.join(dir, 'vault.db');
       writeFileSync(vault, 'live');
-      for (const name of [`.other.db.old-${HEX}.tmp`, 'notes.txt', `.vault.db.old-${HEX}.tmp.bak`, `.vault.db.old-XYZ.tmp`]) {
+      for (const name of [
+        `.other.db.old-${HEX}.tmp`,
+        'notes.txt',
+        `.vault.db.old-${HEX}.tmp.bak`,
+        `.vault.db.old-XYZ.tmp`,
+      ]) {
         writeFileSync(path.join(dir, name), 'x');
       }
       expect(recoverInterruptedRestore(vault).removedTempFiles).toBe(0);

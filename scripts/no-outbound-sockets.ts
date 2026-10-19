@@ -41,8 +41,8 @@ function install(): void {
   net.Socket.prototype.connect = function guardedConnect(this: net.Socket, ...args: unknown[]) {
     const host = targetHost(args);
     if (host !== null && !isLoopbackHost(host)) throw new OutboundConnectionError(host);
-    return Reflect.apply(connect, this, args) as net.Socket;
-  } as typeof connect;
+    return connect.apply(this, args as Parameters<typeof connect>);
+  };
 
   const realFetch = globalThis.fetch;
   globalThis.fetch = (input, init) => {

@@ -9,7 +9,7 @@ import { withTempDir } from './helpers.js';
 /** The PID of a process that has already exited. */
 function deadPid(): number {
   const child = spawnSync(process.execPath, ['-e', '']);
-  return child.pid ?? 0;
+  return child.pid;
 }
 
 describe('acquireVaultLock', () => {
