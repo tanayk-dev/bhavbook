@@ -1,9 +1,9 @@
 // The import service: preview (writes nothing, returns a 15-minute single-use token) and commit (pre-import backup,
 // one transaction, then the recompute hook). Previews live in memory only, so their number and size are bounded.
 import { randomBytes } from 'node:crypto';
-import { dhanAdapter, zerodhaAdapter, type BrokerAdapter, type ParseResult } from '@bhavbook/adapters';
+import { dhanAdapter, zerodhaAdapter, type BrokerAdapter } from '@bhavbook/adapters';
 import type Database from 'better-sqlite3';
-import type { IssueForecast } from '../recompute/index.js';
+import type { IssueForecaster } from '../recompute/types.js';
 import { autoBackup } from '../vault/index.js';
 import { writeBatches, type CommittedBatch } from './commit.js';
 import { accountCoverage, type KindCoverage } from './coverage.js';
@@ -32,7 +32,7 @@ export interface ImportServiceOptions {
   readonly onChanged?: (accountId: string) => void;
   readonly adapters?: readonly BrokerAdapter[];
   /** The preview's issue forecast (dry-run recompute, S9); none by default. */
-  readonly forecast?: (accountId: string, result: ParseResult) => readonly IssueForecast[];
+  readonly forecast?: IssueForecaster;
 }
 
 export interface ImportPreview {

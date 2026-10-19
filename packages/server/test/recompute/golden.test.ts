@@ -87,16 +87,15 @@ function taxReportLots(db: Database.Database): LotRow[] {
   );
 }
 
-const PAISA = 10_000n;
 /**
- * Three lots where Dhan's Tax Report and its trade file disagree by a few paise (Rs 0.02-0.06). They are the same
- * three scrips whose values also differ in Global Transactions (S8): a difference between Dhan's reports, not a
- * matching difference. The trade file's Trade Value is authoritative (ADR-0008).
+ * Three lots where Dhan's Tax Report and its trade file disagree by a few paise. They are the same three scrips
+ * whose values also differ in Global Transactions (S8): a difference between Dhan's reports, not a matching
+ * difference. The trade file's Trade Value is authoritative (ADR-0008). Exact deltas (ours - report, micro-rupees).
  */
-const REPORT_ROUNDING = new Set([
-  'INE175A01038|2024-05-09',
-  'INE549A01026|2024-06-25',
-  'INE093R01011|2024-06-21',
+const REPORT_ROUNDING: ReadonlyMap<string, { buy: bigint; sell: bigint }> = new Map([
+  ['INE175A01038|2024-05-09|2024-05-09', { buy: -50_000n, sell: 0n }],
+  ['INE549A01026|2024-06-25|2024-06-25', { buy: 0n, sell: -20_000n }],
+  ['INE093R01011|2024-06-21|2024-06-24', { buy: 0n, sell: -60_000n }],
 ]);
 
 describe('golden: Dhan FY 2024-25 lots equal the Tax Report', () => {
@@ -106,6 +105,9 @@ describe('golden: Dhan FY 2024-25 lots equal the Tax Report', () => {
       recompute(db, DHAN);
       const ours = ourLots(db);
       const theirs = taxReportLots(db);
+      expect(db.prepare("SELECT count(*) FROM statement_row WHERE kind = 'dhan.tax.lot'").pluck().get()).toBe(
+        46n,
+      );
       expect(theirs).toHaveLength(46);
       expect(ours.map(({ isin, section, buy, sell, qty }) => ({ isin, section, buy, sell, qty }))).toEqual(
         theirs.map(({ isin, section, buy, sell, qty }) => ({ isin, section, buy, sell, qty })),
@@ -114,11 +116,12 @@ describe('golden: Dhan FY 2024-25 lots equal the Tax Report', () => {
       ours.forEach((lot, index) => {
         const report = theirs[index];
         if (report === undefined) throw new Error('lot count mismatch');
-        const id = `${lot.isin}|${lot.buy}`;
-        if (REPORT_ROUNDING.has(id)) {
-          expect(
-            abs(lot.buyValue - report.buyValue) + abs(lot.sellValue - report.sellValue),
-          ).toBeLessThanOrEqual(10n * PAISA);
+        const id = `${lot.isin}|${lot.buy}|${lot.sell}`;
+        const delta = REPORT_ROUNDING.get(id);
+        if (delta !== undefined) {
+          expect({ buy: lot.buyValue - report.buyValue, sell: lot.sellValue - report.sellValue }).toEqual(
+            delta,
+          );
         } else {
           expect([id, lot.buyValue, lot.sellValue]).toEqual([id, report.buyValue, report.sellValue]);
           exact += 1;
@@ -209,7 +212,3 @@ describe('golden: Zerodha tradebook', () => {
     });
   });
 });
-
-function abs(value: bigint): bigint {
-  return value < 0n ? -value : value;
-}
