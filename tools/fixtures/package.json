@@ -1,0 +1,14 @@
+{
+  "name": "bhavbook-fixture-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Builds anonymised broker fixtures and scans them for personal data (plan step S2).",
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}

@@ -1,0 +1,55 @@
+DP transction charges,From 01-04-2024 to 31-03-2025
+Name,TEST USER
+UCC,XXXX00000X
+Mobile,1234567890
+Email ID,test@example.com
+
+Date,Scrip Name,ISIN,Quantity,Type of Transaction,Charges
+"14 Jan 2025","Total GST for DP Transactions 14-Jan-2025","NA","0","SERVICETAX","4.50"
+"14 Jan 2025","KPIT Technologies","INE04I401011","3","DP Charges for Sale","12.50"
+"14 Jan 2025","Dixon Technologies","INE935N01020","1","DP Charges for Sale","12.50"
+"27 Nov 2024","Total GST for DP Transactions 27-Nov-2024","NA","0","SERVICETAX","2.25"
+"27 Nov 2024","Waaree Energies","INE377N01017","2","DP Charges for Sale","12.50"
+"12 Sep 2024","Total GST for DP Transactions 12-Sep-2024","NA","0","SERVICETAX","2.25"
+"12 Sep 2024","Platinum Industries","INE0PT501018","150","DP Charges for Sale","12.50"
+"11 Sep 2024","Platinum Industries","INE0PT501018","150","DP Charges for Sale","0.00"
+"10 Sep 2024","Total GST for DP Transactions 10-Sep-2024","NA","0","SERVICETAX","2.25"
+"10 Sep 2024","Platinum Industries","INE0PT501018","220","DP Charges for Sale","12.50"
+"09 Sep 2024","Platinum Industries","INE0PT501018","220","DP Charges for Sale","0.00"
+"06 Aug 2024","Shyam Metalics & Energy","INE810G01011","100","DP Charges for Sale","12.50"
+"06 Aug 2024","Total GST for DP Transactions 06-Aug-2024","NA","0","SERVICETAX","4.50"
+"06 Aug 2024","Electrosteel Castings","INE086A01029","100","DP Charges for Sale","12.50"
+"05 Aug 2024","Electrosteel Castings","INE086A01029","100","DP Charges for Sale","0.00"
+"05 Aug 2024","Shyam Metalics & Energy","INE810G01011","100","DP Charges for Sale","0.00"
+"19 Jul 2024","Electrosteel Castings","INE086A01029","300","DP Charges for Sale","12.50"
+"19 Jul 2024","Platinum Industries","INE0PT501018","150","DP Charges for Sale","12.50"
+"19 Jul 2024","Total GST for DP Transactions 19-Jul-2024","NA","0","SERVICETAX","4.50"
+"18 Jul 2024","Platinum Industries","INE0PT501018","150","DP Charges for Sale","0.00"
+"18 Jul 2024","Electrosteel Castings","INE086A01029","300","DP Charges for Sale","0.00"
+"16 Jul 2024","Total GST for DP Transactions 16-Jul-2024","NA","0","SERVICETAX","2.25"
+"16 Jul 2024","Platinum Industries","INE0PT501018","250","DP Charges for Sale","12.50"
+"15 Jul 2024","Platinum Industries","INE0PT501018","250","DP Charges for Sale","0.00"
+"11 Jul 2024","Total GST for DP Transactions 11-Jul-2024","NA","0","SERVICETAX","2.25"
+"11 Jul 2024","Tejas Networks","INE010J01012","10","DP Charges for Sale","12.50"
+"10 Jul 2024","Tejas Networks","INE010J01012","10","DP Charges for Sale","0.00"
+"09 Jul 2024","Campus Activewear","INE278Y01022","65","DP Charges for Sale","12.50"
+"09 Jul 2024","Total GST for DP Transactions 09-Jul-2024","NA","0","SERVICETAX","4.50"
+"09 Jul 2024","Gabriel","INE524A01029","120","DP Charges for Sale","12.50"
+"08 Jul 2024","Campus Activewear","INE278Y01022","65","DP Charges for Sale","0.00"
+"08 Jul 2024","Gabriel","INE524A01029","120","DP Charges for Sale","0.00"
+"04 Jul 2024","Total GST for DP Transactions 04-Jul-2024","NA","0","SERVICETAX","2.25"
+"04 Jul 2024","Jai Corp","INE070D01027","15","DP Charges for Sale","12.50"
+"03 Jul 2024","Jai Corp","INE070D01027","15","DP Charges for Sale","0.00"
+"27 Jun 2024","Total GST for DP Transactions 27-Jun-2024","NA","0","SERVICETAX","2.25"
+"27 Jun 2024","Gabriel","INE524A01029","45","DP Charges for Sale","12.50"
+"26 Jun 2024","Gabriel","INE524A01029","45","DP Charges for Sale","0.00"
+"25 Jun 2024","Total GST for DP Transactions 25-Jun-2024","NA","0","SERVICETAX","2.25"
+"25 Jun 2024","Lloyds Engineering Works","INE093R01011","1000","DP Charges for Sale","12.50"
+"24 Jun 2024","Lloyds Engineering Works","INE093R01011","1000","DP Charges for Sale","0.00"
+"20 Jun 2024","Varroc Engineering","INE665L01035","100","DP Charges for Sale","12.50"
+"20 Jun 2024","Total GST for DP Transactions 20-Jun-2024","NA","0","SERVICETAX","2.25"
+"19 Jun 2024","Varroc Engineering","INE665L01035","100","DP Charges for Sale","0.00"
+
+Total Securities,12,total_charges,250.75
+
+NOTE : This sheet was downloaded at 10/18/2026 10:30 PM
