@@ -547,6 +547,8 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
    - a random free port, bound to `127.0.0.1` only;
    - opens `http://127.0.0.1:<port>/?t=<token>`;
    - subcommands `backup <out>`, `restore <file>`, `doctor` (Node version ≥ 24.11, better-sqlite3 loads, `PRAGMA integrity_check`).
+   - **Single-instance vault lock (from the S4 review):** hold a lock file (`<vault>.lock`, O_EXCL with the PID) for the server's lifetime, so a restore or a second `npx bhavbook` can't touch an open vault. `restore` takes the same lock for the whole verify-and-swap.
+   - **Startup recovery (from the S4 review):** if the vault file is missing but a `.<vault>.old-*.tmp` exists (a crash mid-swap), move it back, plus its sidecars, before opening. Delete stale `.restore-*/.rebuilt-*/.snapshot-*` temp files.
 4. Tests:
    - no token → 401;
    - foreign `Host` → 403;

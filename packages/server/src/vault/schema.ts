@@ -14,10 +14,16 @@ export function hardenConnection(db: Database.Database): void {
   db.pragma('cell_size_check = ON');
 }
 
-/** Every user schema object as `type|name|table|sql`, sorted. SQLite's own objects are excluded. */
+/**
+ * Every schema object as `type|name|table|sql`, sorted. Nothing is excluded by name pattern (a LIKE filter would let a
+ * hostile `sqlitex_…` or `SQLITE_…` trigger through). Only SQLite's planner statistics tables are skipped, by exact
+ * name, because ANALYZE may create them in a real vault; they hold planner hints, not executable SQL.
+ */
 export function schemaFingerprint(db: Database.Database): string[] {
   const rows = db
-    .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
+    .prepare(
+      "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE NOT (type = 'table' AND name IN ('sqlite_stat1', 'sqlite_stat4'))",
+    )
     .all() as { type: string; name: string; tbl_name: string; sql: string | null }[];
   return rows
     .map((row) => [row.type, row.name, row.tbl_name, (row.sql ?? '').replace(/\s+/g, ' ').trim()].join('|'))

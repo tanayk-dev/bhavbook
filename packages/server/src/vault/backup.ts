@@ -13,6 +13,7 @@ import {
   readSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -189,12 +190,54 @@ function verifyStaged(staged: string, manifestVersion: number, migrations: reado
   }
 }
 
-function migrateStaged(staged: string, migrations: readonly Migration[], options: BackupOptions): void {
-  const db = new Database(staged, { fileMustExist: true });
+/**
+ * Builds a fresh vault from our own migrations at the backup's version and copies the backup's rows into it, table
+ * by table. Nothing from the backup's schema survives, and every STRICT type, NOT NULL, CHECK and foreign key is
+ * enforced again on insert (integrity_check alone does not catch rows that break CHECK constraints). Then migrates
+ * the result forward to the latest version.
+ */
+function rebuildFromBackup(
+  staged: string,
+  target: string,
+  version: number,
+  migrations: readonly Migration[],
+  options: BackupOptions,
+): void {
+  const db = new Database(target);
   try {
     hardenConnection(db);
+    const now = options.now ? { now: options.now } : {};
+    migrate(
+      db,
+      migrations.filter((migration) => migration.version <= version),
+      now,
+    );
+    db.pragma('foreign_keys = OFF');
+    db.prepare('ATTACH DATABASE ? AS backup').run(staged);
+    const tables = (
+      db
+        .prepare(
+          "SELECT name FROM main.sqlite_schema WHERE type = 'table' AND name NOT IN ('schema_migrations', 'sqlite_stat1', 'sqlite_stat4')",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    db.transaction(() => {
+      for (const table of tables) {
+        const columns = (
+          db.prepare('SELECT name FROM main.pragma_table_info(?)').all(table) as { name: string }[]
+        )
+          .map((column) => `"${column.name.replace(/"/g, '""')}"`)
+          .join(', ');
+        const quoted = `"${table.replace(/"/g, '""')}"`;
+        db.exec(`INSERT INTO main.${quoted} (${columns}) SELECT ${columns} FROM backup.${quoted}`);
+      }
+    })();
+    db.exec('DETACH DATABASE backup');
+    if ((db.pragma('foreign_key_check') as unknown[]).length > 0) {
+      throw new BackupError('backup has broken references');
+    }
     db.pragma('foreign_keys = ON');
-    migrate(db, migrations, options.now ? { now: options.now } : {});
+    migrate(db, migrations, now);
     db.pragma('journal_mode = DELETE');
   } finally {
     db.close();
@@ -207,6 +250,28 @@ function isBusy(error: unknown): boolean {
     'code' in error &&
     String((error as { code: unknown }).code).startsWith('SQLITE_BUSY')
   );
+}
+
+function sqliteCode(error: unknown): string {
+  return error instanceof Error && 'code' in error ? String((error as { code: unknown }).code) : '';
+}
+
+function isCorrupt(error: unknown): boolean {
+  const code = sqliteCode(error);
+  return code.startsWith('SQLITE_CORRUPT') || code === 'SQLITE_NOTADB';
+}
+
+/** Copies an unreadable live vault (and its WAL) into the backup directory, verifying the copy's size. */
+function keepRawCopy(vaultPath: string, options: BackupOptions): void {
+  const dir = ensureBackupDir(vaultPath);
+  const raw = uniqueBackupPath(dir, 'raw', nowOf(options), 'pre-restore-raw', 'db');
+  for (const suffix of ['', '-wal']) {
+    if (!existsSync(`${vaultPath}${suffix}`)) continue;
+    copyFileSync(`${vaultPath}${suffix}`, `${raw}${suffix}`);
+    if (statSync(`${raw}${suffix}`).size !== statSync(`${vaultPath}${suffix}`).size) {
+      throw new BackupError('could not copy the current vault before restoring; nothing was changed');
+    }
+  }
 }
 
 /**
@@ -228,11 +293,14 @@ function retireLiveVault(vaultPath: string, options: BackupOptions): void {
     if (isBusy(error))
       throw new BackupError('the vault is in use; close BhavBook and try again', { cause: error });
     if (error instanceof VaultError) throw error;
-    // Unreadable (corrupt) live vault: keep a raw copy so nothing is lost, then let the restore replace it.
-    const dir = ensureBackupDir(vaultPath);
-    const raw = uniqueBackupPath(dir, 'raw', nowOf(options), 'pre-restore-raw', 'db');
-    copyFileSync(vaultPath, raw);
-    if (existsSync(`${vaultPath}-wal`)) copyFileSync(`${vaultPath}-wal`, `${raw}-wal`);
+    // Only a vault SQLite itself reports as corrupt may be replaced without a snapshot; any other failure (disk
+    // full, permissions, a failed VACUUM) stops the restore so the current vault is never lost.
+    if (!isCorrupt(error)) {
+      throw new BackupError('could not back up the current vault before restoring; nothing was changed', {
+        cause: error,
+      });
+    }
+    keepRawCopy(vaultPath, options);
   } finally {
     live?.close();
   }
@@ -274,6 +342,7 @@ export function restoreBackup(
 ): { schemaVersion: number } {
   const migrations = options.migrations ?? loadMigrations();
   const staged = tempPath(vaultPath, 'restore');
+  const rebuilt = tempPath(vaultPath, 'rebuilt');
   try {
     const { manifest, db: bytes } = decodeBhav(readBounded(file));
     if (manifest.schemaVersion < 1) throw new BackupError('backup manifest has an invalid schema version');
@@ -285,14 +354,16 @@ export function restoreBackup(
     }
     writeFileSync(staged, bytes, { flag: 'wx', mode: OWNER_ONLY_FILE });
     verifyStaged(staged, manifest.schemaVersion, migrations);
-    migrateStaged(staged, migrations, options);
+    rebuildFromBackup(staged, rebuilt, manifest.schemaVersion, migrations, options);
     retireLiveVault(vaultPath, options);
-    swapIn(staged, vaultPath);
+    swapIn(rebuilt, vaultPath);
     return { schemaVersion: latestVersion(migrations) };
   } catch (error) {
     if (error instanceof BackupError) throw error;
     throw new BackupError('restore failed; the current vault was not changed', { cause: error });
   } finally {
-    for (const suffix of ['', ...SIDECARS]) rmSync(`${staged}${suffix}`, { force: true });
+    for (const temp of [staged, rebuilt]) {
+      for (const suffix of ['', ...SIDECARS]) rmSync(`${temp}${suffix}`, { force: true });
+    }
   }
 }

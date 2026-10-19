@@ -49,6 +49,46 @@ describe('restore rejects hostile or foreign databases', () => {
     });
   });
 
+  it('refuses a trigger whose name only looks like an internal object', () => {
+    withTempDir((dir) => {
+      const file = backupWith(dir, (db) =>
+        db.exec('CREATE TRIGGER sqlitex_evil AFTER INSERT ON import_batch BEGIN DELETE FROM trade_row; END;'),
+      );
+      expect(() => restoreBackup(file, path.join(dir, 'vault.db'), { appVersion: APP })).toThrow(/schema/);
+    });
+  });
+
+  it.each(['sqlite_evil', 'SQLITE_EVIL'])(
+    'refuses a reserved-name trigger written straight into sqlite_schema (%s), as a hand-crafted file could',
+    (name) => {
+      withTempDir((dir) => {
+        const file = backupWith(dir, (db) => {
+          // CREATE refuses reserved names, so a hostile file would carry the row directly.
+          db.unsafeMode(true);
+          db.pragma('writable_schema = ON');
+          db.prepare(
+            "INSERT INTO sqlite_schema (type, name, tbl_name, rootpage, sql) VALUES ('trigger', ?, 'import_batch', 0, ?)",
+          ).run(name, `CREATE TRIGGER ${name} AFTER INSERT ON import_batch BEGIN DELETE FROM trade_row; END`);
+          db.pragma('writable_schema = OFF');
+          db.unsafeMode(false);
+        });
+        expect(() => restoreBackup(file, path.join(dir, 'vault.db'), { appVersion: APP })).toThrow(
+          BackupError,
+        );
+      });
+    },
+  );
+
+  it('refuses rows that violate CHECK constraints (written with checks switched off)', () => {
+    withTempDir((dir) => {
+      const file = backupWith(dir, (db) => {
+        db.pragma('ignore_check_constraints = ON');
+        insertTrade(db, { dedup_key: 'bad', side: 'HOLD' });
+      });
+      expect(() => restoreBackup(file, path.join(dir, 'vault.db'), { appVersion: APP })).toThrow(BackupError);
+    });
+  });
+
   it('refuses a SQLite file that is not a BhavBook vault (application id)', () => {
     withTempDir((dir) => {
       const file = backupWith(dir, (db) => db.pragma('application_id = 7'));
@@ -105,6 +145,19 @@ describe('restore swaps safely', () => {
       expect(db.prepare('SELECT count(*) AS n FROM trade_row').get()).toEqual({ n: 1n });
       db.close();
       expect(readdirSync(`${vaultPath}.backups`).some((name) => name.includes('pre-restore-raw'))).toBe(true);
+    });
+  });
+
+  it('stops (and changes nothing) when the current vault cannot be backed up first', () => {
+    withTempDir((dir) => {
+      const vaultPath = path.join(dir, 'vault.db');
+      openVault(vaultPath, { appVersion: APP }).close();
+      // A plain file where the backup directory should be: the pre-restore snapshot must fail.
+      writeFileSync(`${vaultPath}.backups`, 'blocks the backup directory');
+      const before = readFileSync(vaultPath);
+      const file = backupWith(dir, () => undefined);
+      expect(() => restoreBackup(file, vaultPath, { appVersion: APP })).toThrow(/could not back up/);
+      expect(readFileSync(vaultPath).equals(before)).toBe(true);
     });
   });
 
