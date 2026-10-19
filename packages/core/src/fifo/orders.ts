@@ -23,31 +23,30 @@ function orderKey(fill: TradeFill): string {
 
 /** Orders in execution order of their first fill (fills are grouped in execution order). */
 export function groupFillsIntoOrders(fills: readonly TradeFill[]): Order[] {
-  const orders = new Map<string, Order>();
+  const builders = new Map<
+    string,
+    { first: TradeFill; fills: TradeFill[]; quantity: bigint; valueMicro: bigint }
+  >();
   for (const fill of [...fills].sort(compareFills)) {
     const key = orderKey(fill);
-    const seen = orders.get(key);
-    orders.set(
-      key,
-      seen === undefined
-        ? {
-            key,
-            accountId: fill.accountId,
-            instrumentKey: fill.instrumentKey,
-            side: fill.side,
-            tradeDateIst: fill.tradeDateIst,
-            externalOrderId: fill.externalOrderId,
-            quantity: fill.quantity,
-            valueMicro: fill.valueMicro,
-            fills: [fill],
-          }
-        : {
-            ...seen,
-            quantity: seen.quantity + fill.quantity,
-            valueMicro: seen.valueMicro + fill.valueMicro,
-            fills: [...seen.fills, fill],
-          },
-    );
+    const builder = builders.get(key);
+    if (builder === undefined) {
+      builders.set(key, { first: fill, fills: [fill], quantity: fill.quantity, valueMicro: fill.valueMicro });
+    } else {
+      builder.fills.push(fill);
+      builder.quantity += fill.quantity;
+      builder.valueMicro += fill.valueMicro;
+    }
   }
-  return [...orders.values()];
+  return [...builders.entries()].map(([key, { first, fills: grouped, quantity, valueMicro }]) => ({
+    key,
+    accountId: first.accountId,
+    instrumentKey: first.instrumentKey,
+    side: first.side,
+    tradeDateIst: first.tradeDateIst,
+    externalOrderId: first.externalOrderId,
+    quantity,
+    valueMicro,
+    fills: grouped,
+  }));
 }

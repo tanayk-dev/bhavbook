@@ -11,9 +11,11 @@ export interface TradeFill {
   readonly instrumentKey: string;
   /** Stable across re-imports; orders ties and anchors positions. */
   readonly dedupKey: string;
+  /** `YYYY-MM-DDTHH:MM:SSZ` exactly (whole seconds, as the adapters emit), so string order is time order. */
   readonly executedAtUtc: string;
   readonly tradeDateIst: string;
   readonly side: Side;
+  /** > 0. */
   readonly quantity: bigint;
   /** trade_value_micro: the broker's value, never qty x price (ADR-0008). */
   readonly valueMicro: bigint;
@@ -42,7 +44,10 @@ export interface FillAllocation {
   readonly side: Side;
   readonly quantity: bigint;
   readonly valueMicro: bigint;
-  /** HAS_INFERRED_PRODUCT: the bucket came from the netting rule, not a declared product or an override. */
+  /**
+   * HAS_INFERRED_PRODUCT (PRD §7.2, plan S9): the broker declared no product (Zerodha), so the bucket is inferred
+   * by the netting rule. Dhan fills keep their declared product visible instead; an override is never inferred.
+   */
   readonly inferred: boolean;
   readonly executedAtUtc: string;
   readonly tradeDateIst: string;

@@ -37,45 +37,55 @@ interface Open {
   remaining: bigint;
 }
 
+/** Open buys, oldest first; `head` skips the used-up ones (no O(n) shift). */
+interface Queue {
+  readonly items: Open[];
+  head: number;
+}
+
 /** Matches one sell against the open buys, oldest first; any rest is an orphan piece. */
-function consume(open: Open[], sell: FillAllocation, pieces: Piece[]): void {
+function consume(queue: Queue, sell: FillAllocation, pieces: Piece[]): void {
   let remaining = sell.quantity;
-  for (let head = open[0]; remaining > 0n && head !== undefined; head = open[0]) {
+  for (
+    let head = queue.items[queue.head];
+    remaining > 0n && head !== undefined;
+    head = queue.items[queue.head]
+  ) {
     const quantity = head.remaining < remaining ? head.remaining : remaining;
     pieces.push({ kind: 'lot', buy: head.allocation, sell, quantity });
     head.remaining -= quantity;
     remaining -= quantity;
-    if (head.remaining === 0n) open.shift();
+    if (head.remaining === 0n) queue.head += 1;
   }
   if (remaining > 0n) pieces.push({ kind: 'orphan', sell, quantity: remaining });
 }
 
-function openPieces(open: readonly Open[]): Piece[] {
-  return open.map(({ allocation, remaining }) => ({
-    kind: 'lot',
-    buy: allocation,
-    sell: null,
-    quantity: remaining,
-  }));
+function openPieces(queue: Queue): Piece[] {
+  return queue.items
+    .slice(queue.head)
+    .map(({ allocation, remaining }) => ({ kind: 'lot', buy: allocation, sell: null, quantity: remaining }));
 }
 
 /** Pairs a day's buys and sells in time order on each side (intraday: a sell may precede its buy). */
 function pairInOrder(buys: readonly FillAllocation[], sells: readonly FillAllocation[]): Piece[] {
   const pieces: Piece[] = [];
-  const open: Open[] = buys.map((allocation) => ({ allocation, remaining: allocation.quantity }));
-  for (const sell of sells) consume(open, sell, pieces);
-  return [...pieces, ...openPieces(open)];
+  const queue: Queue = {
+    items: buys.map((allocation) => ({ allocation, remaining: allocation.quantity })),
+    head: 0,
+  };
+  for (const sell of sells) consume(queue, sell, pieces);
+  return [...pieces, ...openPieces(queue)];
 }
 
 /** Holding-aware FIFO: a sell only matches buys executed before it. */
 function matchHeld(allocations: readonly FillAllocation[]): Piece[] {
   const pieces: Piece[] = [];
-  const open: Open[] = [];
+  const queue: Queue = { items: [], head: 0 };
   for (const allocation of allocations) {
-    if (allocation.side === 'BUY') open.push({ allocation, remaining: allocation.quantity });
-    else consume(open, allocation, pieces);
+    if (allocation.side === 'BUY') queue.items.push({ allocation, remaining: allocation.quantity });
+    else consume(queue, allocation, pieces);
   }
-  return [...pieces, ...openPieces(open)];
+  return [...pieces, ...openPieces(queue)];
 }
 
 function matchIntraday(allocations: readonly FillAllocation[]): Piece[] {

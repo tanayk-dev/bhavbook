@@ -97,8 +97,12 @@ describe('FIFO against an independent reference', () => {
         const expected = referenceFifo(allocations);
         for (const [sell, pieces] of expected) {
           const actual = [
-            ...matched.lots.filter((lot) => lot.exit === sell).map((lot) => `${lot.entry}:${String(lot.quantity)}`),
-            ...matched.orphans.filter((orphan) => orphan.allocation === sell).map((orphan) => `orphan:${String(orphan.quantity)}`),
+            ...matched.lots
+              .filter((lot) => lot.exit === sell)
+              .map((lot) => `${lot.entry}:${String(lot.quantity)}`),
+            ...matched.orphans
+              .filter((orphan) => orphan.allocation === sell)
+              .map((orphan) => `orphan:${String(orphan.quantity)}`),
           ];
           expect(actual).toEqual(pieces);
         }
@@ -112,7 +116,8 @@ describe('FIFO against an independent reference', () => {
       fc.property(fillsArbitrary, (fills) => {
         const { allocations, matched } = reconstruct(fills);
         const orphaned = new Map<string, bigint>();
-        for (const orphan of matched.orphans) orphaned.set(orphan.allocation, (orphaned.get(orphan.allocation) ?? 0n) + orphan.quantity);
+        for (const orphan of matched.orphans)
+          orphaned.set(orphan.allocation, (orphaned.get(orphan.allocation) ?? 0n) + orphan.quantity);
         const held = new Map<string, bigint>();
         for (const allocation of allocations) {
           if (allocation.bucket === 'INTRADAY') continue;
@@ -133,8 +138,25 @@ describe('FIFO against an independent reference', () => {
   });
 
   it('keeps accounts apart even when their dedup keys collide', () => {
-    const a = fill({ side: 'BUY', qty: 5, price: 100, at: '2025-01-01 10:00', account: 'A', product: 'DELIVERY' });
-    const b = { ...fill({ side: 'SELL', qty: 5, price: 100, at: '2025-01-01 10:00', account: 'B', product: 'DELIVERY' }), dedupKey: a.dedupKey };
+    const a = fill({
+      side: 'BUY',
+      qty: 5,
+      price: 100,
+      at: '2025-01-01 10:00',
+      account: 'A',
+      product: 'DELIVERY',
+    });
+    const b = {
+      ...fill({
+        side: 'SELL',
+        qty: 5,
+        price: 100,
+        at: '2025-01-01 10:00',
+        account: 'B',
+        product: 'DELIVERY',
+      }),
+      dedupKey: a.dedupKey,
+    };
     const { positions } = reconstruct([b, a]);
     expect(positions.map((position) => [position.accountId, position.state, position.incomplete])).toEqual([
       ['A', 'OPEN', false],
@@ -150,14 +172,24 @@ describe('cases the first tests missed', () => {
       fill({ side: 'SELL', qty: 8, price: 110, at: '2025-01-03 10:00', product: 'DELIVERY' }),
     ]);
     const position = first(positions);
-    expect([position.state, position.incomplete, position.orphanQty, position.lots.length]).toEqual(['CLOSED', true, 3n, 1]);
+    expect([position.state, position.incomplete, position.orphanQty, position.lots.length]).toEqual([
+      'CLOSED',
+      true,
+      3n,
+      1,
+    ]);
     expect(position.lots[0]?.exitValueMicro).toBe(550_000_000n);
     expect(position.orphans[0]?.valueMicro).toBe(330_000_000n);
   });
 
   it('splits an indivisible value across three lots exactly', () => {
-    const buy = { ...fill({ side: 'BUY', qty: 3, price: 0, at: '2025-01-01 10:00', product: 'DELIVERY' }), valueMicro: 100n };
-    const sells = [1, 2, 3].map((day) => fill({ side: 'SELL', qty: 1, price: 1, at: `2025-01-0${String(day + 1)} 10:00`, product: 'DELIVERY' }));
+    const buy = {
+      ...fill({ side: 'BUY', qty: 3, price: 0, at: '2025-01-01 10:00', product: 'DELIVERY' }),
+      valueMicro: 100n,
+    };
+    const sells = [1, 2, 3].map((day) =>
+      fill({ side: 'SELL', qty: 1, price: 1, at: `2025-01-0${String(day + 1)} 10:00`, product: 'DELIVERY' }),
+    );
     const lots = first(reconstruct([buy, ...sells]).positions).lots;
     expect(lots.map((lot) => lot.entryValueMicro)).toEqual([34n, 33n, 33n]);
   });
@@ -167,7 +199,9 @@ describe('cases the first tests missed', () => {
       fill({ side: 'BUY', qty: 10, price: 100, at: '2025-01-01 10:00', product: 'MTF' }),
       fill({ side: 'SELL', qty: 10, price: 120, at: '2025-01-09 10:00', product: 'MTF' }),
     ]);
-    expect(positions.map((position) => [position.bucket, position.state, rupees(grossPnlMicro(position))])).toEqual([['MTF', 'CLOSED', '200']]);
+    expect(
+      positions.map((position) => [position.bucket, position.state, rupees(grossPnlMicro(position))]),
+    ).toEqual([['MTF', 'CLOSED', '200']]);
   });
 
   it('an override to DELIVERY keeps a netted day out of intraday', () => {
@@ -175,8 +209,12 @@ describe('cases the first tests missed', () => {
       fill({ side: 'BUY', qty: 10, price: 100, at: '2025-01-02 10:00' }),
       fill({ side: 'SELL', qty: 10, price: 101, at: '2025-01-02 11:00' }),
     ];
-    const { positions } = reconstruct(fills, [{ accountId: 'acc', instrumentKey: 'INE000000001', tradeDateIst: '2025-01-02', bucket: 'DELIVERY' }]);
-    expect(positions.map((position) => [position.bucket, position.state, position.hasInferredProduct])).toEqual([['DELIVERY', 'CLOSED', false]]);
+    const { positions } = reconstruct(fills, [
+      { accountId: 'acc', instrumentKey: 'INE000000001', tradeDateIst: '2025-01-02', bucket: 'DELIVERY' },
+    ]);
+    expect(
+      positions.map((position) => [position.bucket, position.state, position.hasInferredProduct]),
+    ).toEqual([['DELIVERY', 'CLOSED', false]]);
   });
 
   it('an INTRADAY override on an unbalanced day only re-buckets what can be intraday', () => {
@@ -184,12 +222,15 @@ describe('cases the first tests missed', () => {
       fill({ side: 'BUY', qty: 10, price: 100, at: '2025-01-02 10:00', product: 'DELIVERY' }),
       fill({ side: 'SELL', qty: 4, price: 101, at: '2025-01-02 11:00', product: 'DELIVERY' }),
     ];
-    const { allocations } = reconstruct(fills, [{ accountId: 'acc', instrumentKey: 'INE000000001', tradeDateIst: '2025-01-02', bucket: 'INTRADAY' }]);
-    expect(allocations.map((allocation) => `${allocation.side} ${allocation.bucket} ${String(allocation.quantity)} ${String(allocation.inferred)}`)).toEqual([
-      'BUY INTRADAY 4 false',
-      'BUY DELIVERY 6 false',
-      'SELL INTRADAY 4 false',
+    const { allocations } = reconstruct(fills, [
+      { accountId: 'acc', instrumentKey: 'INE000000001', tradeDateIst: '2025-01-02', bucket: 'INTRADAY' },
     ]);
+    expect(
+      allocations.map(
+        (allocation) =>
+          `${allocation.side} ${allocation.bucket} ${String(allocation.quantity)} ${String(allocation.inferred)}`,
+      ),
+    ).toEqual(['BUY INTRADAY 4 false', 'BUY DELIVERY 6 false', 'SELL INTRADAY 4 false']);
   });
 });
 
@@ -198,12 +239,21 @@ describe('input validation', () => {
     const good = fill({ side: 'BUY', qty: 1, price: 1, at: '2025-01-01 10:00' });
     expect(() => allocateBuckets([{ ...good, quantity: 0n }], [])).toThrow(InvalidArgumentError);
     expect(() => allocateBuckets([{ ...good, valueMicro: -1n }], [])).toThrow(InvalidArgumentError);
-    expect(() => allocateBuckets([{ ...good, executedAtUtc: '2025-01-01T04:30:00.5Z' }], [])).toThrow(InvalidArgumentError);
+    expect(() => allocateBuckets([{ ...good, executedAtUtc: '2025-01-01T04:30:00.5Z' }], [])).toThrow(
+      InvalidArgumentError,
+    );
   });
 
   it('rejects two overrides for the same day (the winner would depend on input order)', () => {
-    const override: ProductOverride = { accountId: 'acc', instrumentKey: 'X', tradeDateIst: '2025-01-02', bucket: 'DELIVERY' };
-    expect(() => allocateBuckets([], [override, { ...override, bucket: 'MTF' }])).toThrow(InvalidArgumentError);
+    const override: ProductOverride = {
+      accountId: 'acc',
+      instrumentKey: 'X',
+      tradeDateIst: '2025-01-02',
+      bucket: 'DELIVERY',
+    };
+    expect(() => allocateBuckets([], [override, { ...override, bucket: 'MTF' }])).toThrow(
+      InvalidArgumentError,
+    );
   });
 });
 

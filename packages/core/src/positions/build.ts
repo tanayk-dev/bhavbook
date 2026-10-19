@@ -98,25 +98,31 @@ function intradayRuns(allocations: readonly FillAllocation[], orphaned: Readonly
   });
 }
 
-function toPosition(run: Run, lots: readonly Lot[], orphans: readonly Orphan[]): Position {
+interface Indexed {
+  readonly lotsByEntry: ReadonlyMap<string, readonly Lot[]>;
+  readonly orphansBySell: ReadonlyMap<string, readonly Orphan[]>;
+}
+
+function toPosition(run: Run, index: Indexed): Position {
   const { opening } = run;
   const anchorKey = `${opening.dedupKey}#${opening.bucket}`;
-  const members = new Set(run.members.map((member) => member.key));
-  const ownLots = lots.filter((lot) => members.has(lot.entry));
+  const lots = run.members.flatMap((member) => index.lotsByEntry.get(member.key) ?? []);
+  const orphans = run.members.flatMap((member) => index.orphansBySell.get(member.key) ?? []);
+  const open = lots.some((lot) => lot.exit === null);
   return {
     id: [opening.accountId, opening.instrumentKey, opening.bucket, anchorKey].join('|'),
     accountId: opening.accountId,
     instrumentKey: opening.instrumentKey,
     bucket: opening.bucket,
-    state: ownLots.some((lot) => lot.exit === null) ? 'OPEN' : 'CLOSED',
+    state: open ? 'OPEN' : 'CLOSED',
     incomplete: run.orphanQty > 0n,
     orphanQty: run.orphanQty,
     openedAtUtc: opening.executedAtUtc,
-    closedAtUtc: ownLots.some((lot) => lot.exit === null) ? null : run.closedAtUtc,
+    closedAtUtc: open ? null : run.closedAtUtc,
     anchorKey,
     hasInferredProduct: run.members.some((member) => member.inferred),
-    lots: ownLots,
-    orphans: orphans.filter((orphan) => members.has(orphan.allocation)),
+    lots,
+    orphans,
   };
 }
 
@@ -125,6 +131,10 @@ export function buildPositions(allocations: readonly FillAllocation[], matched: 
   for (const orphan of matched.orphans) {
     orphaned.set(orphan.allocation, (orphaned.get(orphan.allocation) ?? 0n) + orphan.quantity);
   }
+  const index: Indexed = {
+    lotsByEntry: groupBy(matched.lots, (lot) => lot.entry),
+    orphansBySell: groupBy(matched.orphans, (orphan) => orphan.allocation),
+  };
   const groups = groupBy(allocations, (allocation) =>
     [allocation.accountId, allocation.instrumentKey, allocation.bucket].join('\u0000'),
   );
@@ -132,7 +142,7 @@ export function buildPositions(allocations: readonly FillAllocation[], matched: 
     const ordered = [...group].sort(compareAllocations);
     const runs =
       ordered[0]?.bucket === 'INTRADAY' ? intradayRuns(ordered, orphaned) : heldRuns(ordered, orphaned);
-    return runs.map((run) => toPosition(run, matched.lots, matched.orphans));
+    return runs.map((run) => toPosition(run, index));
   });
 }
 
