@@ -104,6 +104,11 @@ interface Evidence {
   readonly days: readonly { trade: DayAggregate; statements: readonly DayAggregate[] }[];
 }
 
+/** `next` when nothing was seen yet, else the names in both. */
+function intersect(seen: ReadonlySet<string> | null, next: ReadonlySet<string>): Set<string> {
+  return new Set(seen === null ? next : [...seen].filter((name) => next.has(name)));
+}
+
 /** The statement names consistent with every evidence day (null when no day has statements). */
 function candidatesOf(evidence: Evidence): Set<string> | null {
   let candidates: Set<string> | null = null;
@@ -113,7 +118,7 @@ function candidatesOf(evidence: Evidence): Set<string> | null {
         .filter((row) => row.buyQty === trade.buyQty && row.sellQty === trade.sellQty)
         .map((row) => row.name),
     );
-    candidates = candidates === null ? matching : new Set([...candidates].filter((name) => matching.has(name)));
+    candidates = intersect(candidates, matching);
   }
   return candidates;
 }
@@ -124,10 +129,15 @@ function closestByValue(evidence: Evidence, candidates: readonly string[]): stri
     evidence.days.reduce((sum, { trade, statements }) => {
       const row = statements.find((entry) => entry.name === name);
       if (row === undefined) return sum;
-      return sum + abs(trade.buyValueMicro - row.buyValueMicro) + abs(trade.sellValueMicro - row.sellValueMicro);
+      return (
+        sum + abs(trade.buyValueMicro - row.buyValueMicro) + abs(trade.sellValueMicro - row.sellValueMicro)
+      );
     }, 0n);
   const ranked = candidates.map((name) => ({ name, distance: distance(name) }));
-  const best = ranked.reduce((min, entry) => (entry.distance < min ? entry.distance : min), ranked[0]?.distance ?? 0n);
+  const best = ranked.reduce(
+    (min, entry) => (entry.distance < min ? entry.distance : min),
+    ranked[0]?.distance ?? 0n,
+  );
   const winners = ranked.filter((entry) => entry.distance === best);
   return winners.length === 1 ? (winners[0]?.name ?? null) : null;
 }
@@ -138,7 +148,8 @@ function sameName(alias: string, candidates: readonly string[]): string | null {
   return hits.length === 1 ? (hits[0] ?? null) : null;
 }
 
-type JoinOutcome = { readonly statementName: string } | { readonly reason: UnresolvedReason; candidates: string[] };
+type JoinOutcome =
+  { readonly statementName: string } | { readonly reason: UnresolvedReason; candidates: string[] };
 
 function join(evidence: Evidence): JoinOutcome {
   const found = candidatesOf(evidence);

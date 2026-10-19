@@ -48,8 +48,9 @@ function score(query: string, candidate: string): number {
   const shared = [...left].filter((token) => right.has(token)).length;
   const union = new Set([...left, ...right]).size;
   const overlap = union === 0 ? 0 : shared / union;
-  const [single, ...others] = rawTokens(query);
-  const acronym = single !== undefined && others.length === 0 && single.length >= 2 && single === acronymOf(candidate);
+  const [single, ...others] = normaliseName(query);
+  const acronym =
+    single !== undefined && others.length === 0 && single.length >= 2 && single === acronymOf(candidate);
   return Math.max(overlap, acronym ? ACRONYM_SCORE : 0);
 }
 

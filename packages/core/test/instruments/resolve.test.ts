@@ -29,9 +29,27 @@ describe('aggregateByDay', () => {
   it('sums quantities and values per (date, name) and side', () => {
     expect(
       aggregateByDay([
-        { date: '2024-06-04', name: 'Rural Electrification Corporation', side: 'BUY', quantity: 15n, valueMicro: 8_133_000_000n },
-        { date: '2024-06-04', name: 'Rural Electrification Corporation', side: 'BUY', quantity: 5n, valueMicro: 2_711_000_000n },
-        { date: '2024-06-04', name: 'Rural Electrification Corporation', side: 'SELL', quantity: 20n, valueMicro: 10_423_000_000n },
+        {
+          date: '2024-06-04',
+          name: 'Rural Electrification Corporation',
+          side: 'BUY',
+          quantity: 15n,
+          valueMicro: 8_133_000_000n,
+        },
+        {
+          date: '2024-06-04',
+          name: 'Rural Electrification Corporation',
+          side: 'BUY',
+          quantity: 5n,
+          valueMicro: 2_711_000_000n,
+        },
+        {
+          date: '2024-06-04',
+          name: 'Rural Electrification Corporation',
+          side: 'SELL',
+          quantity: 20n,
+          valueMicro: 10_423_000_000n,
+        },
         { date: '2024-06-05', name: 'HCC', side: 'BUY', quantity: 1n, valueMicro: 1n },
       ]),
     ).toEqual([
@@ -41,9 +59,12 @@ describe('aggregateByDay', () => {
   });
 
   it('merges statement rows of the same day and name (several bills)', () => {
-    expect(mergeDayAggregates([day('2024-06-04', 'REC', 10n, 0n, 5n, 0n), day('2024-06-04', 'REC', 10n, 20n, 5n, 9n)])).toEqual([
-      day('2024-06-04', 'REC', 20n, 20n, 10n, 9n),
-    ]);
+    expect(
+      mergeDayAggregates([
+        day('2024-06-04', 'REC', 10n, 0n, 5n, 0n),
+        day('2024-06-04', 'REC', 10n, 20n, 5n, 9n),
+      ]),
+    ).toEqual([day('2024-06-04', 'REC', 20n, 20n, 10n, 9n)]);
   });
 });
 
@@ -57,7 +78,10 @@ describe('resolveAliases: the transaction join', () => {
 
   it('maps a trade-file name to the statement name with the same day quantities, then to its ISIN', () => {
     const result = resolveAliases({
-      trades: [day('2024-06-04', 'Rural Electrification Corporation', 20n, 20n), day('2024-06-25', 'HCC', 350n, 350n)],
+      trades: [
+        day('2024-06-04', 'Rural Electrification Corporation', 20n, 20n),
+        day('2024-06-25', 'HCC', 350n, 350n),
+      ],
       statements: [
         day('2024-06-04', 'REC', 20n, 20n),
         day('2024-06-25', 'Hindustan Construction Company', 350n, 350n),
@@ -99,14 +123,18 @@ describe('resolveAliases: the transaction join', () => {
       hints,
       known: [],
     });
-    expect(byValue.resolved).toEqual([{ alias: 'Indian Railway Finance', isin: IRFC, source: 'join', via: 'IRFC' }]);
+    expect(byValue.resolved).toEqual([
+      { alias: 'Indian Railway Finance', isin: IRFC, source: 'join', via: 'IRFC' },
+    ]);
     const byName = resolveAliases({
       trades: [day('2024-05-23', 'bharti  hexacom', 50n, 0n, 1n)],
       statements: [day('2024-05-23', 'IRFC', 50n, 0n, 1n), day('2024-05-23', 'Bharti Hexacom', 50n, 0n, 1n)],
       hints,
       known: [],
     });
-    expect(byName.resolved).toEqual([{ alias: 'bharti  hexacom', isin: BHARTI, source: 'join', via: 'Bharti Hexacom' }]);
+    expect(byName.resolved).toEqual([
+      { alias: 'bharti  hexacom', isin: BHARTI, source: 'join', via: 'Bharti Hexacom' },
+    ]);
   });
 
   it('leaves a true tie, a contradiction, missing evidence and a missing ISIN unresolved, with the reason', () => {
@@ -151,7 +179,11 @@ describe('resolveAliases: the transaction join', () => {
 
   it('is deterministic: input order never changes the result', () => {
     const input = {
-      trades: [day('2024-06-04', 'A', 20n, 20n), day('2024-06-25', 'B', 350n, 350n), day('2024-05-23', 'C', 50n, 0n, 1n)],
+      trades: [
+        day('2024-06-04', 'A', 20n, 20n),
+        day('2024-06-25', 'B', 350n, 350n),
+        day('2024-05-23', 'C', 50n, 0n, 1n),
+      ],
       statements: [
         day('2024-06-04', 'REC', 20n, 20n),
         day('2024-06-25', 'Hindustan Construction Company', 350n, 350n),
@@ -163,9 +195,13 @@ describe('resolveAliases: the transaction join', () => {
     };
     const expected = resolveAliases(input);
     fc.assert(
-      fc.property(fc.shuffledSubarray(input.trades, { minLength: 3 }), fc.shuffledSubarray(input.statements, { minLength: 4 }), (trades, statements) => {
-        expect(resolveAliases({ ...input, trades, statements })).toEqual(expected);
-      }),
+      fc.property(
+        fc.shuffledSubarray(input.trades, { minLength: 3 }),
+        fc.shuffledSubarray(input.statements, { minLength: 4 }),
+        (trades, statements) => {
+          expect(resolveAliases({ ...input, trades, statements })).toEqual(expected);
+        },
+      ),
     );
   });
 });

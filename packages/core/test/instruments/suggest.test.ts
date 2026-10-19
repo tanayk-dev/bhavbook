@@ -12,7 +12,12 @@ const OPTIONS = [
 
 describe('normaliseName', () => {
   it('lower-cases, drops punctuation and legal suffixes, and keeps the tokens in order', () => {
-    expect(normaliseName('Sterling & Wilson Renewable Energy Ltd.')).toEqual(['sterling', 'wilson', 'renewable', 'energy']);
+    expect(normaliseName('Sterling & Wilson Renewable Energy Ltd.')).toEqual([
+      'sterling',
+      'wilson',
+      'renewable',
+      'energy',
+    ]);
     expect(normaliseName('  THE Bank of Maharashtra Limited ')).toEqual(['bank', 'maharashtra']);
   });
 });
@@ -33,6 +38,8 @@ describe('suggestInstruments', () => {
 
   it('returns nothing for no overlap, caps the list, and breaks ties by name', () => {
     expect(suggestInstruments('Zydus', OPTIONS)).toEqual([]);
-    expect(suggestInstruments('Hindustan', OPTIONS, 1).map((entry) => entry.name)).toEqual(['Hindustan Aeronautics']);
+    expect(suggestInstruments('Hindustan', OPTIONS, 1).map((entry) => entry.name)).toEqual([
+      'Hindustan Aeronautics',
+    ]);
   });
 });

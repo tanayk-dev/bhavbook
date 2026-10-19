@@ -57,7 +57,8 @@ describe('resolveInstruments: Dhan', () => {
         .pluck()
         .all(DHAN) as string[];
       expect(names).toHaveLength(36);
-      for (const name of names) expect(isinOf(db, 'dhan', name), name.slice(0, 2)).toMatch(/^IN[A-Z0-9]{9}\d$/);
+      for (const name of names)
+        expect(isinOf(db, 'dhan', name), name.slice(0, 2)).toMatch(/^IN[A-Z0-9]{9}\d$/);
       expect(summary.unresolved.filter((entry) => entry.reason === 'ambiguous')).toEqual([]);
       expect(summary.unresolved.filter((entry) => names.includes(entry.alias))).toEqual([]);
     });
@@ -70,7 +71,9 @@ describe('resolveInstruments: Dhan', () => {
       expect(isinOf(db, 'dhan', 'Rural Electrification Corporation')).toBe(REC);
       expect(isinOf(db, 'dhan', 'HCC')).toBe(HCC);
       const sources = db
-        .prepare("SELECT alias, source FROM instrument_alias WHERE alias IN ('Rural Electrification Corporation', 'HCC', 'REC')")
+        .prepare(
+          "SELECT alias, source FROM instrument_alias WHERE alias IN ('Rural Electrification Corporation', 'HCC', 'REC')",
+        )
         .all() as { alias: string; source: string }[];
       expect(Object.fromEntries(sources.map((row) => [row.alias, row.source]))).toEqual({
         'Rural Electrification Corporation': 'join',
@@ -86,9 +89,13 @@ describe('resolveInstruments: Dhan', () => {
       const { unresolved } = resolveInstruments(db, DHAN, { now });
       expect(unresolved.length).toBeGreaterThan(0);
       const issues = db
-        .prepare("SELECT fingerprint, status, subject_json FROM issue WHERE kind = 'unresolved_instrument' ORDER BY fingerprint")
+        .prepare(
+          "SELECT fingerprint, status, subject_json FROM issue WHERE kind = 'unresolved_instrument' ORDER BY fingerprint",
+        )
         .all() as { fingerprint: string; status: string; subject_json: string }[];
-      expect(issues.map((issue) => issue.fingerprint)).toEqual(unresolved.map((entry) => `dhan:${entry.alias}`).sort());
+      expect(issues.map((issue) => issue.fingerprint)).toEqual(
+        unresolved.map((entry) => `dhan:${entry.alias}`).sort(),
+      );
       expect(issues.every((issue) => issue.status === 'open')).toBe(true);
       const [first] = unresolved;
       if (first === undefined) throw new Error('expected an unresolved name');
@@ -103,7 +110,10 @@ describe('resolveInstruments: Dhan', () => {
       resolveInstruments(db, DHAN, { now });
       expect(isinOf(db, 'dhan', first.alias)).toBe(REC);
       expect(
-        db.prepare("SELECT source FROM instrument_alias WHERE broker = 'dhan' AND alias = ?").pluck().get(first.alias),
+        db
+          .prepare("SELECT source FROM instrument_alias WHERE broker = 'dhan' AND alias = ?")
+          .pluck()
+          .get(first.alias),
       ).toBe('manual');
     });
   });
@@ -149,7 +159,12 @@ describe('manual mapping', () => {
 
   it('can create an instrument without an ISIN', async () => {
     await withVault(({ db }) => {
-      mapInstrumentManually(db, { broker: 'dhan', alias: 'Unlisted Co' }, { newDisplayName: 'Unlisted Co' }, { now });
+      mapInstrumentManually(
+        db,
+        { broker: 'dhan', alias: 'Unlisted Co' },
+        { newDisplayName: 'Unlisted Co' },
+        { now },
+      );
       const row = db
         .prepare(
           `SELECT i.isin, i.display_name, a.source FROM instrument_alias a JOIN instrument i ON i.id = a.instrument_id
@@ -162,7 +177,9 @@ describe('manual mapping', () => {
 
   it('rejects a malformed ISIN', async () => {
     await withVault(({ db }) => {
-      expect(() => mapInstrumentManually(db, { broker: 'dhan', alias: 'X' }, { isin: 'not-an-isin' }, { now })).toThrow();
+      expect(() => {
+        mapInstrumentManually(db, { broker: 'dhan', alias: 'X' }, { isin: 'not-an-isin' }, { now });
+      }).toThrow();
     });
   });
 });
