@@ -1,0 +1,18 @@
+packages:
+  - packages/*
+  - tools/*
+
+# Supply-chain guard for future upgrades: skip releases younger than 3 days (ADR-0021).
+minimumReleaseAge: 4320
+
+# Exact-version exceptions for pins that were the latest stable release when chosen (ADR-0021, 2026-10-19)
+# but were younger than the 3-day window at install time. Remove each entry once it has aged out.
+minimumReleaseAgeExclude:
+  - eslint@10.13.0
+
+# Install scripts are denied by default; allow only packages that need a native/binary step.
+allowBuilds:
+  esbuild: true
+
+# Exact versions only (ADR-0021).
+savePrefix: ''

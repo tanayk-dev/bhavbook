@@ -1,0 +1,17 @@
+{
+  "name": "@bhavbook/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure domain logic: money, time, FIFO, positions, fees, analytics (no I/O).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.11"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit"
+  }
+}

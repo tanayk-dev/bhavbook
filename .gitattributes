@@ -1,0 +1,10 @@
+# Normalise source text to LF.
+* text=auto eol=lf
+
+# Broker fixtures must stay byte-faithful (CRLF, missing trailing newline, quoting).
+*.csv -text
+*.xls binary
+*.xlsx binary
+*.bhav binary
+*.webp binary
+*.png binary

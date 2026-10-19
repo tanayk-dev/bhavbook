@@ -1,0 +1,17 @@
+{
+  "name": "@bhavbook/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser UI.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.11"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit"
+  }
+}

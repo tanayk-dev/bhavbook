@@ -1,0 +1,34 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vite/
+
+# Vaults, backups and local databases (never commit user data)
+*.db
+*.db-*
+*.bhav
+!**/fixtures/*.bhav
+
+# Environment and local secrets
+.env
+.env.*
+.bhavbook-pii-denylist
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Claude Code local-only settings
+.claude/settings.local.json
+
+# Real broker exports contain personal data: keep only notes and placeholders.
+# Anonymised fixtures live in packages/adapters/fixtures (see plans/bhavbook-v1.md S2).
+docs/broker-exports/**
+!docs/broker-exports/**/
+!docs/broker-exports/**/*.md
+!docs/broker-exports/**/.gitkeep

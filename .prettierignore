@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+pnpm-lock.yaml
+docs/broker-exports
+**/fixtures
+docs
+plans
+.claude
