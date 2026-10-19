@@ -68,7 +68,10 @@ describe('zerodha tradebook: review follow-ups', () => {
 
   it('handles a UTF-8 BOM and lowercase values', () => {
     const line = GOOD.replace(',NSE,', ',nse,').replace(',sell,', ',SELL,');
-    const result = zerodhaAdapter.parse({ type: 'text', text: `﻿${HEADER}\r\n${line}` }, 'zerodha.tradebook');
+    const result = zerodhaAdapter.parse(
+      { type: 'text', text: `\uFEFF${HEADER}\r\n${line}` },
+      'zerodha.tradebook',
+    );
     expect(result.rows[0]).toMatchObject({ exchange: 'NSE', side: 'SELL' });
   });
 });

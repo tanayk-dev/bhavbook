@@ -11,7 +11,7 @@ import type {
 } from '../contract.js';
 import { cellText } from '../cells.js';
 import { isTaxPnl, parseTaxPnl } from './tax-pnl.js';
-import { isTradebookHeader, parseTradebook } from './tradebook.js';
+import { parseTradebook, tradebookHeaderConfidence } from './tradebook.js';
 
 function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0] ?? '';
@@ -24,8 +24,10 @@ function sheetTitles(sheets: readonly SheetData[]): string[] {
 }
 
 function detect(probe: FileProbe): Detection | null {
-  if (probe.type === 'text')
-    return isTradebookHeader(firstLine(probe.head)) ? { kind: 'zerodha.tradebook', confidence: 1 } : null;
+  if (probe.type === 'text') {
+    const confidence = tradebookHeaderConfidence(firstLine(probe.head));
+    return confidence > 0 ? { kind: 'zerodha.tradebook', confidence } : null;
+  }
   if (isTaxPnl(probe.sheets.map((sheet) => sheet.name))) return { kind: 'zerodha.tax_pnl', confidence: 1 };
   const titles = sheetTitles(probe.sheets);
   if (titles.some((title) => title.startsWith('Annual Global Transaction Statement')))
