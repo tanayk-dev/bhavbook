@@ -23,13 +23,18 @@ describe('the join checks values', () => {
       known: [],
     });
     expect(result.resolved).toEqual([]);
-    expect(result.unresolved).toEqual([{ alias: 'Coincidence', reason: 'value_mismatch', candidates: ['IRFC'] }]);
+    expect(result.unresolved).toEqual([
+      { alias: 'Coincidence', reason: 'value_mismatch', candidates: ['IRFC'] },
+    ]);
   });
 
   it('refuses the nearest of several candidates when none is close', () => {
     const result = resolveAliases({
       trades: [day('2024-05-23', 'Far', 50n, 100n * RUPEE)],
-      statements: [day('2024-05-23', 'IRFC', 50n, 5_000n * RUPEE), day('2024-05-23', 'Bharti Hexacom', 50n, 6_000n * RUPEE)],
+      statements: [
+        day('2024-05-23', 'IRFC', 50n, 5_000n * RUPEE),
+        day('2024-05-23', 'Bharti Hexacom', 50n, 6_000n * RUPEE),
+      ],
       hints,
       known: [],
     });
@@ -45,13 +50,18 @@ describe('the join checks values', () => {
       hints,
       known: [],
     });
-    expect(result.resolved).toEqual([{ alias: 'Lloyds Engineering', isin: 'INE053F01010', source: 'join', via: 'IRFC' }]);
+    expect(result.resolved).toEqual([
+      { alias: 'Lloyds Engineering', isin: 'INE053F01010', source: 'join', via: 'IRFC' },
+    ]);
   });
 
   it('prefers an identical name only among candidates whose values agree', () => {
     const result = resolveAliases({
       trades: [day('2024-05-23', 'IRFC', 50n, 9_360n * RUPEE)],
-      statements: [day('2024-05-23', 'IRFC', 50n, 9_360n * RUPEE), day('2024-05-23', 'Bharti Hexacom', 50n, 9_360n * RUPEE)],
+      statements: [
+        day('2024-05-23', 'IRFC', 50n, 9_360n * RUPEE),
+        day('2024-05-23', 'Bharti Hexacom', 50n, 9_360n * RUPEE),
+      ],
       hints,
       known: [],
     });

@@ -23,7 +23,12 @@ describe('manual mappings are final', () => {
       await importDhan(service);
       const [first] = resolveInstruments(db, DHAN, { now }).unresolved;
       if (first === undefined) throw new Error('expected an unresolved name');
-      mapInstrumentManually(db, { broker: 'dhan', alias: first.alias }, { newDisplayName: first.alias }, { now });
+      mapInstrumentManually(
+        db,
+        { broker: 'dhan', alias: first.alias },
+        { newDisplayName: first.alias },
+        { now },
+      );
       const summary = resolveInstruments(db, DHAN, { now });
       expect(summary.unresolved.map((entry) => entry.alias)).not.toContain(first.alias);
       const status = db
@@ -48,7 +53,10 @@ describe('manual mappings are final', () => {
         .get();
       expect(isin).toBe(REC);
       expect(
-        db.prepare("SELECT count(*) FROM issue WHERE fingerprint = 'dhan:HCC' AND status = 'open'").pluck().get(),
+        db
+          .prepare("SELECT count(*) FROM issue WHERE fingerprint = 'dhan:HCC' AND status = 'open'")
+          .pluck()
+          .get(),
       ).toBe(0n);
     });
   });
@@ -60,7 +68,9 @@ describe('contradicting evidence', () => {
       await importDhan(service);
       resolveInstruments(db, DHAN, { now });
       // Simulate an earlier, different automatic mapping for HCC.
-      db.prepare("INSERT INTO instrument (id, isin, display_name) VALUES ('ins_INE000000017', 'INE000000017', 'Old')").run();
+      db.prepare(
+        "INSERT INTO instrument (id, isin, display_name) VALUES ('ins_INE000000017', 'INE000000017', 'Old')",
+      ).run();
       db.prepare(
         "UPDATE instrument_alias SET instrument_id = 'ins_INE000000017' WHERE broker = 'dhan' AND alias = 'HCC'",
       ).run();
@@ -84,7 +94,10 @@ describe('issue lifecycle', () => {
     await withVault(async ({ db, service }) => {
       await importDhan(service);
       resolveInstruments(db, DHAN, { now });
-      const id = db.prepare("SELECT id FROM issue WHERE status = 'open' ORDER BY id LIMIT 1").pluck().get() as string;
+      const id = db
+        .prepare("SELECT id FROM issue WHERE status = 'open' ORDER BY id LIMIT 1")
+        .pluck()
+        .get() as string;
       db.prepare("UPDATE issue SET status = 'dismissed' WHERE id = ?").run(id);
       resolveInstruments(db, DHAN, { now });
       expect(db.prepare('SELECT status FROM issue WHERE id = ?').pluck().get(id)).toBe('dismissed');
