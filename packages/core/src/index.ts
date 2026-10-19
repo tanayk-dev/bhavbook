@@ -4,3 +4,4 @@ export const PACKAGE_NAME = '@bhavbook/core';
 export * from './errors.js';
 export * from './money/index.js';
 export * from './time/index.js';
+export * from './instruments/index.js';
