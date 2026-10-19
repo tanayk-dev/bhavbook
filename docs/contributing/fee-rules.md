@@ -31,7 +31,9 @@ BhavBook estimates every charge on every trade from rule files in `packages/core
    - Get a broker statement that covers the new period. Dhan's Global Transactions export works well; Zerodha's Tax P&L charges sheet is another option.
    - Anonymise the statement into `packages/adapters/fixtures/`. Use `pnpm fixtures:make`, then run `pnpm pii:scan`.
    - Add a golden test like `packages/core/test/fees/golden.test.ts` (built from the statement rows) or `packages/server/test/recompute/charges.test.ts` (through the vault, with the real orders).
-   - **Required tolerances:** STT and stamp duty must equal the billed day total to the rupee. Every other component must be within ₹0.01 per scrip row.
+   - **Required tolerances:**
+     - STT and stamp duty must equal the billed day total rounded to the rupee. Brokers split a rupee-rounded contract-note total over the scrips, so the billed rows can sum to a few paise off a whole rupee.
+     - Every other component must be within ₹0.01 per scrip row, which is checked per row from the statement rows. Through the vault, check per day within rows × ₹0.01.
    - **When the broker deviates from its own published rules:** pin the exact difference as a known residual with a comment explaining it, and record it in the plan changelog. Never widen the tolerance instead.
 5. **Run `pnpm verify`.** The `fees/` module must keep 100% branch coverage.
 
@@ -49,6 +51,9 @@ BhavBook estimates every charge on every trade from rule files in `packages/core
 
 - **Allocation to fills.** Every total is split over the fills by largest remainder, so the parts always add up exactly.
 - **Corporate actions.** Charges are computed on the trades as imported. If a split or demerger reshapes an allocation later, its charges are split over the parts by value (`chargeAccount`).
+  - Bonus lots and opening lots carry no charge.
+  - A demerger child takes its value share of the parent's charges.
+  - Shares cashed out by a corporate action take their share of the charge with them. That share has no allocation left, so recompute reports it in a `charges_unattached` issue rather than dropping it.
 
 ## Known limits
 

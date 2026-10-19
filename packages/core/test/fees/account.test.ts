@@ -112,8 +112,12 @@ describe('chargeAccount', () => {
   });
 });
 
-describe('chargeAccount when a holding is cashed out entirely', () => {
-  it('keeps the charge on the original allocation key', () => {
+describe('chargeAccount when shares are cashed out by a corporate action', () => {
+  const reverse = { ...split, ratioNum: 1n, ratioDen: 10n };
+  const total = (charges: readonly { amountMicro: bigint }[]): bigint =>
+    charges.reduce((sum, charge) => sum + charge.amountMicro, 0n);
+
+  it('reports the charges of a holding cashed out entirely as unattached (never dropped)', () => {
     const fills = [
       chargeable({
         side: 'BUY',
@@ -124,18 +128,88 @@ describe('chargeAccount when a holding is cashed out entirely', () => {
         instrument: 'A',
       }),
     ];
-    const reverse = { ...split, ratioNum: 1n, ratioDen: 10n };
     const { allocations } = reconstructAccount(fills, [], [reverse]);
     expect(allocations).toEqual([]);
-    const { charges } = chargeAccount({
+    const result = chargeAccount({
       broker: 'dhan',
       fills,
       adjustments: [],
       allocations,
       rules: bundledFeeRules(),
     });
-    expect(new Set(charges.map((charge) => charge.allocationKey))).toEqual(
-      new Set([`${fills[0]?.id ?? ''}#DELIVERY`]),
+    expect(result.charges).toEqual([]);
+    expect(total(result.unattached)).toBe(
+      total(
+        chargeAccount({
+          broker: 'dhan',
+          fills,
+          adjustments: [],
+          allocations: reconstructAccount(fills, []).allocations,
+          rules: bundledFeeRules(),
+        }).charges,
+      ),
     );
+  });
+
+  it('keeps only the sold share of a partly cashed-out buy on its sold part', () => {
+    const fills = [
+      chargeable({
+        side: 'BUY',
+        qty: 10,
+        price: 1000,
+        at: '2025-01-02 10:00',
+        product: 'DELIVERY',
+        instrument: 'A',
+      }),
+      chargeable({
+        side: 'SELL',
+        qty: 3,
+        price: 1000,
+        at: '2025-02-03 10:00',
+        product: 'DELIVERY',
+        instrument: 'A',
+      }),
+    ];
+    const { allocations } = reconstructAccount(fills, [], [reverse]);
+    const { charges, unattached } = chargeAccount({
+      broker: 'dhan',
+      fills,
+      adjustments: [],
+      allocations,
+      rules: bundledFeeRules(),
+    });
+    const buyKey = `${fills[0]?.id ?? ''}#DELIVERY`;
+    const stt = (list: typeof charges) =>
+      list
+        .filter((charge) => charge.component === 'stt' && charge.allocationKey === buyKey)
+        .map((charge) => charge.amountMicro);
+    // Buy STT Rs 10: 3/10 stays with the 3 shares sold, 7/10 left with the shares cashed out.
+    expect([stt(charges), stt(unattached)]).toEqual([[3n * RUPEE], [7n * RUPEE]]);
+  });
+});
+
+describe('chargeAccount and bonus lots', () => {
+  it('a bonus lot carries no charge; the buy keeps all of its own', () => {
+    const fills = [
+      chargeable({
+        side: 'BUY',
+        qty: 10,
+        price: 1000,
+        at: '2025-01-02 10:00',
+        product: 'DELIVERY',
+        instrument: 'A',
+      }),
+    ];
+    const bonus: CorporateAction = { ...split, type: 'BONUS', ratioNum: 1n, ratioDen: 1n };
+    const { allocations } = reconstructAccount(fills, [], [bonus]);
+    const { charges, unattached } = chargeAccount({
+      broker: 'dhan',
+      fills,
+      adjustments: [],
+      allocations,
+      rules: bundledFeeRules(),
+    });
+    expect(charges.some((charge) => charge.allocationKey.startsWith('ca:'))).toBe(false);
+    expect(unattached).toEqual([]);
   });
 });

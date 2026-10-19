@@ -17,6 +17,8 @@ import {
   suspectCorporateActions,
   bundledFeeRules,
   chargeAccount,
+  isFeeBroker,
+  type AccountChargeResult,
   type Adjustment,
   type ChargeableFill,
   type FeeExchange,
@@ -53,6 +55,7 @@ import {
   CASH_IN_LIEU,
   CORPORATE_ACTION_SUSPECTED,
   FEES_UNRATED,
+  CHARGES_UNATTACHED,
   FILL_FROM_STATEMENT,
   INCOMPLETE_POSITION,
   OPENING_LOT_REDUNDANT,
@@ -132,7 +135,7 @@ function brokerOf(db: Database.Database, accountId: string): string {
 
 function loadFills(db: Database.Database, accountId: string, broker: string): ChargeableFill[] {
   const aliases = aliasKeys(db, broker);
-  // side, granularity and product_declared are enforced by CHECK constraints (0001_init.sql).
+  // side, granularity, product_declared and exchange are enforced by CHECK constraints (0001_init.sql).
   const rows = db
     .prepare(
       `SELECT id, dedup_key, granularity, external_order_id, executed_at_utc, trade_date_ist, side, quantity,
@@ -283,14 +286,12 @@ function chargesOf(
   fills: readonly ChargeableFill[],
   adjustments: readonly Adjustment[],
   allocations: readonly FillAllocation[],
-): { charges: readonly FillCharge[]; unrated: readonly string[] } {
-  if (broker !== 'dhan' && broker !== 'zerodha') {
-    return { charges: [], unrated: fills.map((fill) => fill.id) };
-  }
+): AccountChargeResult {
+  if (!isFeeBroker(broker)) return { charges: [], unrated: fills.map((fill) => fill.id), unattached: [] };
   return chargeAccount({ broker, fills, adjustments, allocations, rules: bundledFeeRules() });
 }
 
-/** One row per (allocation, component); a charge whose allocation was cashed out entirely is not stored. */
+/** One row per (allocation, component). Every charge chargeAccount attached has its allocation. */
 function writeCharges(
   db: Database.Database,
   allocationIds: ReadonlyMap<string, bigint>,
@@ -302,8 +303,18 @@ function writeCharges(
   );
   for (const charge of charges) {
     const id = allocationIds.get(charge.allocationKey);
-    if (id !== undefined) insert.run(id, charge.component, charge.amountMicro, charge.ruleVersion);
+    if (id === undefined) throw new Error('a charge references an unknown allocation');
+    insert.run(id, charge.component, charge.amountMicro, charge.ruleVersion);
   }
+}
+
+/** Charges of shares a corporate action cashed out: no allocation left to hold them, so they are reported. */
+function unattachedFindings(unattached: readonly FillCharge[]): Map<string, string> {
+  const findings = new Map<string, string>();
+  const total = unattached.reduce((sum, charge) => sum + charge.amountMicro, 0n);
+  if (total > 0n)
+    findings.set('charges', JSON.stringify({ totalMicro: total.toString(), charges: unattached.length }));
+  return findings;
 }
 
 /** One issue while any trade has no fee rule version in force (charges unknown, never guessed). */
@@ -552,10 +563,11 @@ export function recompute(
     const reconstruction = reconstruct(fills, adjustments, corporateActions);
     const { allocations, positions } = reconstruction;
     const allocationIds = writeDerived(db, accountId, allocations, positions);
-    const { charges, unrated } = chargesOf(broker, fills, adjustments, allocations);
+    const { charges, unrated, unattached } = chargesOf(broker, fills, adjustments, allocations);
     writeCharges(db, allocationIds, charges);
     refreshAnchors(db, accountId, positions);
     syncIssues(db, accountId, FEES_UNRATED, unratedFindings(unrated), at);
+    syncIssues(db, accountId, CHARGES_UNATTACHED, unattachedFindings(unattached), at);
     syncIssues(db, accountId, INCOMPLETE_POSITION, incompleteFindings(positions), at);
     syncIssues(db, accountId, FILL_FROM_STATEMENT, statementFindings(db, accountId, positions), at);
     syncIssues(
