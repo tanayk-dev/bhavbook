@@ -17,7 +17,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "e2e": "node -e \"console.log('e2e: no suites yet (added in S13a)')\"",
-    "pii:scan": "node -e \"console.log('pii:scan: no fixtures yet (scanner added in S2)')\"",
+    "fixtures:make": "tsx tools/fixtures/src/make-fixtures.ts",
+    "pii:scan": "tsx tools/fixtures/src/pii-scan.ts",
     "check:leaks": "node scripts/check-broker-exports.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm pii:scan && pnpm check:leaks"
   },

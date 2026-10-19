@@ -14,6 +14,8 @@ pnpm test                # vitest (root config; every package is a project)
 pnpm lint                # eslint (type-aware) incl. bhavbook/no-float-money
 pnpm typecheck           # tsc --noEmit in every package
 pnpm format              # prettier
+pnpm fixtures:make       # rebuild packages/adapters/fixtures from the local (gitignored) broker exports
+pnpm pii:scan            # scan fixtures for personal data (add ~/.bhavbook-pii-denylist for your own identifiers)
 ```
 
 ## Read first

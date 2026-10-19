@@ -15,6 +15,8 @@ Thanks for helping. Before you change anything, read these:
   - Real broker exports never enter git: `docs/broker-exports/` is gitignored apart from notes.
   - Fixtures are anonymised copies (no names, PAN, client IDs, mobile numbers or emails).
   - `pnpm pii:scan` and CI enforce this.
+  - Fixtures are generated, not hand-edited: put the real exports under `docs/broker-exports/` (gitignored), then run `pnpm fixtures:make`. The tool replaces names, client IDs, PAN, mobile numbers, emails, client references in narrations, bank names and spreadsheet author fields with fixed placeholders. CSVs stay byte-identical otherwise, and legacy `.xls` files are patched in place.
+  - Put your own identifiers (name, client IDs, demat account number) one per line in `~/.bhavbook-pii-denylist` (outside the repo). `pnpm fixtures:make` refuses to run without it, because names have no reliable pattern.
 - **Exact versions.** Dependencies are pinned exactly (see ADR-0021), and new releases younger than 3 days are held back by pnpm's `minimumReleaseAge`.
 
 ## Workflow
