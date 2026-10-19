@@ -21,6 +21,11 @@ export class FeeRuleError extends Error {
 export type FeeExchange = 'NSE' | 'BSE';
 export type FeeBroker = 'dhan' | 'zerodha';
 
+/** Brokers BhavBook has fee rules for. */
+export function isFeeBroker(broker: string): broker is FeeBroker {
+  return broker === 'dhan' || broker === 'zerodha';
+}
+
 const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)

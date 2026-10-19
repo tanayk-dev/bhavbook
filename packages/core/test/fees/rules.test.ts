@@ -1,6 +1,12 @@
 // S12a task 1: fee-rule files (zod schema), sources on every rate, version selection by trade date.
 import { describe, expect, it } from 'vitest';
-import { bundledFeeRules, FeeRuleError, parseFeeRules, selectFeeRules } from '../../src/index.js';
+import {
+  bundledFeeRules,
+  FeeRuleError,
+  isFeeBroker,
+  parseFeeRules,
+  selectFeeRules,
+} from '../../src/index.js';
 import dhan20240401 from '../../rules/broker/dhan/2024-04-01.json' with { type: 'json' };
 import nse20241001 from '../../rules/statutory/nse/2024-10-01.json' with { type: 'json' };
 
@@ -87,5 +93,15 @@ describe('parseFeeRules', () => {
 
   it('rejects two versions with the same effective date', () => {
     expect(() => parseFeeRules([good, good])).toThrow(FeeRuleError);
+  });
+});
+
+describe('isFeeBroker', () => {
+  it.each([
+    ['dhan', true],
+    ['zerodha', true],
+    ['upstox', false],
+  ] as const)('%s -> %s', (broker, expected) => {
+    expect(isFeeBroker(broker)).toBe(expected);
   });
 });

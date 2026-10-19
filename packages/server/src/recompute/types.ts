@@ -12,6 +12,10 @@ export const OPENING_LOT_REDUNDANT = 'opening_lot_redundant';
 export const CORPORATE_ACTION_SUSPECTED = 'corporate_action_suspected';
 /** A fraction of a share a corporate action left (paid as cash in lieu). */
 export const CASH_IN_LIEU = 'cash_in_lieu';
+/** Trades with no fee rule version in force on their trade date: their charges are unknown. */
+export const FEES_UNRATED = 'fees_unrated';
+/** Charges of shares a corporate action cashed out (the cash-in-lieu sale is the user's to record). */
+export const CHARGES_UNATTACHED = 'charges_unattached';
 
 export interface IssueForecast {
   readonly kind: typeof INCOMPLETE_POSITION;
