@@ -22,7 +22,11 @@ describe('commitImport', () => {
       const preview = await service.previewImport(ZERODHA, [fixtureFile('zerodha', 'tradebook')]);
       const result = service.commitImport(preview.token ?? '');
       expect(result.batches).toEqual([
-        { batchId: expect.any(String) as string, kind: 'zerodha.tradebook', inserted: { rows: 121, statements: 0 } },
+        {
+          batchId: expect.any(String) as string,
+          kind: 'zerodha.tradebook',
+          inserted: { rows: 121, statements: 0 },
+        },
       ]);
       expect(count(db, 'import_batch')).toBe(1);
       expect(count(db, 'raw_row')).toBe(121);
@@ -47,7 +51,9 @@ describe('commitImport', () => {
     await withVault(
       async ({ vaultPath, service }) => {
         await importFiles(service, ZERODHA, [fixtureFile('zerodha', 'tradebook')]);
-        expect(readdirSync(backupDir(vaultPath)).filter((name) => name.includes('pre-import'))).toHaveLength(1);
+        expect(readdirSync(backupDir(vaultPath)).filter((name) => name.includes('pre-import'))).toHaveLength(
+          1,
+        );
         expect(changed).toEqual([ZERODHA]);
       },
       { onChanged: (accountId) => changed.push(accountId) },
@@ -60,7 +66,10 @@ describe('commitImport', () => {
       const before = tradeSet(db, ZERODHA);
       const preview = await service.previewImport(ZERODHA, [fixtureFile('zerodha', 'tradebook')]);
       expect(preview.files[0]).toMatchObject({ counts: { rows: { new: 0, duplicate: 121 } } });
-      expect(service.commitImport(preview.token ?? '').batches[0]?.inserted).toEqual({ rows: 0, statements: 0 });
+      expect(service.commitImport(preview.token ?? '').batches[0]?.inserted).toEqual({
+        rows: 0,
+        statements: 0,
+      });
       expect(tradeSet(db, ZERODHA)).toEqual(before);
       expect(count(db, 'import_batch')).toBe(2);
       expect(count(db, 'batch_row')).toBe(242);
@@ -92,10 +101,14 @@ describe('commitImport', () => {
       await importFiles(service, ZERODHA, [fixtureFile('zerodha', 'tax_pnl', 'tax.xlsx')]);
       await importFiles(service, DHAN, [fixtureFile('dhan', 'global_transactions')]);
       expect(count(db, 'statement_row')).toBe(statements);
-      const row = db.prepare("SELECT data_json FROM statement_row WHERE kind = 'dhan.gt.row' LIMIT 1").get() as {
+      const row = db
+        .prepare("SELECT data_json FROM statement_row WHERE kind = 'dhan.gt.row' LIMIT 1")
+        .get() as {
         data_json: string;
       };
-      expect(JSON.parse(row.data_json)).toMatchObject({ buy_value_micro: expect.stringMatching(/^-?\d+$/) as string });
+      expect(JSON.parse(row.data_json)).toMatchObject({
+        buy_value_micro: expect.stringMatching(/^-?\d+$/) as string,
+      });
     });
   });
 
@@ -104,7 +117,9 @@ describe('commitImport', () => {
       const name = 'SECRETNAME-XY1234-tradebook.csv';
       await importFiles(service, ZERODHA, [{ ...fixtureFile('zerodha', 'tradebook'), name }]);
       await importFiles(service, DHAN, [{ ...fixtureFile('dhan', 'trade_history'), name }]);
-      const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all() as { name: string }[];
+      const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all() as {
+        name: string;
+      }[];
       for (const { name: table } of tables) {
         const columns = db.prepare(`SELECT name, type FROM pragma_table_info(?)`).all(table) as {
           name: string;
@@ -150,11 +165,16 @@ describe('wrong-account guard (PRD §6.4)', () => {
   it('warns when a file overlaps the covered range but shares under 10% of its keys there', async () => {
     await withVault(async ({ service }) => {
       await importFiles(service, ZERODHA, [fixtureFile('zerodha', 'tradebook')]);
-      // Same days, different trades: another person's tradebook.
-      const other = fixtureFile('zerodha', 'tradebook');
-      const text = other.bytes
-        .toString('utf8')
-        .replace(/,(\d{9}),(\d{16}),/g, (_match, trade: string, order: string) => `,9${trade.slice(1)},9${order.slice(1)},`);
+      // Same days, different trades: another person's tradebook (every trade and order id changed).
+      const [header = '', ...rows] = fixtureFile('zerodha', 'tradebook')
+        .bytes.toString('utf8')
+        .split(/\r?\n/)
+        .filter(Boolean);
+      const changed = rows.map((row) => {
+        const cells = row.split(',');
+        return cells.map((cell, column) => (column === 10 || column === 11 ? `9${cell}` : cell)).join(',');
+      });
+      const text = [header, ...changed].join('\r\n');
       const preview = await service.previewImport(ZERODHA, [{ bytes: Buffer.from(text) }]);
       expect(preview.files[0]).toMatchObject({ status: 'ready', warnings: ['wrong_account'] });
     });
@@ -234,4 +254,3 @@ describe('benchmark', () => {
     });
   }, 60_000);
 });
-

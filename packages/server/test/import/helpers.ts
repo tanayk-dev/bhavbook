@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
-import { createImportService, type ImportFile, type ImportService, type ImportServiceOptions } from '../../src/import/index.js';
+import {
+  createImportService,
+  type ImportFile,
+  type ImportService,
+  type ImportServiceOptions,
+} from '../../src/import/index.js';
 import { openVault } from '../../src/vault/index.js';
 
 export const FIXTURES = fileURLToPath(new URL('../../../adapters/fixtures/', import.meta.url));
@@ -21,7 +26,9 @@ export interface TestVault {
 export function seedAccounts(db: Database.Database): void {
   const at = '2026-10-19T00:00:00Z';
   db.prepare("INSERT INTO pan_entity (id, label, created_at) VALUES ('pan1', 'Default', ?)").run(at);
-  db.prepare("INSERT INTO profile (id, pan_entity_id, name, created_at) VALUES ('prof1', 'pan1', 'Swing', ?)").run(at);
+  db.prepare(
+    "INSERT INTO profile (id, pan_entity_id, name, created_at) VALUES ('prof1', 'pan1', 'Swing', ?)",
+  ).run(at);
   const account = db.prepare(
     "INSERT INTO broker_account (id, profile_id, broker, nickname, created_at) VALUES (?, 'prof1', ?, ?, ?)",
   );
@@ -61,12 +68,18 @@ export function fixtureFile(broker: string, kind: string, name = `${kind}.csv`):
 /** Header plus data lines `[from, to)` of a CSV fixture, as a new file. */
 export function csvWindow(broker: string, kind: string, from: number, to: number): ImportFile {
   const [header = '', ...rows] = fixtureBytes(broker, kind).toString('utf8').split(/\r?\n/).filter(Boolean);
-  return { bytes: Buffer.from([header, ...rows.slice(from, to)].join('\r\n') + '\r\n', 'utf8'), name: 'window.csv' };
+  return {
+    bytes: Buffer.from([header, ...rows.slice(from, to)].join('\r\n') + '\r\n', 'utf8'),
+    name: 'window.csv',
+  };
 }
 
 /** Dhan trade history split at a whole day: rows on or before `lastDay`, and rows on or after `firstDay`. */
 export function dhanDays(filter: (date: string) => boolean): ImportFile {
-  const [header = '', ...rows] = fixtureBytes('dhan', 'trade_history').toString('utf8').split(/\r?\n/).filter(Boolean);
+  const [header = '', ...rows] = fixtureBytes('dhan', 'trade_history')
+    .toString('utf8')
+    .split(/\r?\n/)
+    .filter(Boolean);
   const kept = rows.filter((row) => filter(row.slice(0, 10)));
   return { bytes: Buffer.from([header, ...kept].join('\r\n'), 'utf8'), name: 'days.csv' };
 }
@@ -87,13 +100,20 @@ export function tradeSet(db: Database.Database, accountId: string): string[] {
          FROM trade_row WHERE account_id = ? ORDER BY dedup_key`,
       )
       .all(accountId) as Record<string, unknown>[]
-  ).map((row) => JSON.stringify(row, (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value)));
+  ).map((row) =>
+    JSON.stringify(row, (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value)),
+  );
 }
 
 /** Preview then commit, failing the test if any file isn't importable. */
-export async function importFiles(service: ImportService, accountId: string, files: ImportFile[]): Promise<void> {
+export async function importFiles(
+  service: ImportService,
+  accountId: string,
+  files: ImportFile[],
+): Promise<void> {
   const preview = await service.previewImport(accountId, files);
   const notReady = preview.files.filter((file) => file.status !== 'ready');
-  if (notReady.length > 0 || preview.token === null) throw new Error(`not importable: ${JSON.stringify(notReady)}`);
+  if (notReady.length > 0 || preview.token === null)
+    throw new Error(`not importable: ${JSON.stringify(notReady)}`);
   service.commitImport(preview.token);
 }

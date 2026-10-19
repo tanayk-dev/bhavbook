@@ -15,7 +15,12 @@ describe('previewImport', () => {
         label: 'mine.csv',
         broker: 'zerodha',
         kind: 'zerodha.tradebook',
-        counts: { rows: { new: 121, duplicate: 0 }, statements: { new: 0, duplicate: 0 }, skipped: {}, errors: 0 },
+        counts: {
+          rows: { new: 121, duplicate: 0 },
+          statements: { new: 0, duplicate: 0 },
+          skipped: {},
+          errors: 0,
+        },
         coverage: { from: '2025-09-12', to: '2026-03-23' },
         warnings: [],
         issueForecast: [],
@@ -103,7 +108,9 @@ describe('previewImport', () => {
 
   it('rejects an unknown account', async () => {
     await withVault(async ({ service }) => {
-      await expect(service.previewImport('nope', [fixtureFile('zerodha', 'tradebook')])).rejects.toThrow(ImportError);
+      await expect(service.previewImport('nope', [fixtureFile('zerodha', 'tradebook')])).rejects.toThrow(
+        ImportError,
+      );
     });
   });
 });
