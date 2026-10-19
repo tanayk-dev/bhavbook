@@ -68,7 +68,9 @@ describe('parse result schema', () => {
   });
 
   it('rejects an unknown skip reason', () => {
-    expect(parseResultSchema.safeParse({ ...result, skipped: [{ line: 1, reason: 'boring' }] }).success).toBe(false);
+    expect(parseResultSchema.safeParse({ ...result, skipped: [{ line: 1, reason: 'boring' }] }).success).toBe(
+      false,
+    );
   });
 });
 
@@ -87,7 +89,10 @@ describe('detectReport', () => {
   const probe: FileProbe = { type: 'text', head: 'symbol,isin,trade_date' };
 
   it('returns candidates best first', () => {
-    const candidates = detectReport([fakeAdapter('dhan', 'dhan.x', 0.4), fakeAdapter('zerodha', 'zerodha.tradebook', 0.9)], probe);
+    const candidates = detectReport(
+      [fakeAdapter('dhan', 'dhan.x', 0.4), fakeAdapter('zerodha', 'zerodha.tradebook', 0.9)],
+      probe,
+    );
     expect(candidates.map((candidate) => candidate.kind)).toEqual(['zerodha.tradebook', 'dhan.x']);
   });
 

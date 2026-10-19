@@ -9,6 +9,9 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['packages/*/src/**', 'tools/*/src/**'],
+      // Worker-thread bodies run outside the main isolate, where V8 coverage can't see them; they are exercised
+      // end-to-end by their callers' tests (e.g. test/workers/spreadsheet.test.ts).
+      exclude: ['**/*-worker.mjs'],
       reporter: ['text', 'html', 'json-summary'],
       thresholds: {
         lines: 80,

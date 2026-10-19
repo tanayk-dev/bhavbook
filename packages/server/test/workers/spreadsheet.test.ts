@@ -5,7 +5,14 @@ import * as XLSX from 'xlsx';
 import { describe, expect, it } from 'vitest';
 import { readSpreadsheet, SpreadsheetError } from '../../src/workers/spreadsheet.js';
 
-const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'adapters', 'fixtures');
+const FIXTURES = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  'adapters',
+  'fixtures',
+);
 
 function workbook(rows: unknown[][], bookType: 'xlsx' | 'biff8' = 'xlsx'): Buffer {
   const book = XLSX.utils.book_new();
@@ -15,8 +22,26 @@ function workbook(rows: unknown[][], bookType: 'xlsx' | 'biff8' = 'xlsx'): Buffe
 
 describe('readSpreadsheet', () => {
   it.each(['xlsx', 'biff8'] as const)('reads %s into plain sheet data', async (bookType) => {
-    const sheets = await readSpreadsheet(workbook([['Symbol', 'Qty'], ['TCS', 5], ['INFY', null]], bookType));
-    expect(sheets).toEqual([{ name: 'Equity', rows: [['Symbol', 'Qty'], ['TCS', 5], ['INFY', null]] }]);
+    const sheets = await readSpreadsheet(
+      workbook(
+        [
+          ['Symbol', 'Qty'],
+          ['TCS', 5],
+          ['INFY', null],
+        ],
+        bookType,
+      ),
+    );
+    expect(sheets).toEqual([
+      {
+        name: 'Equity',
+        rows: [
+          ['Symbol', 'Qty'],
+          ['TCS', 5],
+          ['INFY', null],
+        ],
+      },
+    ]);
   });
 
   it('returns cached formula results and never the formula itself', async () => {
@@ -29,7 +54,9 @@ describe('readSpreadsheet', () => {
   });
 
   it('reads the real-format fixtures (Dhan .xls with 8 sheets, Zerodha tax P&L .xlsx with 11)', async () => {
-    const dhan = await readSpreadsheet(readFileSync(path.join(FIXTURES, 'dhan', 'tax_report', 'tax-pnl-report.xls')));
+    const dhan = await readSpreadsheet(
+      readFileSync(path.join(FIXTURES, 'dhan', 'tax_report', 'tax-pnl-report.xls')),
+    );
     expect(dhan.map((sheet) => sheet.name)).toContain('Equity');
     expect(dhan).toHaveLength(8);
     const zerodha = await readSpreadsheet(
@@ -48,7 +75,9 @@ describe('readSpreadsheet', () => {
   });
 
   it('rejects files that are not spreadsheets', async () => {
-    await expect(readSpreadsheet(Buffer.from('PK\u0003\u0004 not really a zip at all'))).rejects.toThrow(SpreadsheetError);
+    await expect(readSpreadsheet(Buffer.from('PK\u0003\u0004 not really a zip at all'))).rejects.toThrow(
+      SpreadsheetError,
+    );
   });
 
   it('kills a parse that runs past the time limit', async () => {
