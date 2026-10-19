@@ -1,18 +1,25 @@
-// Recompute (plan S9 task 5, ADR-0007): derived state is a pure function of the imported rows and the active
-// adjustments. For one account: resolve instruments (S8), key every row (ISIN, else its alias, else a broker-local
-// id), run the core pipeline with the active adjustments (S10a), and replace the account's allocations, positions
-// and lots in one transaction. Issues are kept in step: INCOMPLETE positions, statement lots that could fill them,
-// and opening lots real fills now cover. Imported rows are never edited.
+// Recompute (plan S9 task 5, ADR-0007): derived state is a pure function of the imported rows, the active
+// adjustments and the active corporate actions. For one account: resolve instruments (S8), key every row (ISIN,
+// else its alias, else a broker-local id), run the core pipeline with the adjustments (S10a) and corporate actions
+// (S10b), and replace the account's allocations, positions and lots in one transaction. Issues are kept in step:
+// INCOMPLETE positions, statement lots that could fill them, opening lots real fills now cover, suspected
+// corporate actions, and fractions of a share (cash in lieu). Imported rows are never edited.
 //
-// Not yet here: corporate-action allocations (S10b) and charges (S12a); those steps extend this rebuild.
+// Not yet here: charges (S12a); that step extends this rebuild.
 import { createHash } from 'node:crypto';
 import type { ParseResult } from '@bhavbook/adapters';
 import {
   reconstructAccount,
   redundantOpeningLots,
   suggestOpeningLots,
+  suspectCorporateActions,
   type Adjustment,
   type Bucket,
+  type CorporateAction,
+  type CorporateActionSuspicion,
+  type Fraction,
+  previewCorporateAction,
+  type CorporateActionPreview,
   type FillAllocation,
   type Position,
   type StatementLot,
@@ -24,12 +31,20 @@ import { writeBatches } from '../import/commit.js';
 import type { PreviewCounts } from '../import/preview.js';
 import { activeAdjustments, isoDateSchema, statementKeysInUse } from '../services/adjustments.js';
 import {
+  activeCorporateActions,
+  CorporateActionError,
+  parseCorporateAction,
+  sameFacts,
+} from '../services/corporate-actions.js';
+import {
   mapInstrumentManually,
   resolveInstruments,
   type AliasRef,
   type ManualTarget,
 } from '../services/instruments.js';
 import {
+  CASH_IN_LIEU,
+  CORPORATE_ACTION_SUSPECTED,
   FILL_FROM_STATEMENT,
   INCOMPLETE_POSITION,
   OPENING_LOT_REDUNDANT,
@@ -132,12 +147,47 @@ function loadFills(db: Database.Database, accountId: string, broker: string): Tr
   }));
 }
 
-/** Pure: the positions an account's fills and active adjustments reconstruct to. */
+/** Pure: what an account's fills, active adjustments and active corporate actions reconstruct to. */
 export function reconstruct(
   fills: readonly TradeFill[],
   adjustments: readonly Adjustment[] = [],
-): { allocations: readonly FillAllocation[]; positions: readonly Position[] } {
-  return reconstructAccount(fills, adjustments);
+  corporateActions: readonly CorporateAction[] = [],
+): {
+  allocations: readonly FillAllocation[];
+  positions: readonly Position[];
+  fractions: readonly Fraction[];
+} {
+  return reconstructAccount(fills, adjustments, corporateActions);
+}
+
+/** Bonus and demerger-child lots (core gives them `ca:` fill ids); reshaped parts of real fills keep theirs. */
+const CORPORATE_ACTION_FILL = 'ca:';
+
+/** Where an allocation comes from: exactly one of a trade row, an adjustment or a corporate action. */
+function sourceOf(allocation: FillAllocation): {
+  tradeRowId: bigint | null;
+  adjustmentId: string | null;
+  corporateActionId: string | null;
+} {
+  if (allocation.adjustmentId !== null) {
+    return { tradeRowId: null, adjustmentId: allocation.adjustmentId, corporateActionId: null };
+  }
+  if (allocation.corporateActionId !== null && allocation.fillId.startsWith(CORPORATE_ACTION_FILL)) {
+    return { tradeRowId: null, adjustmentId: null, corporateActionId: allocation.corporateActionId };
+  }
+  return { tradeRowId: BigInt(allocation.fillId), adjustmentId: null, corporateActionId: null };
+}
+
+function sourceColumns(allocation: FillAllocation): [bigint | null, string | null, string | null] {
+  const { tradeRowId, adjustmentId, corporateActionId } = sourceOf(allocation);
+  return [tradeRowId, adjustmentId, corporateActionId];
+}
+
+/** Closed positions first (oldest close first), open ones last: the live position of an anchor is written last. */
+function liveLast(a: Position, b: Position): number {
+  const rank = (position: Position): string =>
+    position.closedAtUtc === null ? `1${position.openedAtUtc}` : `0${position.closedAtUtc}`;
+  return rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : 0;
 }
 
 function idOf(ids: ReadonlyMap<string, bigint>, key: string): bigint {
@@ -154,23 +204,19 @@ function writeDerived(
 ): void {
   // Children go with their parents (lots, reconciliation, charges cascade); allocations last.
   db.prepare('DELETE FROM position WHERE account_id = ?').run(accountId);
-  db.prepare('DELETE FROM fill_allocation WHERE account_id = ? AND corporate_action_id IS NULL').run(
-    accountId,
-  );
+  db.prepare('DELETE FROM fill_allocation WHERE account_id = ?').run(accountId);
   const insertAllocation = db
     .prepare(
-      `INSERT INTO fill_allocation (account_id, trade_row_id, adjustment_id, instrument_key, bucket, side, quantity,
-         value_micro, inferred)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      `INSERT INTO fill_allocation (account_id, trade_row_id, adjustment_id, corporate_action_id, instrument_key,
+         bucket, side, quantity, value_micro, inferred)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     )
     .pluck();
   const allocationIds = new Map<string, bigint>();
   for (const allocation of allocations) {
-    const fromAdjustment = allocation.adjustmentId !== null;
     const id: unknown = insertAllocation.get(
       accountId,
-      fromAdjustment ? null : BigInt(allocation.fillId),
-      allocation.adjustmentId,
+      ...sourceColumns(allocation),
       allocation.instrumentKey,
       allocation.bucket,
       allocation.side,
@@ -191,10 +237,6 @@ function writeDerived(
        exit_value_micro, entry_date_ist, exit_date_ist)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  // Journal entries follow their position across a re-key (migration 0001: anchor_instrument_key is refreshed).
-  const refreshAnchor = db.prepare(
-    'UPDATE journal_entry SET anchor_instrument_key = ? WHERE anchor_account_id = ? AND anchor_key = ?',
-  );
   for (const position of positions) {
     insertPosition.run(
       position.id,
@@ -209,7 +251,6 @@ function writeDerived(
       position.closedAtUtc,
       position.anchorKey,
     );
-    refreshAnchor.run(position.instrumentKey, accountId, position.anchorKey);
     for (const lot of position.lots) {
       insertLot.run(
         position.id,
@@ -222,6 +263,25 @@ function writeDerived(
         lot.exitDateIst,
       );
     }
+  }
+}
+
+/**
+ * Journal entries follow their position across a re-key (migration 0001: anchor_instrument_key is refreshed).
+ * Positions can share an anchor across instruments: the sold part of a converted lot stays on the old ISIN (the
+ * live one is written last), and a demerger child shares its parent's anchor (an entry on an open position of its
+ * current instrument stays there).
+ */
+function refreshAnchors(db: Database.Database, accountId: string, positions: readonly Position[]): void {
+  const refresh = db.prepare(
+    `UPDATE journal_entry SET anchor_instrument_key = ?
+     WHERE anchor_account_id = ? AND anchor_key = ?
+       AND NOT EXISTS (SELECT 1 FROM position p WHERE p.account_id = journal_entry.anchor_account_id
+         AND p.anchor_key = journal_entry.anchor_key AND p.instrument_key = journal_entry.anchor_instrument_key
+         AND p.state = 'OPEN')`,
+  );
+  for (const position of [...positions].sort(liveLast)) {
+    refresh.run(position.instrumentKey, accountId, position.anchorKey);
   }
 }
 
@@ -376,9 +436,52 @@ function statementFindings(
 function redundantFindings(
   fills: readonly TradeFill[],
   adjustments: readonly Adjustment[],
+  corporateActions: readonly CorporateAction[],
+): Map<string, string> {
+  if (!adjustments.some((adjustment) => adjustment.kind === 'opening_lot')) return new Map();
+  return new Map(
+    redundantOpeningLots(fills, adjustments, corporateActions).map((id) => [
+      id,
+      JSON.stringify({ adjustmentId: id }),
+    ]),
+  );
+}
+
+function subjectOf(suspicion: CorporateActionSuspicion): string {
+  if (suspicion.kind === 'split_or_bonus') {
+    const { kind, instrumentKey, dateIst, multiple } = suspicion;
+    return JSON.stringify({ kind, instrumentKey, dateIst, multiple: multiple.toString() });
+  }
+  const { kind, fromInstrument, toInstrument, dateIst } = suspicion;
+  return JSON.stringify({ kind, fromInstrument, toInstrument, dateIst });
+}
+
+/** Patterns that suggest a corporate action the user hasn't entered (suggestions only, ADR-0015). */
+function suspicionFindings(
+  reconstruction: Parameters<typeof suspectCorporateActions>[0],
 ): Map<string, string> {
   return new Map(
-    redundantOpeningLots(fills, adjustments).map((id) => [id, JSON.stringify({ adjustmentId: id })]),
+    suspectCorporateActions(reconstruction).map((suspicion) => {
+      const subject = subjectOf(suspicion);
+      return [digest(subject), subject];
+    }),
+  );
+}
+
+/** Fractions of a share a corporate action left (the broker pays cash in lieu; the user may record the sale). */
+function fractionFindings(fractions: readonly Fraction[]): Map<string, string> {
+  return new Map(
+    fractions.map((fraction) => [
+      digest(fraction.actionId, fraction.instrumentKey, fraction.bucket),
+      JSON.stringify({
+        actionId: fraction.actionId,
+        instrumentKey: fraction.instrumentKey,
+        bucket: fraction.bucket,
+        numerator: fraction.numerator.toString(),
+        denominator: fraction.denominator.toString(),
+        costRemovedMicro: fraction.costRemovedMicro.toString(),
+      }),
+    ]),
   );
 }
 
@@ -398,11 +501,22 @@ export function recompute(
     resolveInstruments(db, accountId, { now: () => new Date(at) });
     const fills = loadFills(db, accountId, broker);
     const adjustments = activeAdjustments(db, accountId);
-    const { allocations, positions } = reconstruct(fills, adjustments);
+    const corporateActions = activeCorporateActions(db);
+    const reconstruction = reconstruct(fills, adjustments, corporateActions);
+    const { allocations, positions } = reconstruction;
     writeDerived(db, accountId, allocations, positions);
+    refreshAnchors(db, accountId, positions);
     syncIssues(db, accountId, INCOMPLETE_POSITION, incompleteFindings(positions), at);
     syncIssues(db, accountId, FILL_FROM_STATEMENT, statementFindings(db, accountId, positions), at);
-    syncIssues(db, accountId, OPENING_LOT_REDUNDANT, redundantFindings(fills, adjustments), at);
+    syncIssues(
+      db,
+      accountId,
+      OPENING_LOT_REDUNDANT,
+      redundantFindings(fills, adjustments, corporateActions),
+      at,
+    );
+    syncIssues(db, accountId, CORPORATE_ACTION_SUSPECTED, suspicionFindings(reconstruction), at);
+    syncIssues(db, accountId, CASH_IN_LIEU, fractionFindings(reconstruction.fractions), at);
     db.prepare(
       "UPDATE issue SET status = 'resolved', resolved_at = ? WHERE account_id = ? AND kind = ? AND status = 'open'",
     ).run(at, accountId, RECOMPUTE_FAILED);
@@ -416,7 +530,12 @@ export function recompute(
 }
 
 function recordFailure(db: Database.Database, accountId: string, error: unknown, at: string): void {
-  const subject = JSON.stringify({ error: error instanceof Error ? error.name : 'non_error' });
+  // Ids only (ADR-0019): the stored action to revert, when one is unreadable.
+  const corporateActionId = error instanceof CorporateActionError ? error.corporateActionId : undefined;
+  const subject = JSON.stringify({
+    error: error instanceof Error ? error.name : 'non_error',
+    corporateActionId,
+  });
   db.prepare(
     `INSERT INTO issue (id, account_id, kind, fingerprint, subject_json, status, created_at)
      VALUES (?, ?, ?, 'recompute', ?, 'open', ?)
@@ -483,7 +602,8 @@ const EMPTY_COUNTS: PreviewCounts = {
 function currentPositions(db: Database.Database, accountId: string, at: string): readonly Position[] {
   const broker = brokerOf(db, accountId);
   resolveInstruments(db, accountId, { now: () => new Date(at) });
-  return reconstruct(loadFills(db, accountId, broker), activeAdjustments(db, accountId)).positions;
+  const fills = loadFills(db, accountId, broker);
+  return reconstruct(fills, activeAdjustments(db, accountId), activeCorporateActions(db)).positions;
 }
 
 /**
@@ -544,5 +664,32 @@ export function recomputeHooks(
       recomputeBroker(db, accountId, options);
     },
     forecast: (accountId, result) => forecastIssues(db, accountId, result, options),
+  };
+}
+
+/**
+ * What a corporate action would do across the vault (PRD §7.4 preview), from the stored state: every account's
+ * affected open lots before and after, and the fractions. An identical active action is left out (storing this
+ * one would return it instead). Stores nothing.
+ */
+export function previewCorporateActionInVault(db: Database.Database, input: unknown): CorporateActionPreview {
+  const action = parseCorporateAction(input);
+  const existing = activeCorporateActions(db).filter((other) => !sameFacts(other, action));
+  const accounts = db.prepare('SELECT id, broker FROM broker_account ORDER BY id').all() as {
+    id: string;
+    broker: string;
+  }[];
+  const previews = accounts.map((account) =>
+    previewCorporateAction(
+      loadFills(db, account.id, account.broker),
+      activeAdjustments(db, account.id),
+      action,
+      existing,
+    ),
+  );
+  return {
+    before: previews.flatMap((preview) => preview.before),
+    after: previews.flatMap((preview) => preview.after),
+    fractions: previews.flatMap((preview) => preview.fractions),
   };
 }
