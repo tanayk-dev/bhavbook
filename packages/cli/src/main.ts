@@ -122,7 +122,8 @@ async function withVaultLock<T>(vault: string, io: CliIo, work: () => Promise<T>
 
 async function serveCommand(args: Parsed, io: CliIo): Promise<number> {
   return withVaultLock(args.vault, io, async () => {
-    const db = openVault(args.vault, { appVersion: APP_VERSION });
+    // A restore from the UI replaces the connection; whichever one is current is closed at shutdown.
+    let db = openVault(args.vault, { appVersion: APP_VERSION });
     try {
       const token = randomBytes(32).toString('base64url');
       const logger = createLogger((line) => {
@@ -130,7 +131,22 @@ async function serveCommand(args: Parsed, io: CliIo): Promise<number> {
       });
       if (!existsSync(WEB_BUILD))
         io.err('The web interface is not built yet: run pnpm --filter @bhavbook/web build.');
-      const server = await startServer({ token, logger, vault: db, port: args.port, staticRoot: WEB_BUILD });
+      const backups = {
+        vaultPath: args.vault,
+        appVersion: APP_VERSION,
+        reopen: () => openVault(args.vault, { appVersion: APP_VERSION }),
+        onReopen: (next: Database.Database) => {
+          db = next;
+        },
+      };
+      const server = await startServer({
+        token,
+        logger,
+        vault: db,
+        backups,
+        port: args.port,
+        staticRoot: WEB_BUILD,
+      });
       try {
         io.out(`BhavBook is running at ${server.url}`);
         io.out('Press Ctrl+C to stop.');

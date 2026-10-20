@@ -3,10 +3,12 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { useRef, useState, type ReactNode } from 'react';
 import { BreakevenForm, FeeRuleTable, InlineRename, MoveAccount, TableRegion } from '@/components/settings';
 import { Disconnected, EmptyState, ErrorState, LoadingRows } from '@/components/states';
+import { BackupsPanel } from '@/components/backups';
 import { TagTable } from '@/components/tags';
 import { ApiError } from '@/lib/api';
 import { BROKERS, profilesQuery, type Profile } from '@/lib/profiles';
 import { renameAccount, renameProfile, settingsQuery } from '@/lib/settings';
+import { backupsQuery } from '@/lib/backups';
 import { tagsQuery } from '@/lib/tags';
 
 export const Route = createFileRoute('/settings')({ component: SettingsPage });
@@ -182,8 +184,9 @@ function SettingsPage() {
   const profiles = useQuery(profilesQuery);
   const settings = useQuery(settingsQuery);
   const tags = useQuery(tagsQuery);
+  const backups = useQuery(backupsQuery);
   const [notice, announce] = useAnnouncer();
-  const failure = profiles.error ?? settings.error ?? tags.error;
+  const failure = profiles.error ?? settings.error ?? tags.error ?? backups.error;
   const disconnection = failure instanceof ApiError ? failure.disconnection : null;
   if (disconnection !== null) return <Disconnected reason={disconnection} />;
   return (
@@ -194,17 +197,18 @@ function SettingsPage() {
           {notice}
         </p>
       </div>
-      {profiles.isPending || settings.isPending || tags.isPending ? (
+      {profiles.isPending || settings.isPending || tags.isPending || backups.isPending ? (
         <LoadingRows label="Loading settings" rows={4} />
       ) : null}
       {failure === null ? null : (
         <ErrorState
           message="Could not read the settings."
-          retrying={profiles.isFetching || settings.isFetching || tags.isFetching}
+          retrying={profiles.isFetching || settings.isFetching || tags.isFetching || backups.isFetching}
           onRetry={() => {
             void profiles.refetch();
             void settings.refetch();
             void tags.refetch();
+            void backups.refetch();
           }}
         />
       )}
@@ -230,6 +234,16 @@ function SettingsPage() {
               cannot be edited here.
             </p>
             <FeeRuleTable rules={settings.data.feeRules} />
+          </Section>
+        </>
+      ) : null}
+      {backups.isSuccess ? (
+        <>
+          <Section id="backups-title" title="Backups">
+            <p className="text-ink-muted">
+              Backups are saved next to your vault. Download one to keep a copy elsewhere.
+            </p>
+            <BackupsPanel backups={backups.data} announce={announce} />
           </Section>
         </>
       ) : null}

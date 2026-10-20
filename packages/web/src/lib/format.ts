@@ -2,6 +2,16 @@
 // formatted as text, never through the machine's timezone.
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
 
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+
+/** A UTC instant as `dd MMM yyyy, HH:mm IST`, computed from the fixed IST offset (never the machine's zone). */
+export function formatIstDateTime(iso: string): string {
+  const millis = Date.parse(iso);
+  if (Number.isNaN(millis)) return iso;
+  const ist = new Date(millis + IST_OFFSET_MS).toISOString();
+  return `${formatIstDate(ist.slice(0, 10))}, ${ist.slice(11, 16)} IST`;
+}
+
 export function formatIstDate(date: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   const month = match === null ? undefined : MONTHS[Number.parseInt(match[2] ?? '', 10) - 1];
