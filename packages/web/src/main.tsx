@@ -1,7 +1,8 @@
 // Entry point. The launch token is stripped from the URL before anything renders (ADR-0002); fonts ship in the
 // bundle (no runtime fetch, PRD §12); the saved theme was applied by public/theme-init.js before the first paint.
-import '@fontsource-variable/inter';
-import '@fontsource/jetbrains-mono/400.css';
+import '@fontsource-variable/ibm-plex-sans';
+import '@fontsource/ibm-plex-serif/600.css';
+import '@fontsource/ibm-plex-mono/400.css';
 import './styles.css';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRouter, RouterProvider } from '@tanstack/react-router';

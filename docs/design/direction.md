@@ -25,7 +25,7 @@ Every money figure carries a small **provenance mark**, so trust is visible with
 | Mark | Meaning | Source in the data |
 | :--- | :--- | :--- |
 | `≈` (muted, dotted underline) | Estimated by our fee engine | `fill_charge.source = 'estimated'`; FEES_ESTIMATED |
-| `✓` (teal) | Reconciled with the broker's own statement | FEES_RECONCILED |
+| `✓` (ledger blue) | Reconciled with the broker's own statement | FEES_RECONCILED |
 | `!` (amber) | Our estimate and the statement disagree | FEES_DISCREPANCY |
 | `◐` (muted) | Incomplete history: some quantity has no known buy | INCOMPLETE, orphan quantity |
 | `ⓘ` (muted) | Product type inferred, not declared (Zerodha) | HAS_INFERRED_PRODUCT |
@@ -39,8 +39,10 @@ Every money figure carries a small **provenance mark**, so trust is visible with
 ### 4.1 Typography
 
 - **Faces:**
-  - **Inter** (variable, OFL) for the interface, bundled with the app through `@fontsource-variable/inter`.
-  - **JetBrains Mono** (OFL), likewise bundled, only for identifiers: ISINs, order ids and rule versions.
+  - **IBM Plex Sans** (variable, OFL) for the interface, through `@fontsource-variable/ibm-plex-sans`. Its figures are engineered for tables, and the family has a Devanagari sibling for a future Hindi interface.
+  - **IBM Plex Serif** (600) for page titles and the wordmark only: the ruled heading of a ledger page.
+  - **IBM Plex Mono** (400) only for identifiers: ISINs, order ids and rule versions.
+  - Not Inter, Geist, Space Grotesk or the system stack: those are the defaults that make generated interfaces look alike (revision 2026-10-20, §10).
 - **No font CDN.** The app makes no outbound requests (PRD §12), so fonts ship inside the bundle.
 - **Figures are always tabular** (`font-variant-numeric: tabular-nums slashed-zero`) and right-aligned in tables, so columns of rupees line up the way a ledger does.
 
@@ -62,17 +64,17 @@ Colour tokens are CSS variables (shadcn/Tailwind 4 theme), so the light and dark
 | `--rule` | `#E7E3DA` | `#2A2E33` | Hairline table rules (1 px), the ledger lines |
 | `--ink` | `#1C1E21` | `#E8E6E1` | Text |
 | `--ink-muted` | `#6B6F76` | `#9BA0A6` | Secondary text, provenance marks |
-| `--accent` | indigo ink `#2F4AA8` | `#8DA2F0` | Primary actions, focus ring, links |
+| `--accent` | ledger-rule blue `#1F5A8A` | `#8BB8E8` | Primary actions, focus ring, links |
 | `--gain` | green `#1E7A46` | `#5CC48A` | Profit (always with a sign and a glyph) |
 | `--loss` | red `#B42318` | `#F07A6E` | Loss (always with a sign and a glyph) |
-| `--attention` | saffron `#B26B00` | `#E9A23B` | Issues, discrepancies, unreviewed counts |
-| `--reconciled` | teal `#0F766E` | `#4FC1B3` | Reconciled mark |
+| `--attention` | pencil ochre `#7A5C00` | `#D9B44A` | Issues, discrepancies, unreviewed counts |
+| `--reconciled` | ledger-rule blue `#1F5A8A` | `#8BB8E8` | Reconciled mark (the glyph tells it apart from links) |
 
 - **Palette:** neutral paper plus ink, with one accent. Gain, loss, attention and reconciled appear only where they carry meaning. No gradients, no purple, no decorative tints.
 - **Contrast:** every text token meets WCAG 2.2 AA (4.5:1) on `--paper` and `--surface`. The tokens get a contrast test.
 - **Colour is never the only signal** (PRD §12):
   - Profit shows as `▲ +₹12,345.60` and loss as `▼ −₹1,234.50`, using a true minus sign (U+2212).
-  - A **colour-blind setting** swaps gain and loss to blue and orange; the glyphs stay.
+  - A **colour-blind setting** swaps gain and loss to the Okabe–Ito blue and orange pair (an accessibility pair, used only when the setting is on); the glyphs stay.
 
 ### 4.3 Numbers, dates and units
 
@@ -223,5 +225,28 @@ The following are excluded:
 
 1. **Direction:** approved. A ledger: dense and calm, with provenance marks on every figure.
 2. **Theme:** light (warm paper) by default, with a dark theme available.
-3. **Fonts:** Inter and JetBrains Mono, bundled with the app (no runtime fetch).
+3. **Fonts:** bundled with the app (no runtime fetch). Revised the same day to IBM Plex (§10).
 4. **Phone:** the review queue and position detail are read-only at 390 px. Import and settings are desktop only.
+
+## 10. Revision 2026-10-20: away from generated-interface defaults
+
+Prompted by the request to avoid "AI slop" design, the first build was checked against the tells that recent write-ups list:
+
+- **Sources:**
+  - [avoid-ai-design](https://github.com/funboy322/avoid-ai-design)
+  - [925 Studios](https://www.925studios.co/blog/ai-slop-design-tells)
+  - [prg.sh](https://prg.sh/ramblings/Why-Your-AI-Keeps-Building-the-Same-Purple-Gradient-Website)
+  - [Mania Design](https://www.mania.design/blog/spot-the-slop-a-ui-designers-guide-to-fixing-ai-defaults/)
+- **What changed.** Three tells were present:
+  - **Accent:** a Tailwind-indigo accent, with a lavender dark variant. It is now ledger-rule blue (about 207° hue, not indigo's 240°), and the accent tint is a pale blue, not lavender.
+  - **Type:** Inter everywhere. It is now IBM Plex Sans, with Plex Serif for page titles and the wordmark.
+  - **Attention colour:** an orange saffron. It is now pencil ochre, and the reconciled mark uses ledger blue instead of a teal default.
+  - **Wordmark:** the two-tone wordmark is now a single-colour serif word.
+- **Already clear of the tells:**
+  - no gradients, glass, heavy shadows or nested cards;
+  - no centred hero or three-card grid: the first screen is the product's own artifact, a ledger table;
+  - no bounce or fade-up motion;
+  - visible focus everywhere, and contrast tested to WCAG AA;
+  - icons only for standard tool actions.
+- **Watch for the second-order defaults the same sources name:** cream with terracotta, near-black with a single acid accent, and decorative mono "template chrome".
+
