@@ -165,6 +165,63 @@ describe('tags', () => {
     });
   });
 
+  it('counts an entry once when it has a tag as its setup and as a link, and merges such overlaps cleanly', async () => {
+    await withVault(async ({ db }) => {
+      const test = testApp({}, db);
+      const breakout = await create(test, 'setup', 'Breakout');
+      const bo = await create(test, 'setup', 'BO');
+      entry(db, 'j1', bo, [bo, breakout]);
+      expect(await list(test)).toEqual([
+        { id: bo, kind: 'setup', name: 'BO', uses: 1 },
+        { id: breakout, kind: 'setup', name: 'Breakout', uses: 1 },
+      ]);
+      const response = await send(test, `/api/tags/${bo}/merge`, json('POST', { intoId: breakout }));
+      expect([response.status, await response.json()]).toEqual([200, { merged: 1 }]);
+      expect(db.prepare("SELECT setup_tag_id FROM journal_entry WHERE id = 'j1'").pluck().get()).toBe(
+        breakout,
+      );
+      expect(db.prepare('SELECT tag_id FROM journal_tag').pluck().all()).toEqual([breakout]);
+    });
+  });
+
+  it('marks the entries a merge or delete changes as updated, and no others', async () => {
+    await withVault(async ({ db }) => {
+      const test = testApp({}, db);
+      const breakout = await create(test, 'setup', 'Breakout');
+      const bo = await create(test, 'setup', 'BO');
+      const fomo = await create(test, 'mistake', 'FOMO');
+      entry(db, 'j1', bo);
+      entry(db, 'j2', null, [fomo]);
+      entry(db, 'j3', breakout);
+      await send(test, `/api/tags/${bo}/merge`, json('POST', { intoId: breakout }));
+      await send(test, `/api/tags/${fomo}`, { method: 'DELETE' });
+      const updated = db.prepare('SELECT id, updated_at FROM journal_entry ORDER BY id').all() as {
+        id: string;
+        updated_at: string;
+      }[];
+      expect(updated.map((row) => [row.id, row.updated_at === 'x'])).toEqual([
+        ['j1', false],
+        ['j2', false],
+        ['j3', true],
+      ]);
+    });
+  });
+
+  it('folds case beyond ASCII, and sees identifiers through punctuation', async () => {
+    await withVault(async ({ db }) => {
+      const test = testApp({}, db);
+      await create(test, 'setup', 'Écart');
+      const replies = [
+        await send(test, '/api/tags', json('POST', { kind: 'setup', name: 'écart' })),
+        await send(test, '/api/tags', json('POST', { kind: 'mistake', name: 'ABCDE.1234_F' })),
+      ];
+      expect(await Promise.all(replies.map(async (r) => [r.status, await r.json()]))).toEqual([
+        [409, { error: 'conflict' }],
+        [400, { error: 'identifier' }],
+      ]);
+    });
+  });
+
   it('backs case-insensitive uniqueness with an index, for two processes racing', async () => {
     await withVault(({ db }) => {
       db.prepare("INSERT INTO tag (id, kind, name) VALUES ('t1', 'setup', 'Breakout')").run();

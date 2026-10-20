@@ -54,7 +54,8 @@ function cleanLabel(value: string): string | null {
 }
 
 export function looksLikeIdentifier(label: string): boolean {
-  const compact = label.replace(/[\s-]/g, '');
+  // Punctuation and spacing are ignored: "ABCDE.1234_F" is still a PAN.
+  const compact = label.replace(/[^\p{L}\p{N}]/gu, '');
   return IDENTIFIER_SHAPES.some((shape) => shape.test(compact));
 }
 

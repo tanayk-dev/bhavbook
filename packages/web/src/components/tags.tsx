@@ -80,6 +80,11 @@ interface TagActionsProps {
   readonly onRemoved: () => void;
 }
 
+const confirmLabel = (action: 'merge' | 'delete', busy: boolean): string => {
+  if (action === 'merge') return busy ? 'Merging…' : 'Merge';
+  return busy ? 'Deleting…' : 'Delete tag';
+};
+
 type Pending = { readonly action: 'merge'; readonly into: Tag } | { readonly action: 'delete' };
 
 function TagActions({ tag, others, onDone, onRemoved }: TagActionsProps) {
@@ -87,6 +92,7 @@ function TagActions({ tag, others, onDone, onRemoved }: TagActionsProps) {
   const [chosen, setChosen] = useState<string>();
   const [pending, setPending] = useState<Pending | null>(null);
   const fieldId = useId();
+  const questionId = useId();
   const mergeButton = useRef<HTMLButtonElement>(null);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const confirmButton = useRef<HTMLButtonElement>(null);
@@ -95,10 +101,11 @@ function TagActions({ tag, others, onDone, onRemoved }: TagActionsProps) {
     mutationFn: (step: Pending) =>
       step.action === 'merge' ? mergeTag(tag.id, step.into.id) : deleteTag(tag.id),
     onSuccess: async (touched, step) => {
+      setPending(null);
       await queryClient.invalidateQueries({ queryKey: tagsQuery.queryKey });
       onDone(
         step.action === 'merge'
-          ? `Merged ${tag.name} into ${step.into.name} on ${entries(touched)}.`
+          ? `Merged ${tag.name} into ${step.into.name}; it was on ${entries(touched)}.`
           : `Deleted ${tag.name} and removed it from ${entries(touched)}.`,
       );
       onRemoved();
@@ -122,8 +129,11 @@ function TagActions({ tag, others, onDone, onRemoved }: TagActionsProps) {
         role="group"
         aria-label={`Confirm ${pending.action === 'merge' ? 'merging' : 'deleting'} ${tag.name}`}
         className="space-y-2 py-1"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && !mutation.isPending) cancel();
+        }}
       >
-        <p>{question}</p>
+        <p id={questionId}>{question}</p>
         {mutation.isError ? (
           <p role="alert" className="text-sm text-loss">
             {saveError(mutation.error, 'tag')}
@@ -132,6 +142,7 @@ function TagActions({ tag, others, onDone, onRemoved }: TagActionsProps) {
         <div className="flex gap-2">
           <Button
             ref={confirmButton}
+            aria-describedby={questionId}
             size="sm"
             variant={pending.action === 'delete' ? 'destructive' : 'default'}
             className={TOUCH}
@@ -140,7 +151,7 @@ function TagActions({ tag, others, onDone, onRemoved }: TagActionsProps) {
               mutation.mutate(pending);
             }}
           >
-            {pending.action === 'merge' ? 'Merge' : 'Delete tag'}
+            {confirmLabel(pending.action, mutation.isPending)}
           </Button>
           <Button variant="ghost" size="sm" className={TOUCH} disabled={mutation.isPending} onClick={cancel}>
             Cancel

@@ -123,7 +123,9 @@ describe('tags in settings', () => {
     );
     expect(within(confirm).getByRole('button', { name: 'Merge' })).toHaveFocus();
     await userEvent.click(within(confirm).getByRole('button', { name: 'Merge' }));
-    expect(await screen.findByText('Merged BO into Breakout on 2 journal entries.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Merged BO into Breakout; it was on 2 journal entries.'),
+    ).toBeInTheDocument();
     expect(state.calls).toEqual(['merge t2 t1']);
     await waitFor(() => {
       expect(screen.getByLabelText('New setup tag')).toHaveFocus();
@@ -136,6 +138,14 @@ describe('tags in settings', () => {
     const { state, routes } = server();
     renderSettings(routes);
     await userEvent.click(await screen.findByRole('button', { name: 'Delete FOMO…' }));
+    expect(screen.getByRole('button', { name: 'Delete tag' })).toHaveAccessibleDescription(
+      'Delete FOMO? It is removed from 1 journal entry; the entries themselves are kept.',
+    );
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Delete FOMO…' })).toHaveFocus();
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Delete FOMO…' }));
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Delete FOMO…' })).toHaveFocus();

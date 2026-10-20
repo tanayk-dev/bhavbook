@@ -95,7 +95,7 @@ test('tags: add setup and mistake tags, rename, merge, delete', async ({ page, a
     .getByRole('group', { name: 'Confirm merging BO' })
     .getByRole('button', { name: 'Merge' })
     .click();
-  await expect(page.getByText('Merged BO into Breakout on 0 journal entries.')).toBeVisible();
+  await expect(page.getByText('Merged BO into Breakout; it was on 0 journal entries.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Delete FOMO…' }).click();
   await page

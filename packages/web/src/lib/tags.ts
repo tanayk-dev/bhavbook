@@ -59,7 +59,7 @@ export async function deleteTag(id: string): Promise<number> {
   return field(await readJson(await send(() => api.tags[':id'].$delete({ param: { id } }))), 'detached');
 }
 
-/** Merges a tag into another of its kind; returns how many journal entries now use the target. */
+/** Merges a tag into another of its kind; returns how many journal entries had the merged tag. */
 export async function mergeTag(id: string, intoId: string): Promise<number> {
   return field(
     await readJson(await send(() => api.tags[':id'].merge.$post({ param: { id }, json: { intoId } }))),

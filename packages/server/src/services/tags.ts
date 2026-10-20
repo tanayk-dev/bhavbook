@@ -49,15 +49,19 @@ function kindOf(db: Database.Database, id: string): TagKind {
   return kind;
 }
 
-function namesOfKind(db: Database.Database, kind: TagKind, exceptId: string): unknown[] {
-  return db.prepare('SELECT name FROM tag WHERE kind = ? AND id <> ?').pluck().all(kind, exceptId);
+/** Names of the tags of a kind, other than `exceptId` (a tag being renamed). */
+function namesOfKind(db: Database.Database, kind: TagKind, exceptId?: string): unknown[] {
+  return db
+    .prepare('SELECT name FROM tag WHERE kind = ? AND id IS NOT ?')
+    .pluck()
+    .all(kind, exceptId ?? null);
 }
 
 export function createTag(db: Database.Database, input: unknown): string {
   const parsed = parse(tagInputSchema, input);
   const name = acceptLabel(parsed.name);
   return write(db, () => {
-    if (clashes(namesOfKind(db, parsed.kind, ''), name)) throw new ProfileError('conflict');
+    if (clashes(namesOfKind(db, parsed.kind), name)) throw new ProfileError('conflict');
     const id = `tag_${randomUUID()}`;
     db.prepare('INSERT INTO tag (id, kind, name) VALUES (?, ?, ?)').run(id, parsed.kind, name);
     return id;
@@ -77,11 +81,24 @@ function usesOf(db: Database.Database, id: string): number {
   return Number(uses);
 }
 
+export interface TagOptions {
+  readonly now?: () => Date;
+}
+
+/** Marks the entries that use a tag as changed: their tags are about to be. */
+function touchEntries(db: Database.Database, id: string, options: TagOptions): void {
+  db.prepare(
+    `UPDATE journal_entry SET updated_at = ?
+     WHERE setup_tag_id = ? OR id IN (SELECT journal_entry_id FROM journal_tag WHERE tag_id = ?)`,
+  ).run((options.now?.() ?? new Date()).toISOString(), id, id);
+}
+
 /** Deletes a tag and its links (the schema clears setup tags and cascades links); returns the entries that lost it. */
-export function deleteTag(db: Database.Database, id: string): number {
+export function deleteTag(db: Database.Database, id: string, options: TagOptions = {}): number {
   return write(db, () => {
     kindOf(db, id);
     const detached = usesOf(db, id);
+    touchEntries(db, id, options);
     db.prepare('DELETE FROM tag WHERE id = ?').run(id);
     return detached;
   });
@@ -89,14 +106,21 @@ export function deleteTag(db: Database.Database, id: string): number {
 
 /**
  * Merges a tag into another of the same kind: entries that used it use the target instead (a link the entry
- * already has is not duplicated), then the tag is deleted. Returns the entries that used it.
+ * already has is not duplicated), then the tag is deleted. Returns the entries that used it, including any that
+ * already had the target too.
  */
-export function mergeTag(db: Database.Database, id: string, input: unknown): number {
+export function mergeTag(
+  db: Database.Database,
+  id: string,
+  input: unknown,
+  options: TagOptions = {},
+): number {
   const { intoId } = parse(mergeTagSchema, input);
   return write(db, () => {
     const kind = kindOf(db, id);
     if (kindOf(db, intoId) !== kind || intoId === id) throw new ProfileError('invalid');
     const merged = usesOf(db, id);
+    touchEntries(db, id, options);
     db.prepare('UPDATE journal_entry SET setup_tag_id = ? WHERE setup_tag_id = ?').run(intoId, id);
     db.prepare(
       `INSERT OR IGNORE INTO journal_tag (journal_entry_id, tag_id)
