@@ -1,6 +1,6 @@
 # BhavBook design direction
 
-- **Status:** proposed. Awaiting approval before any screen is built (plan S13a).
+- **Status:** accepted on 2026-10-20 (all four decisions in §9 as recommended)
 - **Date:** 2026-10-20
 - **Applies to:** `packages/web` (React 19, Tailwind 4, shadcn/ui, EvilCharts on ECharts; ADR-0021, ADR-0022)
 
@@ -219,9 +219,9 @@ The following are excluded:
 - colour as the only P&L signal;
 - charts with no table equivalent.
 
-## 9. Decisions requested
+## 9. Decisions (2026-10-20)
 
-1. **Approve the direction:** a ledger, dense and calm, with provenance marks.
-2. **Palette:** the warm-paper light theme as the default, with dark available. Alternatively, dark by default.
-3. **Fonts:** bundle Inter and JetBrains Mono (two small OFL dependencies). Alternatively, use the system font stack only.
-4. **Phone layout:** read-only review on phones in v1, or desktop only.
+1. **Direction:** approved. A ledger: dense and calm, with provenance marks on every figure.
+2. **Theme:** light (warm paper) by default, with a dark theme available.
+3. **Fonts:** Inter and JetBrains Mono, bundled with the app (no runtime fetch).
+4. **Phone:** the review queue and position detail are read-only at 390 px. Import and settings are desktop only.
