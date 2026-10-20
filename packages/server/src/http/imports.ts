@@ -39,17 +39,31 @@ const KIND = /^[a-z]+\.[a-z0-9_]+$/;
  * pick for an ambiguous file; empty for "detect"). File names are not read: the browser keeps them (ADR-0019).
  */
 export async function previewFiles(c: Context): Promise<ImportFile[]> {
-  const body = await c.req.parseBody({ all: true });
+  let body: Awaited<ReturnType<typeof c.req.parseBody>>;
+  try {
+    body = await c.req.parseBody({ all: true });
+  } catch (cause) {
+    // A malformed multipart body (bad boundary, truncated part) is the client's mistake, not a server failure.
+    throw new PreviewRequestError('the upload could not be read', { cause });
+  }
   const files = [body.file ?? []].flat();
   const kinds = [body.kind ?? []].flat();
   if (files.length > MAX_PREVIEW_FILES)
-    throw new ImportError('too many files in one preview', { code: 'too_large' });
+    throw new ImportError('too many files in one preview', { code: 'too_many_files' });
+  // Kinds pair with files by position, so there is one per file or none at all.
+  if (kinds.length !== 0 && kinds.length !== files.length) throw new PreviewRequestError();
   return Promise.all(
     files.map(async (file, index) => {
-      if (typeof file === 'string') throw new ImportError('no files to preview', { code: 'no_files' });
+      if (typeof file === 'string') throw new PreviewRequestError();
       const kind = kinds[index];
+      // A view over the part's bytes, not a second copy.
       const bytes = Buffer.from(await file.arrayBuffer());
       return typeof kind === 'string' && KIND.test(kind) ? { bytes, kind } : { bytes };
     }),
   );
+}
+
+/** A preview request whose parts don't fit the contract (a text part where a file belongs, unpaired kinds). */
+export class PreviewRequestError extends Error {
+  override readonly name = 'PreviewRequestError';
 }

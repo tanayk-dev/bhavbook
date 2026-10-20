@@ -71,7 +71,7 @@ interface Account {
 function checkBounds(files: readonly ImportFile[]): void {
   if (files.length === 0) throw new ImportError('no files to preview', { code: 'no_files' });
   if (files.length > MAX_PREVIEW_FILES)
-    throw new ImportError('too many files in one preview', { code: 'too_large' });
+    throw new ImportError('too many files in one preview', { code: 'too_many_files' });
   const total = files.reduce((sum, file) => sum + file.bytes.length, 0);
   if (total > MAX_PREVIEW_BYTES)
     throw new ImportError('the files are too large to preview together', { code: 'too_large' });

@@ -51,7 +51,7 @@ import {
   type LiveVault,
   type RestoreErrorCode,
 } from './backups.js';
-import { importServices, previewFiles } from './imports.js';
+import { importServices, PreviewRequestError, previewFiles } from './imports.js';
 import { jsonResponse } from './json.js';
 import type { Logger } from './logger.js';
 import {
@@ -175,6 +175,7 @@ const IMPORT_STATUS: Readonly<Record<Exclude<ImportErrorCode, 'failed'>, ErrorSt
   not_found: 404,
   no_files: 400,
   too_large: 413,
+  too_many_files: 413,
   preview_expired: 410,
   backup_failed: 500,
 };
@@ -191,6 +192,7 @@ async function withImports(
   } catch (cause) {
     if (cause instanceof ImportError && cause.code !== 'failed')
       return error(cause.code, IMPORT_STATUS[cause.code]);
+    if (cause instanceof PreviewRequestError) return error('invalid_request', 400);
     throw cause;
   }
 }

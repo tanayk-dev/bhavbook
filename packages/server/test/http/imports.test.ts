@@ -166,6 +166,38 @@ describe('imports', () => {
     });
   });
 
+  it('refuses upload requests that break the contract, without a server error', async () => {
+    await withImports(async (test) => {
+      const target = `/api/imports?accountId=${DHAN}`;
+      const unpaired = form([
+        { broker: 'dhan', kind: 'trade_history' },
+        { broker: 'dhan', kind: 'trade_history' },
+      ]);
+      unpaired.delete('kind');
+      unpaired.append('kind', 'dhan.trade_history');
+      const textPart = new FormData();
+      textPart.append('file', 'not a file');
+      const many = new FormData();
+      for (let index = 0; index < 11; index += 1) many.append('file', new Blob(['x']), 'upload');
+      const replies = [
+        await send(test, target, { method: 'POST', body: unpaired }),
+        await send(test, target, { method: 'POST', body: textPart }),
+        await send(test, target, { method: 'POST', body: many }),
+        await send(test, target, {
+          method: 'POST',
+          headers: { 'content-type': 'multipart/form-data; boundary=x' },
+          body: 'garbage without any boundary',
+        }),
+      ];
+      expect(await Promise.all(replies.map(async (reply) => [reply.status, await reply.json()]))).toEqual([
+        [400, { error: 'invalid_request' }],
+        [400, { error: 'invalid_request' }],
+        [413, { error: 'too_many_files' }],
+        [400, { error: 'invalid_request' }],
+      ]);
+    });
+  });
+
   it('follows a restore: a preview made against the old vault cannot be committed into the new one', async () => {
     await withImports(async (test) => {
       const saved = (await (await send(test, '/api/vault/backup', { method: 'POST' })).json()) as {

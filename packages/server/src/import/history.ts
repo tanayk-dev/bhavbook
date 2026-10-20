@@ -29,15 +29,32 @@ const EMPTY: PreviewCounts = {
   errors: 0,
 };
 
-/** A stored counts blob, or zeros when it is unreadable (it is display-only). */
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value);
+
+function pair(value: unknown): { new: number; duplicate: number } | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { new: fresh, duplicate } = value as Record<string, unknown>;
+  return isCount(fresh) && isCount(duplicate) ? { new: fresh, duplicate } : null;
+}
+
+/** A stored counts blob, checked field by field; zeros when it is unreadable (it is display-only). */
 function counts(json: string): PreviewCounts {
+  let value: unknown;
   try {
-    const value = JSON.parse(json) as Partial<PreviewCounts> | null;
-    if (value?.rows !== undefined && value.statements !== undefined) return { ...EMPTY, ...value };
+    value = JSON.parse(json);
   } catch {
-    // Fall through.
+    return EMPTY;
   }
-  return EMPTY;
+  if (typeof value !== 'object' || value === null) return EMPTY;
+  const stored = value as Record<string, unknown>;
+  const rows = pair(stored.rows);
+  const statements = pair(stored.statements);
+  if (rows === null || statements === null) return EMPTY;
+  const skipped: Record<string, number> = {};
+  if (typeof stored.skipped === 'object' && stored.skipped !== null) {
+    for (const [reason, n] of Object.entries(stored.skipped)) if (isCount(n)) skipped[reason] = n;
+  }
+  return { rows, statements, skipped, errors: isCount(stored.errors) ? stored.errors : 0 };
 }
 
 export function listImports(db: Database.Database, accountId: string): ImportRecord[] {
