@@ -13,6 +13,14 @@ import { HTTPException } from 'hono/http-exception';
 import { routePath } from 'hono/route';
 import { validator } from 'hono/validator';
 import { z } from 'zod';
+import {
+  accountInputSchema,
+  createAccount,
+  createProfile,
+  listProfiles,
+  ProfileError,
+  profileInputSchema,
+} from '../services/profiles.js';
 import { currentVersion } from '../vault/index.js';
 import { jsonResponse } from './json.js';
 import type { Logger } from './logger.js';
@@ -38,7 +46,7 @@ export interface AppOptions {
   readonly staticRoot?: string | null;
 }
 
-type ErrorStatus = 400 | 401 | 403 | 404 | 413 | 415 | 500 | 501 | 503;
+type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 500 | 501 | 503;
 
 const error = (code: string, status: ErrorStatus): Response => jsonResponse({ error: code }, status);
 
@@ -86,6 +94,23 @@ function json<T extends z.ZodType>(schema: T) {
   return [contentType, limit, parse] as const;
 }
 
+const PROFILE_ERRORS: Readonly<Record<ProfileError['code'], ErrorStatus>> = {
+  invalid: 400,
+  conflict: 409,
+  not_found: 404,
+};
+
+/** Runs a vault action; a missing vault is 503 and a ProfileError its fixed code (ADR-0019). */
+function withVault(options: AppOptions, action: (db: Database.Database) => Response): Response {
+  if (options.vault === null) return error('no_vault', 503);
+  try {
+    return action(options.vault);
+  } catch (cause) {
+    if (cause instanceof ProfileError) return error(cause.code, PROFILE_ERRORS[cause.code]);
+    throw cause;
+  }
+}
+
 function apiRoutes(options: AppOptions) {
   return new Hono()
     .get('/health', () => jsonResponse({ ok: true }))
@@ -93,6 +118,13 @@ function apiRoutes(options: AppOptions) {
       options.vault === null
         ? error('no_vault', 503)
         : jsonResponse({ schemaVersion: currentVersion(options.vault) }),
+    )
+    .get('/profiles', (c) => withVault(options, (db) => c.json({ profiles: listProfiles(db) })))
+    .post('/profiles', ...json(profileInputSchema), (c) =>
+      withVault(options, (db) => c.json({ id: createProfile(db, c.req.valid('json')) }, 201)),
+    )
+    .post('/accounts', ...json(accountInputSchema), (c) =>
+      withVault(options, (db) => c.json({ id: createAccount(db, c.req.valid('json')) }, 201)),
     )
     .post('/vault/backup', notImplemented)
     .post('/vault/restore', notImplemented)

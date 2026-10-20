@@ -1,4 +1,4 @@
-// A BhavBook process per test worker: the CLI on a temporary vault, `--no-open`, its launch URL read from stdout.
+// A BhavBook process per test (a fresh vault each time): the CLI on a temporary vault, `--no-open`, its launch URL read from stdout.
 // Its stderr (one log line per request) is drained continuously, so the pipe never fills, and kept for diagnosis
 // when startup fails.
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -47,7 +47,7 @@ async function stop(child: ChildProcess): Promise<void> {
   await exited;
 }
 
-export const test = base.extend<object, { app: App }>({
+export const test = base.extend<{ app: App }>({
   app: [
     // Playwright reads fixture dependencies from this destructuring pattern: it must stay an object pattern.
     // eslint-disable-next-line no-empty-pattern
@@ -71,7 +71,7 @@ export const test = base.extend<object, { app: App }>({
         rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
       }
     },
-    { scope: 'worker' },
+    { scope: 'test' },
   ],
 });
 

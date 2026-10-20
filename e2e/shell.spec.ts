@@ -20,13 +20,13 @@ test('the launch URL opens the app with the token gone from the address bar', as
     if (message.text().includes('Content Security Policy')) cspViolations.push(message.text());
   });
   await page.goto(app.launch);
-  await expect(page.getByText(/Vault schema v\d+/)).toBeVisible();
-  expect(page.url()).toBe(`${app.origin}/`);
+  await expect(page.getByRole('heading', { name: 'Set up BhavBook' })).toBeVisible();
+  // A new vault starts at onboarding; the address bar never shows the token.
+  expect(page.url()).toBe(`${app.origin}/onboarding`);
   expect(page.url()).not.toContain('t=');
   expect(await page.evaluate(() => window.location.search)).toBe('');
   expect([...hosts]).toEqual([new URL(app.origin).host]);
   await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'No trades yet' })).toBeVisible();
   expect(cspViolations).toEqual([]);
 });
 
@@ -66,11 +66,11 @@ for (const theme of ['light', 'dark'] as const) {
     if (theme === 'dark') await page.getByRole('button', { name: 'Switch to dark theme' }).click();
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
-      await expect(page.getByText(/Vault schema v\d+/)).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Set up BhavBook' })).toBeVisible();
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
       expect([viewport.name, overflow]).toEqual([viewport.name, false]);
       await page.screenshot({
-        path: info.outputPath(`overview-${theme}-${viewport.name}.png`),
+        path: info.outputPath(`onboarding-${theme}-${viewport.name}.png`),
         fullPage: true,
       });
     }
@@ -92,7 +92,7 @@ function focusIndicator(): string {
 
 test('the keyboard reaches every control, each with a 2 px accent focus indicator', async ({ page, app }) => {
   await page.goto(app.launch);
-  await expect(page.getByText(/Vault schema v\d+/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Set up BhavBook' })).toBeVisible();
   for (const name of ['Skip to content', 'BhavBook', 'Switch to dark theme', 'Overview']) {
     await page.keyboard.press('Tab');
     await expect.poll(() => page.evaluate(focusIndicator)).toBe(`${name}|visible`);
