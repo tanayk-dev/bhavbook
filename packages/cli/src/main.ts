@@ -128,6 +128,8 @@ async function serveCommand(args: Parsed, io: CliIo): Promise<number> {
       const logger = createLogger((line) => {
         io.err(line);
       });
+      if (!existsSync(WEB_BUILD))
+        io.err('The web interface is not built yet: run pnpm --filter @bhavbook/web build.');
       const server = await startServer({ token, logger, vault: db, port: args.port, staticRoot: WEB_BUILD });
       try {
         io.out(`BhavBook is running at ${server.url}`);

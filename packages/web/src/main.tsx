@@ -1,5 +1,5 @@
 // Entry point. The launch token is stripped from the URL before anything renders (ADR-0002); fonts ship in the
-// bundle (no runtime fetch, PRD §12); the theme preference is applied before the first paint.
+// bundle (no runtime fetch, PRD §12); the saved theme was applied by public/theme-init.js before the first paint.
 import '@fontsource-variable/inter';
 import '@fontsource/jetbrains-mono/400.css';
 import './styles.css';
@@ -7,21 +7,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRouter, RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ApiError } from '@/lib/api';
+import { shouldRetry } from '@/lib/api';
 import { stripLaunchToken } from '@/lib/session';
-import { applyTheme, safeStorage, storedTheme } from '@/lib/theme';
 import { routeTree } from './routeTree.gen';
 
+/** The server is local: a retry that can succeed is worth trying quickly. */
+const RETRY_DELAY_MS = 300;
+
 stripLaunchToken(window.location, window.history);
-applyTheme(storedTheme(safeStorage()), document.documentElement, safeStorage());
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: {
-      // A rejected session never succeeds on retry; anything else is retried once (the server is local).
-      retry: (failures, error) => !(error instanceof ApiError && error.sessionEnded) && failures < 1,
-      refetchOnWindowFocus: false,
-    },
+    queries: { retry: shouldRetry, retryDelay: RETRY_DELAY_MS, refetchOnWindowFocus: false },
   },
 });
 

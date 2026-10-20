@@ -11,7 +11,14 @@ const VIEWPORTS = [
 
 test('the launch URL opens the app with the token gone from the address bar', async ({ page, app }) => {
   const hosts = new Set<string>();
-  page.on('request', (request) => hosts.add(new URL(request.url()).host));
+  const cspViolations: string[] = [];
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.protocol === 'http:' || url.protocol === 'https:') hosts.add(url.host);
+  });
+  page.on('console', (message) => {
+    if (message.text().includes('Content Security Policy')) cspViolations.push(message.text());
+  });
   await page.goto(app.launch);
   await expect(page.getByText(/Vault schema v\d+/)).toBeVisible();
   expect(page.url()).toBe(`${app.origin}/`);
@@ -20,6 +27,15 @@ test('the launch URL opens the app with the token gone from the address bar', as
   expect([...hosts]).toEqual([new URL(app.origin).host]);
   await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'No trades yet' })).toBeVisible();
+  expect(cspViolations).toEqual([]);
+});
+
+test('a dark theme choice is applied before the app renders after a reload', async ({ page, app }) => {
+  await page.goto(app.launch);
+  await page.getByRole('button', { name: 'Switch to dark theme' }).click();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  expect(await page.evaluate(() => document.documentElement.classList.contains('dark'))).toBe(true);
+  await page.getByRole('button', { name: 'Switch to light theme' }).click();
 });
 
 test('a deep link works once the session cookie is set', async ({ page, app }) => {
@@ -61,22 +77,24 @@ for (const theme of ['light', 'dark'] as const) {
   });
 }
 
-test('the keyboard reaches every control, each with a visible focus indicator', async ({ page, app }) => {
+/** The focused control's name, and whether it shows a 2 px accent outline or ring (after any transition). */
+function focusIndicator(): string {
+  const active = document.activeElement;
+  if (active === null) return 'nothing';
+  const style = getComputedStyle(active);
+  const accent = 'rgb(47, 74, 168)';
+  // Links show the global outline; shadcn buttons draw the same accent as a 2 px ring (box shadow).
+  const outline =
+    style.outlineStyle === 'solid' && parseFloat(style.outlineWidth) >= 2 && style.outlineColor === accent;
+  const ring = style.boxShadow.includes(`${accent} 0px 0px 0px 2px`);
+  return `${active.getAttribute('aria-label') ?? active.textContent}|${outline || ring ? 'visible' : 'faint'}`;
+}
+
+test('the keyboard reaches every control, each with a 2 px accent focus indicator', async ({ page, app }) => {
   await page.goto(app.launch);
   await expect(page.getByText(/Vault schema v\d+/)).toBeVisible();
-  const reached: string[] = [];
-  for (let step = 0; step < 3; step += 1) {
+  for (const name of ['Skip to content', 'BhavBook', 'Switch to dark theme', 'Overview']) {
     await page.keyboard.press('Tab');
-    reached.push(
-      await page.evaluate(() => {
-        const active = document.activeElement;
-        if (active === null) return 'nothing';
-        const style = getComputedStyle(active);
-        // An outline (links) or a ring drawn as a box shadow (shadcn buttons) both count.
-        const visible = style.outlineStyle !== 'none' || style.boxShadow !== 'none';
-        return `${active.getAttribute('aria-label') ?? active.textContent}|${visible ? 'visible' : 'hidden'}`;
-      }),
-    );
+    await expect.poll(() => page.evaluate(focusIndicator)).toBe(`${name}|visible`);
   }
-  expect(reached).toEqual(['BhavBook|visible', 'Switch to dark theme|visible', 'Overview|visible']);
 });

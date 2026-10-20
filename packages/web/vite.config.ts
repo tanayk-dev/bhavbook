@@ -9,5 +9,6 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   plugins: [tanstackRouter({ target: 'react', autoCodeSplitting: true }), react(), tailwindcss()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
-  build: { outDir: 'dist', emptyOutDir: true, sourcemap: false },
+  // Every asset ships as a file: the CSP has no data: fonts (packages/server/src/http/security.ts).
+  build: { outDir: 'dist', emptyOutDir: true, sourcemap: false, assetsInlineLimit: 0 },
 });

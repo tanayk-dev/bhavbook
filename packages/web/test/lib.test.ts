@@ -1,22 +1,19 @@
-// S13a-1: the launch-token strip (ADR-0002), the API error mapping, the theme preference and response checks.
+// S13a-1: the launch-token strip (ADR-0002), the API error mapping and retry policy, the theme, response checks.
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, readJson } from '@/lib/api';
+import { ApiError, readJson, send, shouldRetry } from '@/lib/api';
 import { vaultStatus } from '@/lib/queries';
 import { stripLaunchToken } from '@/lib/session';
-import { applyTheme, storedTheme } from '@/lib/theme';
+import { applyTheme, currentTheme } from '@/lib/theme';
 
 describe('stripLaunchToken', () => {
   it('removes t= from the address bar without a navigation, keeping the rest of the URL', () => {
     const replaceState = vi.fn();
     const stripped = stripLaunchToken(
       { href: 'http://127.0.0.1:4000/settings?t=SECRET&tab=tags#accounts' },
-      {
-        replaceState,
-        state: null,
-      },
+      { replaceState, state: { kept: true } },
     );
     expect(stripped).toBe(true);
-    expect(replaceState).toHaveBeenCalledWith(null, '', '/settings?tab=tags#accounts');
+    expect(replaceState).toHaveBeenCalledWith({ kept: true }, '', '/settings?tab=tags#accounts');
   });
 
   it('leaves a clean URL alone', () => {
@@ -26,58 +23,80 @@ describe('stripLaunchToken', () => {
   });
 });
 
-describe('readJson', () => {
+describe('readJson and send', () => {
   it('returns the body of a successful response', async () => {
     expect(await readJson(Response.json({ schemaVersion: 3 }))).toEqual({ schemaVersion: 3 });
   });
 
   it.each([
-    [401, { error: 'unauthorized' }, 'unauthorized', true],
-    [403, { error: 'forbidden' }, 'forbidden', true],
-    [501, { error: 'not_implemented' }, 'not_implemented', false],
-    [500, 'not json', 'unexpected_response', false],
-  ])('maps a %i to ApiError(%o)', async (status, body, code, sessionEnded) => {
+    [401, { error: 'unauthorized' }, 'unauthorized', 'ended'],
+    [403, { error: 'forbidden' }, 'forbidden', 'refused'],
+    [501, { error: 'not_implemented' }, 'not_implemented', null],
+    [500, 'not json', 'unexpected_response', null],
+  ])('maps a %i to ApiError(%o)', async (status, body, code, disconnection) => {
     const response =
       typeof body === 'string' ? new Response(body, { status }) : Response.json(body, { status });
     const error = await readJson(response).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(ApiError);
-    expect([(error as ApiError).code, (error as ApiError).sessionEnded]).toEqual([code, sessionEnded]);
+    expect([(error as ApiError).code, (error as ApiError).disconnection]).toEqual([code, disconnection]);
+  });
+
+  it('turns a network failure (no server) into ApiError(0), and passes other errors through', async () => {
+    const stopped = await send(() => Promise.reject(new TypeError('Failed to fetch'))).catch(
+      (cause: unknown) => cause,
+    );
+    expect([(stopped as ApiError).status, (stopped as ApiError).disconnection]).toEqual([0, 'stopped']);
+    const other = new RangeError('x');
+    await expect(send(() => Promise.reject(other))).rejects.toBe(other);
+    const ok = Response.json({});
+    expect(await send(() => Promise.resolve(ok))).toBe(ok);
+  });
+});
+
+describe('shouldRetry', () => {
+  it.each([
+    [0, new ApiError(500, 'internal_error'), true],
+    [0, new ApiError(0, 'unreachable'), true],
+    [1, new ApiError(500, 'internal_error'), false],
+    [0, new ApiError(404, 'not_found'), false],
+    [0, new ApiError(501, 'not_implemented'), true],
+    [0, new ApiError(401, 'unauthorized'), false],
+    [0, new ApiError(200, 'unexpected_response'), false],
+    [0, new Error('bug'), false],
+  ])('after %i failures, %o -> %s', (failures, error, expected) => {
+    expect(shouldRetry(failures, error)).toBe(expected);
   });
 });
 
 describe('vaultStatus', () => {
-  it('accepts the server shape and rejects anything else', () => {
+  it('accepts a positive whole schema version and rejects anything else', () => {
     expect(vaultStatus({ schemaVersion: 3 })).toEqual({ schemaVersion: 3 });
-    expect(() => vaultStatus({ schemaVersion: '3' })).toThrow(ApiError);
-    expect(() => vaultStatus(null)).toThrow(ApiError);
+    for (const bad of [{ schemaVersion: '3' }, { schemaVersion: 2.5 }, { schemaVersion: 0 }, null]) {
+      expect(() => vaultStatus(bad)).toThrow(ApiError);
+    }
   });
 });
 
 describe('theme', () => {
-  it('defaults to light, remembers dark, and survives storage that throws', () => {
+  it('reads the live page state, remembers an explicit choice, and survives storage that throws', () => {
     const values = new Map<string, string>();
-    const storage = {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => void values.set(key, value),
-    };
-    expect(storedTheme(storage)).toBe('light');
+    const storage = { setItem: (key: string, value: string) => void values.set(key, value) };
     const root = document.createElement('html');
+    expect(currentTheme(root)).toBe('light');
     applyTheme('dark', root, storage);
-    expect([root.classList.contains('dark'), storedTheme(storage)]).toEqual([true, 'dark']);
+    expect([currentTheme(root), values.get('bhavbook.theme')]).toEqual(['dark', 'dark']);
     applyTheme('light', root, storage);
-    expect(root.classList.contains('dark')).toBe(false);
+    expect(currentTheme(root)).toBe('light');
     const broken = {
-      getItem: () => {
-        throw new Error('blocked');
-      },
       setItem: () => {
         throw new Error('blocked');
       },
     };
-    expect(storedTheme(broken)).toBe('light');
     expect(() => {
       applyTheme('dark', root, broken);
     }).not.toThrow();
-    expect(storedTheme(undefined)).toBe('light');
+    expect(currentTheme(root)).toBe('dark');
+    applyTheme('light', root, undefined);
+    expect(currentTheme(root)).toBe('light');
   });
 });

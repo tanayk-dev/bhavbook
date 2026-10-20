@@ -43,6 +43,22 @@ pnpm workspaces (`core`, `adapters`, `server`, `web`, `cli`) with **exact pins**
 | @types/node | 24.19.2 | Matches Node 24 |
 | open | 11.0.4 | Opens the browser from the CLI |
 
+### Added with the web shell (S13a-1, checked 2026-10-20)
+
+These are additions, not changes to the decision above. Each was the latest stable release, unless the 3-day release-age guard (pnpm `minimumReleaseAge`) required the previous one.
+
+| Package | Version | Note |
+| :--- | :--- | :--- |
+| radix-ui | 1.8.1 | shadcn/ui primitives |
+| class-variance-authority / clsx / tailwind-merge | 0.7.1 / 2.1.1 / 3.7.0 | shadcn/ui class helpers |
+| tw-animate-css | 1.4.0 | shadcn/ui animations for Tailwind 4 |
+| lucide-react | 1.58.0 | Icons (1.59.0 was under 3 days old) |
+| @fontsource-variable/inter / @fontsource/jetbrains-mono | 5.3.0 / 5.3.0 | Bundled fonts (no runtime fetch) |
+| @types/react / @types/react-dom | 19.3.0 | |
+| @testing-library/react / user-event / jest-dom | 16.3.3 / 14.6.8 / 7.0.1 | Component tests |
+| jsdom | 30.1.3 | Vitest DOM environment |
+| eslint-plugin-react-hooks | 7.1.1 | Rules of hooks |
+
 ## Alternatives Considered
 
 ### Alternative 1: TypeScript 7.0.2

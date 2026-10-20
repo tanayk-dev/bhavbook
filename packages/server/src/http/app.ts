@@ -134,6 +134,11 @@ function logAndHarden(logger: Logger): MiddlewareHandler {
       c.res = new Response(c.res.body, c.res);
       for (const [name, value] of Object.entries(SECURITY_HEADERS)) c.res.headers.set(name, value);
     }
+    // Build assets are content-hashed, so a successful one never changes: cache it. Everything else (the app shell,
+    // the API) stays no-store.
+    if (c.res.status === 200 && c.req.path.startsWith('/assets/')) {
+      c.res.headers.set('Cache-Control', 'private, max-age=31536000, immutable');
+    }
     logger.info('request', {
       method: c.req.method,
       // The matched route pattern (`/api/positions/:id`), never the raw path or query string.
@@ -185,11 +190,14 @@ function webRoutes(app: Hono, staticRoot: string | null | undefined): void {
       return undefined;
     });
     app.get('*', serveStatic({ root: staticRoot }));
-    // Client routes (`/settings`, `/positions/:id`): the SPA's index.html. Paths with a file extension (a missing
-    // asset) and the API stay 404.
+    // Client routes (`/settings`, `/positions/RELIANCE.NS`): the SPA's index.html. The API and missing build
+    // assets (`/assets/...`, `/theme-init.js`-style root files) stay 404.
     app.get('*', async (c, next) => {
-      const last = c.req.path.split('/').at(-1) ?? '';
-      if (c.req.path.startsWith('/api/') || last.includes('.')) return error('not_found', 404);
+      const { path: requestPath } = c.req;
+      const isApi = requestPath === '/api' || requestPath.startsWith('/api/');
+      const isAsset =
+        requestPath.startsWith('/assets/') || /^\/[^/]+\.(js|css|ico|png|svg|woff2?|map)$/.test(requestPath);
+      if (isApi || isAsset) return error('not_found', 404);
       await next();
       return undefined;
     });

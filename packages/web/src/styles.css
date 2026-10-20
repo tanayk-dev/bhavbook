@@ -14,7 +14,7 @@
   --accent-ink: #2f4aa8;
   --gain: #1e7a46;
   --loss: #b42318;
-  --attention: #b26b00;
+  --attention: #965800;
   --reconciled: #0f766e;
 
   /* shadcn/ui names */
@@ -54,12 +54,6 @@
   --secondary: #202428;
   --muted: #202428;
   --accent: #1f2640;
-}
-
-/* Colour-blind setting: gain and loss become blue and orange; the glyphs stay (direction §4.2). */
-.cvd {
-  --gain: #1d5fb4;
-  --loss: #c25e00;
 }
 
 @theme inline {
@@ -103,6 +97,10 @@
   }
   html {
     font-size: 14px;
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
   }
   body {
     @apply bg-background text-foreground font-sans antialiased;

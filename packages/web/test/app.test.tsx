@@ -41,10 +41,22 @@ describe('the app', () => {
     expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/vault$/), expect.anything());
   });
 
-  it('an ended session explains how to restart', async () => {
-    serve(401, { error: 'unauthorized' });
+  it.each([
+    [401, 'This BhavBook session has ended'],
+    [403, 'BhavBook does not accept this address'],
+  ])('a %i explains how to get back to BhavBook', async (status, title) => {
+    serve(status, { error: status === 401 ? 'unauthorized' : 'forbidden' });
     renderApp();
-    expect(await screen.findByText('This BhavBook session has ended')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
+  });
+
+  it('a stopped server says BhavBook is not running', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    );
+    renderApp();
+    expect(await screen.findByRole('heading', { name: 'BhavBook is not running' })).toBeInTheDocument();
   });
 
   it('a server error can be retried', async () => {
@@ -58,6 +70,16 @@ describe('the app', () => {
     serve(200, { schemaVersion: 3 });
     renderApp('/nowhere');
     expect(await screen.findByText('There is no page at this address.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('link', { name: 'Go to the overview' }));
+    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+  });
+
+  it('offers a skip link to the content', async () => {
+    serve(200, { schemaVersion: 3 });
+    renderApp();
+    await screen.findByText('Vault schema v3');
+    await userEvent.tab();
+    expect(screen.getByRole('link', { name: 'Skip to content' })).toHaveFocus();
   });
 
   it('switches between the light and dark themes', async () => {

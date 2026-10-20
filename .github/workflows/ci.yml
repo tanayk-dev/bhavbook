@@ -85,8 +85,8 @@ jobs:
       - name: Build the web app and run the end-to-end tests
         run: pnpm e2e
 
-      - name: Keep screenshots and traces
-        if: always()
+      - name: Keep screenshots and traces of a failed run
+        if: failure()
         uses: actions/upload-artifact@v7.0.2
         with:
           name: e2e-${{ matrix.os }}
