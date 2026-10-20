@@ -3,9 +3,11 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { useRef, useState, type ReactNode } from 'react';
 import { BreakevenForm, FeeRuleTable, InlineRename, MoveAccount, TableRegion } from '@/components/settings';
 import { Disconnected, EmptyState, ErrorState, LoadingRows } from '@/components/states';
+import { TagTable } from '@/components/tags';
 import { ApiError } from '@/lib/api';
 import { BROKERS, profilesQuery, type Profile } from '@/lib/profiles';
 import { renameAccount, renameProfile, settingsQuery } from '@/lib/settings';
+import { tagsQuery } from '@/lib/tags';
 
 export const Route = createFileRoute('/settings')({ component: SettingsPage });
 
@@ -179,8 +181,9 @@ function ProfileSections(props: TableProps) {
 function SettingsPage() {
   const profiles = useQuery(profilesQuery);
   const settings = useQuery(settingsQuery);
+  const tags = useQuery(tagsQuery);
   const [notice, announce] = useAnnouncer();
-  const failure = profiles.error ?? settings.error;
+  const failure = profiles.error ?? settings.error ?? tags.error;
   const disconnection = failure instanceof ApiError ? failure.disconnection : null;
   if (disconnection !== null) return <Disconnected reason={disconnection} />;
   return (
@@ -191,18 +194,31 @@ function SettingsPage() {
           {notice}
         </p>
       </div>
-      {profiles.isPending || settings.isPending ? <LoadingRows label="Loading settings" rows={4} /> : null}
+      {profiles.isPending || settings.isPending || tags.isPending ? (
+        <LoadingRows label="Loading settings" rows={4} />
+      ) : null}
       {failure === null ? null : (
         <ErrorState
           message="Could not read the settings."
-          retrying={profiles.isFetching || settings.isFetching}
+          retrying={profiles.isFetching || settings.isFetching || tags.isFetching}
           onRetry={() => {
             void profiles.refetch();
             void settings.refetch();
+            void tags.refetch();
           }}
         />
       )}
       {profiles.isSuccess ? <ProfileSections profiles={profiles.data} announce={announce} /> : null}
+      {tags.isSuccess ? (
+        <Section id="tags-title" title="Tags">
+          <p className="text-ink-muted">
+            A setup tag says why you took a trade; mistake tags mark what went wrong. You attach them in the
+            journal. Merging or deleting a tag never deletes a journal entry.
+          </p>
+          <TagTable kind="setup" tags={tags.data} announce={announce} />
+          <TagTable kind="mistake" tags={tags.data} announce={announce} />
+        </Section>
+      ) : null}
       {settings.isSuccess ? (
         <>
           <Section id="breakeven-title" title="Breakeven threshold">

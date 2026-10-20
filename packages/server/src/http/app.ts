@@ -28,6 +28,16 @@ import {
   renameProfileSchema,
 } from '../services/profiles.js';
 import { breakevenSchema, readSettings, setBreakeven } from '../services/settings.js';
+import {
+  createTag,
+  deleteTag,
+  listTags,
+  mergeTag,
+  mergeTagSchema,
+  renameTag,
+  renameTagSchema,
+  tagInputSchema,
+} from '../services/tags.js';
 import { recompute } from '../recompute/index.js';
 import { currentVersion } from '../vault/index.js';
 import { jsonResponse } from './json.js';
@@ -177,6 +187,24 @@ function apiRoutes(options: AppOptions) {
           setBreakeven(db, c.req.valid('json'));
           return c.json(readSettings(db));
         }),
+      )
+      .get('/tags', (c) => withVault(options, (db) => c.json({ tags: listTags(db) })))
+      .post('/tags', ...json(tagInputSchema, SMALL_JSON_BYTES), (c) =>
+        withVault(options, (db) => c.json({ id: createTag(db, c.req.valid('json')) }, 201)),
+      )
+      .patch('/tags/:id', params(idParam), ...json(renameTagSchema, SMALL_JSON_BYTES), (c) =>
+        withVault(options, (db) => {
+          renameTag(db, c.req.valid('param').id, c.req.valid('json'));
+          return c.json({ ok: true });
+        }),
+      )
+      .delete('/tags/:id', params(idParam), (c) =>
+        withVault(options, (db) => c.json({ detached: deleteTag(db, c.req.valid('param').id) })),
+      )
+      .post('/tags/:id/merge', params(idParam), ...json(mergeTagSchema, SMALL_JSON_BYTES), (c) =>
+        withVault(options, (db) =>
+          c.json({ merged: mergeTag(db, c.req.valid('param').id, c.req.valid('json')) }),
+        ),
       )
       .get('/analytics/summary', notImplemented)
   );

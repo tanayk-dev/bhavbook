@@ -72,13 +72,16 @@ const SAVE_ERRORS: Readonly<Record<string, string>> = {
   recompute_failed: "This account's positions could not be rebuilt, so nothing was moved.",
 };
 
+const CONFLICTS = {
+  profile: 'You already have a profile with this name.',
+  account: 'This profile already has an account with this nickname.',
+  tag: 'You already have a tag of this kind with this name.',
+} as const;
+
 /** What to tell the person when saving failed. */
-export function saveError(error: unknown, what: 'profile' | 'account'): string {
+export function saveError(error: unknown, what: keyof typeof CONFLICTS): string {
   if (!(error instanceof ApiError)) return 'Could not save. Try again.';
-  if (error.code === 'conflict') {
-    return what === 'profile'
-      ? 'You already have a profile with this name.'
-      : 'This profile already has an account with this nickname.';
-  }
+  if (error.code === 'conflict') return CONFLICTS[what];
+  if (error.code === 'not_found' && what === 'tag') return 'That tag no longer exists. Reload the page.';
   return SAVE_ERRORS[error.code] ?? 'Could not save. Try again.';
 }

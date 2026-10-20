@@ -12,10 +12,10 @@ import { formatIstDate } from '@/lib/format';
 import { profilesQuery, saveError, type Profile } from '@/lib/profiles';
 import { moveAccount, saveBreakeven, settingsQuery, type FeeRuleVersion } from '@/lib/settings';
 
-const TOUCH = 'max-md:h-11';
+export const TOUCH = 'max-md:h-11';
 
 /** Focus after React has replaced the element (the next frame). */
-const focusLater = (target: { readonly current: HTMLElement | null }) => {
+export const focusLater = (target: { readonly current: HTMLElement | null }) => {
   requestAnimationFrame(() => target.current?.focus());
 };
 
@@ -33,13 +33,22 @@ export interface InlineRenameProps {
   /** What is being renamed, for the field's label ("profile name", "nickname"). */
   readonly what: string;
   readonly value: string;
-  readonly kind: 'profile' | 'account';
+  readonly kind: 'profile' | 'account' | 'tag';
   readonly save: (value: string) => Promise<void>;
   readonly onSaved: (value: string) => void;
+  /** The query to refresh after a save (default: profiles). */
+  readonly queryKey?: readonly unknown[];
 }
 
 /** A name with a Rename button that turns into a small form; Escape cancels and focus returns to the button. */
-export function InlineRename({ what, value, kind, save, onSaved }: InlineRenameProps) {
+export function InlineRename({
+  what,
+  value,
+  kind,
+  save,
+  onSaved,
+  queryKey = profilesQuery.queryKey,
+}: InlineRenameProps) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -54,7 +63,7 @@ export function InlineRename({ what, value, kind, save, onSaved }: InlineRenameP
   const mutation = useMutation({
     mutationFn: save,
     onSuccess: async (_, saved) => {
-      await queryClient.invalidateQueries({ queryKey: profilesQuery.queryKey });
+      await queryClient.invalidateQueries({ queryKey });
       close();
       onSaved(saved.trim());
     },

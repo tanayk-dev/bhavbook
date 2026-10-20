@@ -1,6 +1,6 @@
-// S13a-3a: onboarding, then settings: rename, move an account to another profile (confirm, then recompute), and the
-// breakeven threshold. Trades can't be imported through the UI until S13b, so the recompute observed here rebuilds
-// zero positions; the server tests cover a recompute of real fixture trades.
+// S13a-3a/3b: onboarding, then settings: rename, move an account to another profile (confirm, then recompute), the
+// breakeven threshold, and tags. Trades can't be imported through the UI until S13b, so the recompute observed here
+// rebuilds zero positions; the server tests cover a recompute of real fixture trades.
 import { expect, test } from './fixtures.js';
 
 test('onboarding, then settings: rename, move an account (recomputed), breakeven', async ({
@@ -63,4 +63,51 @@ test('at phone width the settings page never scrolls sideways, even with a form 
   expect(await overflows()).toBe(false);
   await page.getByRole('button', { name: 'Rename A long account nickname' }).click();
   expect(await overflows()).toBe(false);
+});
+
+test('tags: add setup and mistake tags, rename, merge, delete', async ({ page, app }, info) => {
+  await page.goto(app.launch);
+  await page.getByLabel('Profile name').fill('Swing');
+  await page.getByRole('button', { name: 'Create profile' }).click();
+  await page.goto(`${app.origin}/settings`);
+
+  for (const name of ['Breakout', 'BO', 'Pullback']) {
+    await page.getByLabel('New setup tag').fill(name);
+    await page.getByRole('button', { name: 'Add setup tag' }).click();
+    await expect(page.getByText(`Added the setup tag ${name}.`)).toBeVisible();
+  }
+  await page.getByLabel('New mistake tag').fill('FOMO');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: 'Mistake tags' })).toContainText('FOMO');
+
+  await page.getByLabel('New setup tag').fill('breakout');
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('You already have a tag of this kind with this name.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Rename Pullback' }).click();
+  await page.getByLabel('New setup tag name').fill('Pullback to EMA');
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Renamed the tag to Pullback to EMA.')).toBeVisible();
+
+  await page.getByLabel('Merge BO into').selectOption({ label: 'Breakout' });
+  await page.getByRole('button', { name: 'Merge BO…' }).click();
+  await page
+    .getByRole('group', { name: 'Confirm merging BO' })
+    .getByRole('button', { name: 'Merge' })
+    .click();
+  await expect(page.getByText('Merged BO into Breakout; it was on 0 journal entries.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Delete FOMO…' }).click();
+  await page
+    .getByRole('group', { name: 'Confirm deleting FOMO' })
+    .getByRole('button', { name: 'Delete tag' })
+    .click();
+  await expect(page.getByText('No mistake tags yet.')).toBeVisible();
+  await page.screenshot({ path: info.outputPath('settings-tags-1280x720.png'), fullPage: true });
+
+  await page.reload();
+  const setups = page.getByRole('region', { name: 'Setup tags' });
+  await expect(setups.getByRole('row')).toHaveCount(3);
+  await expect(setups).toContainText('Pullback to EMA');
+  await expect(setups).not.toContainText(/\bBO\b/);
 });
