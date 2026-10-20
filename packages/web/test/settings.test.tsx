@@ -1,7 +1,7 @@
 // S13a-3a: the settings page against a stubbed server, through the real router.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseRupees } from '@/components/settings';
@@ -118,11 +118,15 @@ describe('rename', () => {
     await userEvent.type(field, 'Long-term{Enter}');
     expect(await screen.findByText('You already have a profile with this name.')).toBeInTheDocument();
     await userEvent.keyboard('{Escape}');
-    expect(await screen.findByRole('button', { name: 'Rename Swing' })).toHaveFocus();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Rename Swing' })).toHaveFocus();
+    });
     await userEvent.click(screen.getByRole('button', { name: 'Rename Swing' }));
     await userEvent.clear(screen.getByLabelText('New profile name'));
     await userEvent.type(screen.getByLabelText('New profile name'), 'Swing trades{Enter}');
-    expect(await screen.findByRole('button', { name: 'Rename Swing trades' })).toHaveFocus();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Rename Swing trades' })).toHaveFocus();
+    });
     expect(await screen.findByText('Renamed the profile to Swing trades.')).toBeInTheDocument();
     expect(state.profiles[0]?.name).toBe('Swing trades');
   });
@@ -142,7 +146,9 @@ describe('move', () => {
       await screen.findByText('Moved D main to Long-term and recomputed 7 positions.'),
     ).toBeInTheDocument();
     expect(state.moves).toEqual([{ id: 'a1', profileId: 'p2' }]);
-    expect(await screen.findByRole('button', { name: 'Move…' })).toHaveFocus();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Move…' })).toHaveFocus();
+    });
     expect(screen.queryByRole('group', { name: 'Confirm moving D main' })).toBeNull();
     expect(screen.getByLabelText('Move D main to')).toHaveDisplayValue('Swing');
   });
@@ -152,7 +158,9 @@ describe('move', () => {
     renderSettings(routes);
     await userEvent.click(await screen.findByRole('button', { name: 'Move…' }));
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(await screen.findByRole('button', { name: 'Move…' })).toHaveFocus();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Move…' })).toHaveFocus();
+    });
     expect(state.moves).toEqual([]);
   });
 
