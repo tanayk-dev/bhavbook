@@ -193,3 +193,62 @@ export function createAccount(db: Database.Database, input: unknown, options: Cr
     return id;
   });
 }
+
+export const renameProfileSchema = z.object({ name: label }).strict();
+export const renameAccountSchema = z.object({ nickname: label }).strict();
+export const moveAccountSchema = z.object({ profileId: z.string().min(1).max(64) }).strict();
+
+/** Renames a profile; the same rules as creating one. */
+export function renameProfile(db: Database.Database, id: string, input: unknown): void {
+  const name = acceptLabel(parse(renameProfileSchema, input).name);
+  write(db, () => {
+    const entity: unknown = db.prepare('SELECT pan_entity_id FROM profile WHERE id = ?').pluck().get(id);
+    if (typeof entity !== 'string') throw new ProfileError('not_found');
+    const others = db
+      .prepare('SELECT name FROM profile WHERE pan_entity_id = ? AND id <> ?')
+      .pluck()
+      .all(entity, id);
+    if (clashes(others, name)) throw new ProfileError('conflict');
+    db.prepare('UPDATE profile SET name = ? WHERE id = ?').run(name, id);
+  });
+}
+
+/** Renames an account; the same rules as adding one. */
+export function renameAccount(db: Database.Database, id: string, input: unknown): void {
+  const nickname = acceptLabel(parse(renameAccountSchema, input).nickname);
+  write(db, () => {
+    const profile: unknown = db.prepare('SELECT profile_id FROM broker_account WHERE id = ?').pluck().get(id);
+    if (typeof profile !== 'string') throw new ProfileError('not_found');
+    const others = db
+      .prepare('SELECT nickname FROM broker_account WHERE profile_id = ? AND id <> ?')
+      .pluck()
+      .all(profile, id);
+    if (clashes(others, nickname)) throw new ProfileError('conflict');
+    db.prepare('UPDATE broker_account SET nickname = ? WHERE id = ?').run(nickname, id);
+  });
+}
+
+interface AccountRow {
+  readonly profile_id: string;
+  readonly nickname: string;
+}
+
+/**
+ * Moves an account to another profile (PRD §2 C5: an account belongs to exactly one profile). The caller runs
+ * this and the account's recompute in one transaction. Its nickname must be free in the target profile.
+ */
+export function moveAccount(db: Database.Database, id: string, input: unknown): void {
+  const { profileId } = parse(moveAccountSchema, input);
+  const account = db.prepare('SELECT profile_id, nickname FROM broker_account WHERE id = ?').get(id) as
+    AccountRow | undefined;
+  if (
+    account === undefined ||
+    db.prepare('SELECT 1 FROM profile WHERE id = ?').get(profileId) === undefined
+  ) {
+    throw new ProfileError('not_found');
+  }
+  if (account.profile_id === profileId) return;
+  const taken = db.prepare('SELECT nickname FROM broker_account WHERE profile_id = ?').pluck().all(profileId);
+  if (clashes(taken, account.nickname)) throw new ProfileError('conflict');
+  db.prepare('UPDATE broker_account SET profile_id = ? WHERE id = ?').run(profileId, id);
+}

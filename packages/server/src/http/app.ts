@@ -18,9 +18,17 @@ import {
   createAccount,
   createProfile,
   listProfiles,
+  moveAccount,
+  moveAccountSchema,
   ProfileError,
   profileInputSchema,
+  renameAccount,
+  renameAccountSchema,
+  renameProfile,
+  renameProfileSchema,
 } from '../services/profiles.js';
+import { breakevenSchema, readSettings, setBreakeven } from '../services/settings.js';
+import { recompute } from '../recompute/index.js';
 import { currentVersion } from '../vault/index.js';
 import { jsonResponse } from './json.js';
 import type { Logger } from './logger.js';
@@ -116,34 +124,64 @@ function withVault(options: AppOptions, action: (db: Database.Database) => Respo
 }
 
 function apiRoutes(options: AppOptions) {
-  return new Hono()
-    .get('/health', () => jsonResponse({ ok: true }))
-    .get('/vault', () =>
-      options.vault === null
-        ? error('no_vault', 503)
-        : jsonResponse({ schemaVersion: currentVersion(options.vault) }),
-    )
-    .get('/profiles', (c) => withVault(options, (db) => c.json({ profiles: listProfiles(db) })))
-    .post('/profiles', ...json(profileInputSchema, SMALL_JSON_BYTES), (c) =>
-      withVault(options, (db) => c.json({ id: createProfile(db, c.req.valid('json')) }, 201)),
-    )
-    .post('/accounts', ...json(accountInputSchema, SMALL_JSON_BYTES), (c) =>
-      withVault(options, (db) => c.json({ id: createAccount(db, c.req.valid('json')) }, 201)),
-    )
-    .post('/vault/backup', notImplemented)
-    .post('/vault/restore', notImplemented)
-    .get('/imports', notImplemented)
-    .post('/imports', notImplemented)
-    .get('/coverage', notImplemented)
-    .get('/issues', notImplemented)
-    .post('/issues/:id/resolve', params(idParam), notImplemented)
-    .get('/positions', notImplemented)
-    .get('/positions/:id', params(idParam), notImplemented)
-    .get('/journal', notImplemented)
-    .post('/journal', ...json(pendingBody), notImplemented)
-    .get('/settings', notImplemented)
-    .put('/settings', ...json(pendingBody), notImplemented)
-    .get('/analytics/summary', notImplemented);
+  return (
+    new Hono()
+      .get('/health', () => jsonResponse({ ok: true }))
+      .get('/vault', () =>
+        options.vault === null
+          ? error('no_vault', 503)
+          : jsonResponse({ schemaVersion: currentVersion(options.vault) }),
+      )
+      .get('/profiles', (c) => withVault(options, (db) => c.json({ profiles: listProfiles(db) })))
+      .post('/profiles', ...json(profileInputSchema, SMALL_JSON_BYTES), (c) =>
+        withVault(options, (db) => c.json({ id: createProfile(db, c.req.valid('json')) }, 201)),
+      )
+      .post('/accounts', ...json(accountInputSchema, SMALL_JSON_BYTES), (c) =>
+        withVault(options, (db) => c.json({ id: createAccount(db, c.req.valid('json')) }, 201)),
+      )
+      .patch('/profiles/:id', params(idParam), ...json(renameProfileSchema, SMALL_JSON_BYTES), (c) =>
+        withVault(options, (db) => {
+          renameProfile(db, c.req.valid('param').id, c.req.valid('json'));
+          return c.json({ ok: true });
+        }),
+      )
+      .patch('/accounts/:id', params(idParam), ...json(renameAccountSchema, SMALL_JSON_BYTES), (c) =>
+        withVault(options, (db) => {
+          renameAccount(db, c.req.valid('param').id, c.req.valid('json'));
+          return c.json({ ok: true });
+        }),
+      )
+      // PRD §2 C5: the move and the account's recompute succeed or fail together.
+      .post('/accounts/:id/move', params(idParam), ...json(moveAccountSchema, SMALL_JSON_BYTES), (c) =>
+        withVault(options, (db) => {
+          const { id } = c.req.valid('param');
+          const summary = db.transaction(() => {
+            moveAccount(db, id, c.req.valid('json'));
+            return recompute(db, id);
+          })();
+          return c.json({ recomputed: summary.positions });
+        }),
+      )
+      .post('/vault/backup', notImplemented)
+      .post('/vault/restore', notImplemented)
+      .get('/imports', notImplemented)
+      .post('/imports', notImplemented)
+      .get('/coverage', notImplemented)
+      .get('/issues', notImplemented)
+      .post('/issues/:id/resolve', params(idParam), notImplemented)
+      .get('/positions', notImplemented)
+      .get('/positions/:id', params(idParam), notImplemented)
+      .get('/journal', notImplemented)
+      .post('/journal', ...json(pendingBody), notImplemented)
+      .get('/settings', (c) => withVault(options, (db) => c.json(readSettings(db))))
+      .put('/settings', ...json(breakevenSchema, SMALL_JSON_BYTES), (c) =>
+        withVault(options, (db) => {
+          setBreakeven(db, c.req.valid('json'));
+          return c.json(readSettings(db));
+        }),
+      )
+      .get('/analytics/summary', notImplemented)
+  );
 }
 
 /** The typed RPC surface for the web client (`hc<ApiRoutes>`). */
