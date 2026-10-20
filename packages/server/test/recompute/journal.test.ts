@@ -3,6 +3,7 @@
 // it as unattached (with an issue), and two entries on one position raise a collision issue.
 import type Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { applyAdjustment } from '../../src/recompute/actions.js';
 import { recompute } from '../../src/recompute/index.js';
 import { importFiles, withVault, ZERODHA, type TestVault } from '../import/helpers.js';
 
@@ -32,7 +33,7 @@ function journal(db: Database.Database, id: string, date: string): void {
   if (anchor === undefined) throw new Error(`no position opened on ${date}`);
   db.prepare(
     `INSERT INTO journal_entry (id, anchor_account_id, anchor_instrument_key, anchor_bucket, anchor_key, status,
-       created_at, updated_at) VALUES (?, ?, ?, 'DELIVERY', ?, 'attached', 'x', 'x')`,
+       created_at, updated_at) VALUES (?, ?, ?, 'DELIVERY', ?, 'unattached', 'x', 'x')`,
   ).run(id, ZERODHA, TCS, anchor);
 }
 
@@ -146,6 +147,62 @@ describe('journal anchors', () => {
         db.prepare("SELECT thesis, updated_at, status FROM journal_entry WHERE id = 'j1'").get(),
       ).toEqual({ thesis: 'Breakout above 4,000', updated_at: 'then', status: 'attached' });
       expect(db.prepare('SELECT count(*) FROM journal_attachment').pluck().get()).toBe(1n);
+    });
+  });
+
+  it('an entry on a position opened by an opening-lot adjustment stays attached as real history arrives', async () => {
+    await withVault(async ({ db, service }) => {
+      await importLines(db, service, [line('sell', 10, 110, '2025-04-01')]);
+      applyAdjustment(
+        db,
+        ZERODHA,
+        {
+          kind: 'opening_lot',
+          instrumentKey: TCS,
+          bucket: 'DELIVERY',
+          quantity: '10',
+          totalCostMicro: '1000000000',
+          beforeDateIst: '2025-04-01',
+        },
+        { now },
+      );
+      recompute(db, ZERODHA, { now });
+      const anchor = db.prepare('SELECT anchor_key FROM position').pluck().get() as string;
+      db.prepare(
+        `INSERT INTO journal_entry (id, anchor_account_id, anchor_instrument_key, anchor_bucket, anchor_key, status,
+           created_at, updated_at) VALUES ('j1', ?, ?, 'DELIVERY', ?, 'unattached', 'x', 'x')`,
+      ).run(ZERODHA, TCS, anchor);
+      recompute(db, ZERODHA, { now });
+      expect(attachments(db).map((entry) => entry.status)).toEqual(['attached']);
+      // An older buy opens the position earlier; the lot is still a member, so the entry stays.
+      await importLines(db, service, [line('buy', 5, 100, '2025-01-02')]);
+      recompute(db, ZERODHA, { now });
+      expect(attachments(db)).toEqual([{ id: 'j1', status: 'attached', position: '2025-01-02T04:30:00Z' }]);
+    });
+  });
+
+  it('a dismissed collision stays dismissed when older history re-keys the position', async () => {
+    await withVault(async ({ db, service }) => {
+      await importLines(db, service, [
+        line('sell', 10, 110, '2025-04-01'),
+        line('buy', 10, 120, '2025-05-01'),
+        line('sell', 10, 130, '2025-05-02'),
+      ]);
+      recompute(db, ZERODHA, { now });
+      journal(db, 'j1', '2025-04-01');
+      journal(db, 'j2', '2025-05-01');
+      await importLines(db, service, [line('buy', 20, 100, '2025-01-02')]);
+      recompute(db, ZERODHA, { now });
+      db.prepare("UPDATE issue SET status = 'dismissed' WHERE kind = 'journal_collision'").run();
+
+      // Older still: the merged position's id (its opening fill) changes again.
+      await importLines(db, service, [line('buy', 5, 90, '2024-12-02')]);
+      recompute(db, ZERODHA, { now });
+      expect(attachments(db).map((entry) => entry.position)).toEqual([
+        '2024-12-02T04:30:00Z',
+        '2024-12-02T04:30:00Z',
+      ]);
+      expect(issues(db, 'journal_collision').map((issue) => issue.status)).toEqual(['dismissed']);
     });
   });
 });

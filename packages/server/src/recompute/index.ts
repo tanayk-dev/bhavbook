@@ -199,7 +199,6 @@ function sourceColumns(allocation: FillAllocation): [bigint | null, string | nul
   return [tradeRowId, adjustmentId, corporateActionId];
 }
 
-/** Closed positions first (oldest close first), open ones last: the live position of an anchor is written last. */
 function idOf(ids: ReadonlyMap<string, bigint>, key: string): bigint {
   const id = ids.get(key);
   if (id === undefined) throw new Error('lot references an unknown allocation');
