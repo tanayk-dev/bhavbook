@@ -273,6 +273,8 @@ export interface ReportGuide {
   readonly label: string;
   /** Where the broker offers it (from docs/broker-exports/<broker>/NOTES.md). */
   readonly where: string;
+  /** The broker's site to open: a plain link, nothing is fetched by BhavBook. */
+  readonly url: string;
   readonly limit: string;
 }
 
@@ -281,58 +283,79 @@ export const REPORTS: Readonly<Record<string, ReportGuide>> = {
   'zerodha.tradebook': {
     label: 'Zerodha tradebook',
     where: 'console.zerodha.com/reports/tradebook',
+    url: 'https://console.zerodha.com/reports/tradebook',
     limit: 'up to 365 days per download',
   },
   'zerodha.tradebook_external': {
-    label: 'Zerodha tradebook',
+    label: 'Zerodha tradebook (external format)',
     where: 'console.zerodha.com/reports/tradebook',
+    url: 'https://console.zerodha.com/reports/tradebook',
     limit: 'up to 365 days per download',
   },
-  'zerodha.pnl': { label: 'Zerodha P&L', where: 'console.zerodha.com/reports/pnl', limit: 'any range' },
+  'zerodha.pnl': {
+    label: 'Zerodha P&L',
+    where: 'console.zerodha.com/reports/pnl',
+    url: 'https://console.zerodha.com/reports/pnl',
+    limit: 'any range',
+  },
   'zerodha.tax_pnl': {
     label: 'Zerodha tax P&L',
     where: 'console.zerodha.com/reports/taxpnl',
+    url: 'https://console.zerodha.com/reports/taxpnl',
     limit: 'one FY',
   },
   'zerodha.agts': {
     label: 'Zerodha Annual Global Statement',
     where: 'console.zerodha.com/reports/downloads',
+    url: 'https://console.zerodha.com/reports/downloads',
     limit: 'one FY',
   },
   'dhan.trade_history': {
     label: 'Dhan trade history',
     where: 'web.dhan.co → Profile → Statements & Reports → All Exchange Transactions',
+    url: 'https://web.dhan.co/index/profile',
     limit: 'any range',
   },
   'dhan.global_transactions': {
     label: 'Dhan global transactions',
     where: 'journal.dhan.co → Statements & Reports → Global',
+    url: 'https://journal.dhan.co',
     limit: 'one FY',
   },
   'dhan.dp_charges': {
     label: 'Dhan DP charges',
     where: 'journal.dhan.co → Statements & Reports → DP Transaction',
+    url: 'https://journal.dhan.co',
     limit: 'one FY',
   },
   'dhan.tax_report': {
     label: 'Dhan tax report',
     where: 'journal.dhan.co → Tax Saving → Tax Report',
+    url: 'https://journal.dhan.co',
     limit: 'one FY',
   },
-  'dhan.pnl': { label: 'Dhan P&L', where: 'journal.dhan.co → Statements & Reports → P&L', limit: 'one FY' },
+  'dhan.pnl': {
+    label: 'Dhan P&L',
+    where: 'journal.dhan.co → Statements & Reports → P&L',
+    url: 'https://journal.dhan.co',
+    limit: 'one FY',
+  },
   'dhan.realised_pnl': {
     label: 'Dhan realised P&L',
     where: 'journal.dhan.co → Statements & Reports → Realised P&L',
+    url: 'https://journal.dhan.co',
     limit: 'one FY',
   },
   'dhan.ledger': {
     label: 'Dhan ledger',
     where: 'journal.dhan.co → Statements & Reports → Ledger',
+    url: 'https://journal.dhan.co',
     limit: 'one FY',
   },
   'dhan.fund_summary': {
     label: 'Dhan fund summary',
     where: 'journal.dhan.co → Statements & Reports → Fund',
+    url: 'https://journal.dhan.co',
     limit: 'one FY',
   },
 };

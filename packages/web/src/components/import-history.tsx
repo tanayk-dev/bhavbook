@@ -112,7 +112,29 @@ export function ImportHistory({
   readonly imports: readonly ImportRecord[];
   readonly announce: (message: string) => void;
 }) {
-  if (imports.length === 0) return <p className="text-ink-muted">Nothing imported into this account yet.</p>;
+  const region = useRef<HTMLDivElement>(null);
+  const undone = (message: string) => {
+    announce(message);
+    focusLater(region);
+  };
+  return (
+    <div ref={region} tabIndex={-1} className="focus-visible:outline-none">
+      {imports.length === 0 ? (
+        <p className="text-ink-muted">Nothing imported into this account yet.</p>
+      ) : (
+        <HistoryTable imports={imports} onUndone={undone} />
+      )}
+    </div>
+  );
+}
+
+function HistoryTable({
+  imports,
+  onUndone,
+}: {
+  readonly imports: readonly ImportRecord[];
+  readonly onUndone: (message: string) => void;
+}) {
   return (
     <TableRegion label="Imports">
       <table className="w-full min-w-2xl border-y border-rule bg-surface text-left">
@@ -152,7 +174,7 @@ export function ImportHistory({
                 {(record.counts.rows.new + record.counts.statements.new).toLocaleString('en-IN')}
               </td>
               <td className="px-3 py-0.5 text-right">
-                <UndoImport record={record} onUndone={announce} />
+                <UndoImport record={record} onUndone={onUndone} />
               </td>
             </tr>
           ))}
@@ -186,14 +208,14 @@ function Timeline({
       {coverage.ranges.map((range) => (
         <div
           key={`r${range.from}`}
-          className="absolute inset-y-0 rounded-sm bg-primary"
+          className="absolute inset-y-0 min-w-0.5 rounded-sm bg-primary"
           style={place(range)}
         />
       ))}
       {coverage.gaps.map((gap) => (
         <div
           key={`g${gap.from}`}
-          className="absolute inset-y-0 border-x border-attention bg-attention/30"
+          className="absolute inset-y-0 min-w-0.5 border-x border-attention bg-attention/30"
           style={place(gap)}
         />
       ))}
@@ -234,8 +256,15 @@ export function CoverageView({ coverage }: { readonly coverage: readonly KindCov
                   {guide === undefined ? null : (
                     <p className="text-ink-muted">
                       To fill a gap, download that period from{' '}
-                      <span className="font-mono text-[13px]">{guide.where}</span> ({guide.limit}) and import
-                      it above.
+                      <a
+                        href={guide.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-[13px] text-primary underline-offset-4 hover:underline"
+                      >
+                        {guide.where}
+                      </a>{' '}
+                      ({guide.limit}) and import it above.
                     </p>
                   )}
                 </div>

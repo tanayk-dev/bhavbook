@@ -7,11 +7,10 @@ import { Disconnected, EmptyState, ErrorState, LoadingRows } from '@/components/
 import { Label } from '@/components/ui/label';
 import { ApiError } from '@/lib/api';
 import { coverageQuery, importsQuery } from '@/lib/imports';
-import { BROKERS, profilesQuery, type Account } from '@/lib/profiles';
+import { brokerLabel, profilesQuery, type Account } from '@/lib/profiles';
 
 export const Route = createFileRoute('/import')({ component: ImportPage });
 
-const brokerLabel = (id: string): string => BROKERS.find((broker) => broker.id === id)?.label ?? id;
 const ANNOUNCE_DELAY_MS = 50;
 
 function Section({
