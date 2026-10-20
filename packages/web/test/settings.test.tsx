@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/rea
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parseRupees } from '@/components/settings';
 import { formatIstDate } from '@/lib/format';
 import { routeTree } from '@/routeTree.gen';
 import { stubServer, type Routes } from './server';
@@ -18,6 +19,8 @@ interface StubProfile {
   name: string;
   accounts: StubAccount[];
 }
+
+const RECOMPUTE_FAILED = "This account's positions could not be rebuilt, so nothing was moved.";
 
 function server() {
   const state = {
@@ -39,9 +42,10 @@ function server() {
         ],
       },
     }),
+    // The real server's rule: up to 7 whole digits, at most 2 decimals.
     'PUT /api/settings': (body) => {
       const rupees = (body as { breakevenThresholdRupees: string }).breakevenThresholdRupees;
-      if (!/^\d+(\.\d{1,2})?$/.test(rupees)) return { status: 400, body: { error: 'invalid_request' } };
+      if (!/^\d{1,7}(\.\d{1,2})?$/.test(rupees)) return { status: 400, body: { error: 'invalid_request' } };
       const [whole = '0', fraction = ''] = rupees.split('.');
       state.breakeven = (BigInt(whole) * 1_000_000n + BigInt(fraction.padEnd(6, '0'))).toString();
       return { body: {} };
@@ -59,7 +63,7 @@ function server() {
       const account = state.profiles[0]?.accounts.pop();
       if (account !== undefined)
         state.profiles.find((profile) => profile.id === profileId)?.accounts.push(account);
-      return { body: { recomputed: 7 } };
+      return { body: { moved: true, recomputed: 7 } };
     },
   };
   return { state, routes };
@@ -84,14 +88,27 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('settings', () => {
+describe('formatting and parsing', () => {
   it('formats IST dates as dd MMM yyyy and leaves anything else alone', () => {
     expect(formatIstDate('2024-10-01')).toBe('01 Oct 2024');
     expect(formatIstDate('2024-13-01')).toBe('2024-13-01');
     expect(formatIstDate('soon')).toBe('soon');
   });
 
-  it('renames a profile inline, explains a clash, and Escape cancels', async () => {
+  it('parses rupees the way Indian users type them, and says what is wrong', () => {
+    expect(parseRupees('₹1,00,000')).toEqual({ value: '100000' });
+    expect(parseRupees(' .5 ')).toEqual({ value: '0.5' });
+    expect(parseRupees('007')).toEqual({ value: '7' });
+    expect(parseRupees('10,00,000.00')).toEqual({ value: '1000000.00' });
+    expect(parseRupees('1.234')).toEqual({ error: 'Use at most two decimals (paise).' });
+    expect(parseRupees('10,00,000.01')).toEqual({ error: 'The threshold can be at most ₹10,00,000.' });
+    expect(parseRupees('20000000')).toEqual({ error: 'The threshold can be at most ₹10,00,000.' });
+    expect(parseRupees('-5')).toEqual({ error: 'Enter an amount in rupees, for example 10 or 12.50.' });
+  });
+});
+
+describe('rename', () => {
+  it('renames a profile inline, explains a clash, Escape cancels, and focus returns each time', async () => {
     const { state, routes } = server();
     renderSettings(routes);
     await userEvent.click(await screen.findByRole('button', { name: 'Rename Swing' }));
@@ -105,47 +122,89 @@ describe('settings', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Rename Swing' }));
     await userEvent.clear(screen.getByLabelText('New profile name'));
     await userEvent.type(screen.getByLabelText('New profile name'), 'Swing trades{Enter}');
-    expect(await screen.findByRole('button', { name: 'Rename Swing trades' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Rename Swing trades' })).toHaveFocus();
+    expect(await screen.findByText('Renamed the profile to Swing trades.')).toBeInTheDocument();
     expect(state.profiles[0]?.name).toBe('Swing trades');
   });
+});
 
-  it('moves an account only after confirming, and reports the recompute', async () => {
+describe('move', () => {
+  it('moves an account only after confirming; focus follows each step; the recompute is reported', async () => {
     const { state, routes } = server();
     renderSettings(routes);
     await userEvent.click(await screen.findByRole('button', { name: 'Move…' }));
     const confirm = screen.getByRole('group', { name: 'Confirm moving D main' });
     expect(confirm).toHaveTextContent('Move D main to Long-term? Its positions are recomputed.');
+    expect(within(confirm).getByRole('button', { name: 'Move and recompute' })).toHaveFocus();
     expect(state.moves).toEqual([]);
     await userEvent.click(within(confirm).getByRole('button', { name: 'Move and recompute' }));
     expect(
       await screen.findByText('Moved D main to Long-term and recomputed 7 positions.'),
     ).toBeInTheDocument();
     expect(state.moves).toEqual([{ id: 'a1', profileId: 'p2' }]);
+    expect(await screen.findByRole('button', { name: 'Move…' })).toHaveFocus();
+    expect(screen.queryByRole('group', { name: 'Confirm moving D main' })).toBeNull();
+    expect(screen.getByLabelText('Move D main to')).toHaveDisplayValue('Swing');
   });
 
-  it('a move can be cancelled', async () => {
+  it('a move can be cancelled, and focus returns to Move…', async () => {
     const { state, routes } = server();
     renderSettings(routes);
     await userEvent.click(await screen.findByRole('button', { name: 'Move…' }));
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.getByRole('button', { name: 'Move…' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Move…' })).toHaveFocus();
     expect(state.moves).toEqual([]);
   });
 
-  it('saves the breakeven threshold and explains a bad value', async () => {
+  it('explains a move whose recompute fails, and Cancel clears the error', async () => {
+    const { routes } = server();
+    renderSettings({
+      ...routes,
+      'POST /api/accounts/a1/move': () => ({ status: 409, body: { error: 'recompute_failed' } }),
+    });
+    await userEvent.click(await screen.findByRole('button', { name: 'Move…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Move and recompute' }));
+    expect(await screen.findByText(RECOMPUTE_FAILED)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Move…' }));
+    expect(screen.queryByText(RECOMPUTE_FAILED)).toBeNull();
+  });
+
+  it('a one-position recompute is singular', async () => {
+    const { routes } = server();
+    renderSettings({
+      ...routes,
+      'POST /api/accounts/a1/move': () => ({ body: { moved: true, recomputed: 1 } }),
+    });
+    await userEvent.click(await screen.findByRole('button', { name: 'Move…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Move and recompute' }));
+    expect(
+      await screen.findByText('Moved D main to Long-term and recomputed 1 position.'),
+    ).toBeInTheDocument();
+  });
+
+  it('with one profile there is nowhere to move to', async () => {
+    const { state, routes } = server();
+    state.profiles.pop();
+    renderSettings(routes);
+    expect(await screen.findByText('Create another profile to move it.')).toBeInTheDocument();
+  });
+});
+
+describe('breakeven and fee rules', () => {
+  it('saves the threshold, announces it, and explains a bad value before sending it', async () => {
     const { state, routes } = server();
     renderSettings(routes);
     const field = await screen.findByLabelText('New threshold (₹)');
-    await userEvent.type(field, '12,5{Enter}');
+    await userEvent.type(field, 'abc{Enter}');
     expect(
-      await screen.findByText('Enter rupees with up to two decimals, for example 10 or 12.50.'),
+      await screen.findByText('Enter an amount in rupees, for example 10 or 12.50.'),
     ).toBeInTheDocument();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
     await userEvent.clear(field);
-    await userEvent.type(field, '12.50{Enter}');
-    expect(await screen.findByText('Saved.')).toBeInTheDocument();
-    expect(state.breakeven).toBe('12500000');
-    // The current value is shown through the Money formatter (spoken and visible text).
-    expect((await screen.findAllByText('₹12.50')).length).toBeGreaterThan(0);
+    await userEvent.type(field, '₹1,000.5{Enter}');
+    expect(await screen.findByText('Breakeven threshold saved: ₹1000.5.')).toBeInTheDocument();
+    expect(state.breakeven).toBe('1000500000');
   });
 
   it('lists the fee-rule versions, read-only', async () => {
@@ -157,22 +216,12 @@ describe('settings', () => {
     expect(within(row).queryByRole('button')).toBeNull();
   });
 
-  it('with one profile there is nowhere to move to', async () => {
+  it('with no profiles, points to onboarding', async () => {
     const { state, routes } = server();
-    state.profiles.pop();
+    state.profiles.splice(0);
     renderSettings(routes);
-    expect(await screen.findByText('Create another profile to move it.')).toBeInTheDocument();
-  });
-});
-
-describe('settings after a move', () => {
-  it('closes the confirmation and offers the profile it left as the next target', async () => {
-    const { routes } = server();
-    renderSettings(routes);
-    await userEvent.click(await screen.findByRole('button', { name: 'Move…' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Move and recompute' }));
-    await screen.findByText('Moved D main to Long-term and recomputed 7 positions.');
-    expect(screen.queryByRole('group', { name: 'Confirm moving D main' })).toBeNull();
-    expect(await screen.findByLabelText('Move D main to')).toHaveDisplayValue('Swing');
+    expect(
+      await screen.findByRole('link', { name: 'Set up a profile and a broker account' }),
+    ).toBeInTheDocument();
   });
 });

@@ -62,7 +62,10 @@ describe('move an account to another profile', () => {
         `/api/accounts/${DHAN}/move`,
         json('POST', { profileId: 'prof2' }),
       );
-      expect([response.status, await response.json()]).toEqual([200, { recomputed: before.positions }]);
+      expect([response.status, await response.json()]).toEqual([
+        200,
+        { moved: true, recomputed: before.positions },
+      ]);
       expect(db.prepare('SELECT profile_id FROM broker_account WHERE id = ?').pluck().get(DHAN)).toBe(
         'prof2',
       );
@@ -103,7 +106,7 @@ describe('move an account to another profile', () => {
         `/api/accounts/${DHAN}/move`,
         json('POST', { profileId: 'prof2' }),
       );
-      expect([response.status, await response.json()]).toEqual([500, { error: 'internal_error' }]);
+      expect([response.status, await response.json()]).toEqual([409, { error: 'recompute_failed' }]);
       expect(db.prepare('SELECT profile_id FROM broker_account WHERE id = ?').pluck().get(DHAN)).toBe(
         'prof1',
       );
@@ -124,12 +127,12 @@ describe('settings', () => {
       ).toBe(200);
       expect(await read()).toBe('12500000');
       const statuses = await Promise.all(
-        ['-1', '1.234', '12,50', 'abc', '99999999'].map(
+        ['-1', '1.234', '12,50', 'abc', '99999999', '1000000.01'].map(
           async (value) =>
             (await send(test, '/api/settings', json('PUT', { breakevenThresholdRupees: value }))).status,
         ),
       );
-      expect(statuses).toEqual([400, 400, 400, 400, 400]);
+      expect(statuses).toEqual([400, 400, 400, 400, 400, 400]);
       expect(await read()).toBe('12500000');
     });
   });
@@ -144,6 +147,47 @@ describe('settings', () => {
       expect(feeRules.map((rule) => rule.id)).toContain('nse/2024-10-01');
       expect(feeRules.find((rule) => rule.id === 'zerodha/2024-06-01')?.charges).toBeGreaterThan(0);
       expect(feeRules.find((rule) => rule.id === 'dhan/2024-04-01')?.charges).toBe(0);
+    });
+  });
+});
+
+describe('S13a-3a review follow-ups', () => {
+  it('a move to the profile it is already in does nothing and recomputes nothing', async () => {
+    await withVault(async ({ db }) => {
+      const response = await send(
+        testApp({}, db),
+        `/api/accounts/${DHAN}/move`,
+        json('POST', { profileId: 'prof1' }),
+      );
+      expect([response.status, await response.json()]).toEqual([200, { moved: false, recomputed: 0 }]);
+    });
+  });
+
+  it('refuses a move into another PAN entity (tax buckets are per entity)', async () => {
+    await withVault(async ({ db }) => {
+      db.prepare("INSERT INTO pan_entity (id, label, created_at) VALUES ('pan2', 'HUF', 'x')").run();
+      db.prepare(
+        "INSERT INTO profile (id, pan_entity_id, name, created_at) VALUES ('prof3', 'pan2', 'Family', 'x')",
+      ).run();
+      const response = await send(
+        testApp({}, db),
+        `/api/accounts/${DHAN}/move`,
+        json('POST', { profileId: 'prof3' }),
+      );
+      expect(response.status).toBe(400);
+      expect(db.prepare('SELECT profile_id FROM broker_account WHERE id = ?').pluck().get(DHAN)).toBe(
+        'prof1',
+      );
+    });
+  });
+
+  it('an unreadable stored threshold reads as the default, Rs 0', async () => {
+    await withVault(async ({ db }) => {
+      db.prepare("INSERT INTO setting (key, value) VALUES ('breakeven_threshold_micro', 'abc')").run();
+      const body = (await (await send(testApp({}, db), '/api/settings')).json()) as {
+        breakevenThresholdMicro: string;
+      };
+      expect(body.breakevenThresholdMicro).toBe('0');
     });
   });
 });

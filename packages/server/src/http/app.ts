@@ -110,6 +110,7 @@ const PROFILE_ERRORS: Readonly<Record<ProfileError['code'], ErrorStatus>> = {
   identifier: 400,
   conflict: 409,
   not_found: 404,
+  recompute_failed: 409,
 };
 
 /** Runs a vault action; a missing vault is 503 and a ProfileError its fixed code (ADR-0019). */
@@ -155,11 +156,8 @@ function apiRoutes(options: AppOptions) {
       .post('/accounts/:id/move', params(idParam), ...json(moveAccountSchema, SMALL_JSON_BYTES), (c) =>
         withVault(options, (db) => {
           const { id } = c.req.valid('param');
-          const summary = db.transaction(() => {
-            moveAccount(db, id, c.req.valid('json'));
-            return recompute(db, id);
-          })();
-          return c.json({ recomputed: summary.positions });
+          const summary = moveAccount(db, id, c.req.valid('json'), (accountId) => recompute(db, accountId));
+          return c.json({ moved: summary !== null, recomputed: summary?.positions ?? 0 });
         }),
       )
       .post('/vault/backup', notImplemented)

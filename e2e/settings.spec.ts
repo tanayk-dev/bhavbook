@@ -36,8 +36,8 @@ test('onboarding, then settings: rename, move an account (recomputed), breakeven
   await expect(page.getByRole('row', { name: /Dhan main/ })).toContainText('Long-term');
 
   await page.getByLabel('New threshold (₹)').fill('10');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(page.getByText('Saved.')).toBeVisible();
+  await page.getByRole('button', { name: 'Save threshold' }).click();
+  await expect(page.getByText('Breakeven threshold saved: ₹10.')).toBeVisible();
   await expect(page.getByRole('row', { name: /nse\/2024-10-01/ })).toContainText('01 Oct 2024');
   await page.screenshot({ path: info.outputPath('settings-1280x720.png'), fullPage: true });
 
@@ -45,4 +45,22 @@ test('onboarding, then settings: rename, move an account (recomputed), breakeven
   await page.reload();
   await expect(page.getByRole('row', { name: /Dhan main/ })).toContainText('Long-term');
   await expect(page.getByText('₹10.00').first()).toBeVisible();
+});
+
+test('at phone width the settings page never scrolls sideways, even with a form open', async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.launch);
+  await page.getByLabel('Profile name').fill('Swing');
+  await page.getByRole('button', { name: 'Create profile' }).click();
+  await page.getByLabel('Nickname').fill('A long account nickname');
+  await page.getByRole('button', { name: 'Add account' }).click();
+  await page.goto(`${app.origin}/settings`);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const overflows = () => page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  expect(await overflows()).toBe(false);
+  await page.getByRole('button', { name: 'Rename A long account nickname' }).click();
+  expect(await overflows()).toBe(false);
 });
