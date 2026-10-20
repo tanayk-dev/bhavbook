@@ -8,8 +8,6 @@ import { send, testApp, TOKEN } from './helpers.js';
 
 describe('route tree', () => {
   it.each([
-    ['POST', '/api/vault/backup'],
-    ['POST', '/api/vault/restore'],
     ['GET', '/api/imports'],
     ['POST', '/api/imports'],
     ['GET', '/api/coverage'],

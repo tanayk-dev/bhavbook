@@ -123,7 +123,7 @@ function stamp(date: Date): string {
 }
 
 /** A file name in the backup directory that doesn't exist yet: `<prefix>-<UTC ms>-<reason>[-n].<ext>`. */
-function uniqueBackupPath(
+export function uniqueBackupPath(
   dir: string,
   prefix: string,
   date: Date,
@@ -144,7 +144,7 @@ function uniqueBackupPath(
   return path.join(dir, `${base}-${String(highest + 1)}.${extension}`);
 }
 
-function ensureBackupDir(vaultPath: string): string {
+export function ensureBackupDir(vaultPath: string): string {
   const dir = backupDir(vaultPath);
   mkdirSync(dir, { recursive: true, mode: OWNER_ONLY_DIR });
   return dir;
