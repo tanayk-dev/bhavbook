@@ -187,6 +187,19 @@ describe('reconcileCharges', () => {
     expect(result.unmatchedRows).toEqual([row('2024-05-02', 'INE1', { brokerage: 20n * RUPEE })]);
   });
 
+  it('a row whose scrip could not be resolved is unmatched; a covered trade with nothing charged reconciles', () => {
+    const unresolved = row('2024-05-02', null, { brokerage: RUPEE });
+    const result = reconcileCharges({
+      allocations: [allocation('f#DELIVERY', '2024-05-03', 'INE1', RUPEE)],
+      estimated: [],
+      rows: [unresolved],
+      coverage: FY,
+    });
+    expect(result.unmatchedRows).toEqual([unresolved]);
+    expect(result.status.get('f#DELIVERY')).toBe('reconciled');
+    expect(result.discrepancies).toEqual([]);
+  });
+
   it('a group whose allocations carry no value spreads the reported amount evenly', () => {
     const result = reconcileCharges({
       allocations: [

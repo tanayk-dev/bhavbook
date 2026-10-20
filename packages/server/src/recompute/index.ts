@@ -55,6 +55,8 @@ import {
   CASH_IN_LIEU,
   CORPORATE_ACTION_SUSPECTED,
   FEES_UNRATED,
+  FEE_DISCREPANCY,
+  FIFO_MISMATCH,
   CHARGES_UNATTACHED,
   FILL_FROM_STATEMENT,
   INCOMPLETE_POSITION,
@@ -65,6 +67,7 @@ import {
   type IssueForecast,
 } from './types.js';
 import { attachJournal } from './journal.js';
+import { crossCheckAccount, reconcileAccount } from './reconcile.js';
 
 export * from './types.js';
 
@@ -542,6 +545,17 @@ export function recompute(
     const allocationIds = writeDerived(db, accountId, allocations, positions);
     const { charges, unrated, unattached } = chargesOf(broker, fills, adjustments, allocations);
     writeCharges(db, allocationIds, charges);
+    const feeFindings = reconcileAccount(db, accountId, {
+      broker,
+      fills,
+      allocations,
+      allocationIds,
+      positions,
+      charges,
+      aliases: aliasKeys(db, broker),
+    });
+    syncIssues(db, accountId, FEE_DISCREPANCY, feeFindings, at);
+    syncIssues(db, accountId, FIFO_MISMATCH, crossCheckAccount(db, accountId, positions), at);
     const journal = attachJournal(db, accountId, allocations, positions);
     syncIssues(db, accountId, JOURNAL_UNATTACHED, journal.unattached, at);
     syncIssues(db, accountId, JOURNAL_COLLISION, journal.collisions, at);

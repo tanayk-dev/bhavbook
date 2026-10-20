@@ -20,6 +20,10 @@ export const CHARGES_UNATTACHED = 'charges_unattached';
 export const JOURNAL_UNATTACHED = 'journal_unattached';
 /** Two or more journal entries on one position (older history merged their positions): merge or keep both. */
 export const JOURNAL_COLLISION = 'journal_collision';
+/** Reported charges beyond tolerance of the estimates, or a statement row matching no trade (PRD §8.2). */
+export const FEE_DISCREPANCY = 'fee_discrepancy';
+/** A tax-report lot that our FIFO lots don't reproduce, or the reverse (PRD §8.2 cross-check). */
+export const FIFO_MISMATCH = 'fifo_mismatch';
 
 export interface IssueForecast {
   readonly kind: typeof INCOMPLETE_POSITION;
