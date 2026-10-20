@@ -58,7 +58,8 @@ export function looksLikeIdentifier(label: string): boolean {
   return IDENTIFIER_SHAPES.some((shape) => shape.test(compact));
 }
 
-const label = z.string().max(MAX_LABEL * 4);
+/** A label as sent, bounded before it is cleaned. */
+export const label = z.string().max(MAX_LABEL * 4);
 
 export const profileInputSchema = z.object({ name: label }).strict();
 export const accountInputSchema = z
@@ -109,13 +110,13 @@ export function listProfiles(db: Database.Database): ProfileSummary[] {
   return [...profiles.values()];
 }
 
-function parse<T>(schema: z.ZodType<T>, input: unknown): T {
+export function parse<T>(schema: z.ZodType<T>, input: unknown): T {
   const parsed = schema.safeParse(input);
   if (!parsed.success) throw new ProfileError('invalid');
   return parsed.data;
 }
 
-function acceptLabel(value: string): string {
+export function acceptLabel(value: string): string {
   const text = cleanLabel(value);
   if (text === null) throw new ProfileError('invalid');
   if (looksLikeIdentifier(text)) throw new ProfileError('identifier');
@@ -123,7 +124,7 @@ function acceptLabel(value: string): string {
 }
 
 /** Case-insensitive (Unicode) clash with any existing label. */
-function clashes(existing: readonly unknown[], text: string): boolean {
+export function clashes(existing: readonly unknown[], text: string): boolean {
   const folded = text.toLocaleLowerCase('en-IN');
   return existing.some((other) => typeof other === 'string' && other.toLocaleLowerCase('en-IN') === folded);
 }
@@ -141,7 +142,7 @@ function defaultEntity(db: Database.Database, at: string): string {
 }
 
 /** Runs a write under the vault's write lock; a unique-index violation is a conflict. */
-function write<T>(db: Database.Database, work: () => T): T {
+export function write<T>(db: Database.Database, work: () => T): T {
   try {
     return db.transaction(work).immediate();
   } catch (error) {

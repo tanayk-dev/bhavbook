@@ -33,6 +33,7 @@ function server() {
   };
   const routes: Routes = {
     'GET /api/profiles': () => ({ body: { profiles: state.profiles } }),
+    'GET /api/tags': { body: { tags: [] } },
     'GET /api/settings': () => ({
       body: {
         breakevenThresholdMicro: state.breakeven,
