@@ -84,6 +84,8 @@ describe('formatting and reading', () => {
     expect(formatBytes(100)).toBe('1 KB');
     expect(formatBytes(49_152)).toBe('48 KB');
     expect(formatBytes(2_516_582)).toBe('2.4 MB');
+    expect(formatBytes(1_048_575)).toBe('1.0 MB');
+    expect(formatBytes(1_047_552)).toBe('1,023 KB');
   });
 
   it('refuses a listing it does not recognise, including names that are not backups', () => {
@@ -93,6 +95,7 @@ describe('formatting and reading', () => {
       { backups: [{ ...AUTO, name: '../vault.db' }] },
       { backups: [{ ...AUTO, kind: 'raw' }] },
       { backups: [{ ...AUTO, createdAt: 'never' }] },
+      { backups: [{ ...AUTO, createdAt: '2026-10-20T06:00:00' }] },
       { backups: [{ ...AUTO, bytes: -1 }] },
     ]) {
       expect(() => backups(body)).toThrow(ApiError);
@@ -103,7 +106,19 @@ describe('formatting and reading', () => {
     expect(restoreError(new ApiError(422, 'corrupt'))).toBe(
       'That backup is damaged, so it was not restored. Your current data is unchanged.',
     );
-    expect(restoreError(new Error('x'))).toBe('The restore failed. Your current data is unchanged.');
+    expect(restoreError(new ApiError(409, 'busy'))).toBe(
+      'Another restore is running. Wait for it to finish. Your current data is unchanged.',
+    );
+    expect(restoreError(new ApiError(503, 'reopen_failed'))).toMatch(/restart BhavBook\.$/);
+    for (const error of [
+      new Error('x'),
+      new ApiError(0, 'unreachable'),
+      new ApiError(500, 'internal_error'),
+    ]) {
+      expect(restoreError(error)).toBe(
+        'The restore did not report back, so it may or may not have happened. Reload the page to see your data.',
+      );
+    }
   });
 });
 
@@ -164,6 +179,25 @@ describe('backups in settings', () => {
     expect(screen.queryByRole('group', { name: 'Confirm restore' })).toBeNull();
   });
 
+  it('picking a file again starts afresh, and cancel returns focus to the file picker', async () => {
+    const { routes } = server();
+    renderSettings(routes);
+    const input = await screen.findByLabelText('Restore from a file');
+    const file = new File([new Uint8Array([1])], 'same.bhav');
+    await userEvent.upload(input, file);
+    await userEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(await screen.findByText(/not a BhavBook backup/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Restore' })).toHaveFocus();
+    });
+    await userEvent.upload(input, new File([new Uint8Array([2])], 'same.bhav'));
+    expect(screen.queryByText(/not a BhavBook backup/)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(input).toHaveFocus();
+    });
+  });
+
   it('restores from a chosen file after confirming, naming the file only on screen', async () => {
     const { state, routes } = server();
     const fetch = renderSettings(routes);
@@ -180,6 +214,9 @@ describe('backups in settings', () => {
     const upload = fetch.mock.calls.find(
       ([input]) => typeof input === 'string' && input.endsWith('/restore/upload'),
     );
-    expect(JSON.stringify(upload)).not.toContain('my-backup');
+    const init = upload?.[1];
+    expect(init?.body).toBe(file);
+    expect(init?.headers).toEqual({ 'content-type': 'application/octet-stream' });
+    expect(upload?.[0]).toBe('/api/vault/restore/upload');
   });
 });

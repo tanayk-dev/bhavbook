@@ -37,7 +37,7 @@ function parseManifest(json: Buffer): BackupManifest {
   try {
     value = JSON.parse(json.toString('utf8'));
   } catch {
-    throw new BackupError('backup manifest is not valid JSON');
+    throw new BackupError('backup manifest is not valid JSON', { problem: 'not_a_backup' });
   }
   const manifest = value as Partial<BackupManifest> | null;
   if (
@@ -49,24 +49,26 @@ function parseManifest(json: Buffer): BackupManifest {
     typeof manifest.appVersion !== 'string' ||
     typeof manifest.createdAt !== 'string'
   ) {
-    throw new BackupError('backup manifest is missing required fields');
+    throw new BackupError('backup manifest is missing required fields', { problem: 'not_a_backup' });
   }
   return manifest as BackupManifest;
 }
 
 export function decodeBhav(file: Buffer): { manifest: BackupManifest; db: Buffer } {
   if (file.length < HEADER_BYTES || !file.subarray(0, MAGIC.length).equals(MAGIC)) {
-    throw new BackupError('not a BhavBook backup (bad header)');
+    throw new BackupError('not a BhavBook backup (bad header)', { problem: 'not_a_backup' });
   }
   const manifestLength = file.readUInt32LE(MAGIC.length);
   if (manifestLength === 0 || manifestLength > MAX_MANIFEST_BYTES)
-    throw new BackupError('backup manifest size is invalid');
-  if (HEADER_BYTES + manifestLength > file.length) throw new BackupError('backup is truncated');
+    throw new BackupError('backup manifest size is invalid', { problem: 'not_a_backup' });
+  if (HEADER_BYTES + manifestLength > file.length)
+    throw new BackupError('backup is truncated', { problem: 'corrupt' });
   const manifest = parseManifest(file.subarray(HEADER_BYTES, HEADER_BYTES + manifestLength));
   const db = file.subarray(HEADER_BYTES + manifestLength);
-  if (db.length !== manifest.dbBytes) throw new BackupError('backup is truncated or has trailing bytes');
+  if (db.length !== manifest.dbBytes)
+    throw new BackupError('backup is truncated or has trailing bytes', { problem: 'corrupt' });
   if (sha256(db) !== manifest.sha256)
-    throw new BackupError('backup checksum does not match; the file is corrupted');
+    throw new BackupError('backup checksum does not match; the file is corrupted', { problem: 'corrupt' });
   return { manifest, db };
 }
 

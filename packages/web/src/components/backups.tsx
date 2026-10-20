@@ -1,7 +1,7 @@
 // Backups in settings (PRD §4, ADR-0020): back up now, the list of manual and automatic backups with download and
 // restore, and restore from a `.bhav` file. A restore replaces everything, so it always confirms first and says
 // that the current vault is backed up before it is replaced. Afterwards every query is refetched: all data changed.
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useId, useRef, useState } from 'react';
 import { focusLater, TableRegion, TOUCH } from '@/components/settings';
 import { Button } from '@/components/ui/button';
@@ -17,10 +17,16 @@ import {
   restoreFile,
   type Backup,
 } from '@/lib/backups';
+import { ApiError } from '@/lib/api';
 import { formatIstDateTime } from '@/lib/format';
 
-type Source =
+type Picked =
   { readonly kind: 'listed'; readonly backup: Backup } | { readonly kind: 'file'; readonly file: File };
+
+/** What to restore; `selection` makes each pick a fresh confirm, even of a same-named file. */
+type Source = Picked & { readonly selection: number };
+
+const RESTORE_KEY = ['restore'] as const;
 
 const LINK =
   'inline-flex items-center rounded-sm px-2 text-primary underline-offset-4 hover:underline max-md:h-11';
@@ -42,12 +48,18 @@ function ConfirmRestore({ source, onCancel, onRestored }: ConfirmRestoreProps) {
   const confirmButton = useRef<HTMLButtonElement>(null);
   const questionId = useId();
   const mutation = useMutation({
+    mutationKey: RESTORE_KEY,
     mutationFn: () =>
       source.kind === 'listed' ? restoreBackup(source.backup.name) : restoreFile(source.file),
     onSuccess: async () => {
-      // Everything on every page may have changed.
+      // Everything on every page may have changed: drop what no page shows now, refetch what they do.
+      queryClient.removeQueries({ type: 'inactive' });
       await queryClient.invalidateQueries();
       onRestored(`Restored ${describe(source)}.`);
+    },
+    // The button was disabled while the request ran, which dropped focus: put it back for a retry.
+    onError: () => {
+      focusLater(confirmButton);
     },
   });
   useEffect(() => {
@@ -62,7 +74,7 @@ function ConfirmRestore({ source, onCancel, onRestored }: ConfirmRestoreProps) {
         if (event.key === 'Escape' && !mutation.isPending) onCancel();
       }}
     >
-      <p id={questionId}>
+      <p id={questionId} className="break-words">
         Replace everything in BhavBook with {describe(source)}? Your current data is backed up first, so you
         can restore it again from this list.
       </p>
@@ -95,9 +107,12 @@ function ConfirmRestore({ source, onCancel, onRestored }: ConfirmRestoreProps) {
 
 function BackupTable({
   backups,
+  disabled,
   onRestore,
 }: {
   readonly backups: readonly Backup[];
+  /** While a restore runs, no other may start. */
+  readonly disabled: boolean;
   readonly onRestore: (backup: Backup) => void;
 }) {
   if (backups.length === 0) {
@@ -150,6 +165,7 @@ function BackupTable({
                       size="sm"
                       className={TOUCH}
                       aria-label={`Restore the backup from ${when}…`}
+                      disabled={disabled}
                       onClick={() => {
                         onRestore(entry);
                       }}
@@ -175,6 +191,8 @@ export interface BackupsPanelProps {
 export function BackupsPanel({ backups, announce }: BackupsPanelProps) {
   const queryClient = useQueryClient();
   const [pending, setPending] = useState<Source | null>(null);
+  const selections = useRef(0);
+  const restoring = useIsMutating({ mutationKey: RESTORE_KEY }) > 0;
   const fileId = useId();
   const backUpButton = useRef<HTMLButtonElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -185,9 +203,13 @@ export function BackupsPanel({ backups, announce }: BackupsPanelProps) {
       announce(`Backed up BhavBook (${formatBytes(made.bytes)}).`);
     },
   });
+  const pick = (source: Picked) => {
+    selections.current += 1;
+    setPending({ ...source, selection: selections.current });
+  };
   const close = () => {
+    focusLater(pending?.kind === 'file' ? fileInput : backUpButton);
     setPending(null);
-    focusLater(backUpButton);
   };
   return (
     <div className="space-y-3">
@@ -195,7 +217,7 @@ export function BackupsPanel({ backups, announce }: BackupsPanelProps) {
         <Button
           ref={backUpButton}
           className={TOUCH}
-          disabled={backUp.isPending}
+          disabled={backUp.isPending || restoring}
           onClick={() => {
             backUp.mutate();
           }}
@@ -209,23 +231,26 @@ export function BackupsPanel({ backups, announce }: BackupsPanelProps) {
             id={fileId}
             type="file"
             accept=".bhav"
+            disabled={restoring}
             className="max-w-56 text-sm file:mr-2 file:rounded-md file:border file:border-input file:bg-surface file:px-2 file:py-1"
             onChange={(event) => {
               const file = event.target.files?.[0];
               event.target.value = '';
-              if (file !== undefined) setPending({ kind: 'file', file });
+              if (file !== undefined) pick({ kind: 'file', file });
             }}
           />
         </div>
       </div>
       {backUp.isError ? (
         <p role="alert" className="text-sm text-loss">
-          Could not make a backup. Check that the disk has space, then try again.
+          {backUp.error instanceof ApiError && backUp.error.status === 200
+            ? 'The backup may have been made, but its details could not be read. Reload the page to check.'
+            : 'Could not make a backup. Check that the disk has space, then try again.'}
         </p>
       ) : null}
       {pending === null ? null : (
         <ConfirmRestore
-          key={pending.kind === 'listed' ? pending.backup.name : `file:${pending.file.name}`}
+          key={pending.selection}
           source={pending}
           onCancel={close}
           onRestored={(message) => {
@@ -236,8 +261,9 @@ export function BackupsPanel({ backups, announce }: BackupsPanelProps) {
       )}
       <BackupTable
         backups={backups}
+        disabled={restoring}
         onRestore={(entry) => {
-          setPending({ kind: 'listed', backup: entry });
+          pick({ kind: 'listed', backup: entry });
         }}
       />
     </div>

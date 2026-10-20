@@ -3,7 +3,8 @@
 //   2. Host/Origin allowlist, then the session token (launch URL -> cookie)
 //   3. routes: the typed /api tree (501 until each step implements its service), then the web build
 // Errors never echo bodies, messages or cell values (ADR-0019).
-import { existsSync, readFileSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import { serveStatic } from '@hono/node-server/serve-static';
 import type Database from 'better-sqlite3';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
@@ -40,7 +41,15 @@ import {
 } from '../services/tags.js';
 import { recompute } from '../recompute/index.js';
 import { backupPath, currentVersion, listBackups, manualBackup, MAX_BACKUP_BYTES } from '../vault/index.js';
-import { restoreErrorCode, restoreLive, restoreUpload, type BackupHost, type LiveVault } from './backups.js';
+import {
+  liveVault,
+  restoreErrorCode,
+  restoreListed,
+  restoreUpload,
+  type BackupHost,
+  type LiveVault,
+  type RestoreErrorCode,
+} from './backups.js';
 import { jsonResponse } from './json.js';
 import type { Logger } from './logger.js';
 import {
@@ -144,7 +153,12 @@ const PROFILE_ERRORS: Readonly<Record<ProfileError['code'], ErrorStatus>> = {
 };
 
 /** Runs a vault action; a missing vault is 503 and a ProfileError its fixed code (ADR-0019). */
-function withVault(live: LiveVault, action: (db: Database.Database) => Response): Response {
+function withVault<R extends Response | Promise<Response>>(
+  live: LiveVault,
+  action: (db: Database.Database) => R,
+): R | Response {
+  // After a restore that could not reopen the vault, every request tries again.
+  if (live.db === null) live.recover?.();
   if (live.db === null) return error('no_vault', 503);
   try {
     return action(live.db);
@@ -155,23 +169,35 @@ function withVault(live: LiveVault, action: (db: Database.Database) => Response)
 }
 
 /** Runs a backup action against the live vault; 503 without a vault or a backup host. */
-function withBackups(
+function withBackups<R extends Response | Promise<Response>>(
   live: LiveVault,
   host: BackupHost | undefined,
-  action: (db: Database.Database, host: BackupHost) => Response,
-): Response {
+  action: (db: Database.Database, host: BackupHost) => R,
+): R | Response {
   if (host === undefined) return error('no_vault', 503);
   return withVault(live, (db) => action(db, host));
 }
 
-/** Restores, answering the restore's fixed error code (422: the file is the problem; 409: the vault is busy). */
-function restoreResponse(restore: () => { schemaVersion: number }): Response {
+const RESTORE_STATUS: Readonly<Record<Exclude<RestoreErrorCode, 'restore_failed'>, ErrorStatus>> = {
+  in_use: 409,
+  busy: 409,
+  reopen_failed: 503,
+  too_large: 413,
+  newer_version: 422,
+  not_a_backup: 422,
+  corrupt: 422,
+};
+
+/** Restores, answering the restore's fixed error code; anything unexpected is a 500 (logged by name only). */
+async function restoreResponse(
+  restore: () => Promise<{ schemaVersion: number }> | { schemaVersion: number },
+) {
   try {
-    return jsonResponse(restore());
+    return jsonResponse(await restore());
   } catch (cause) {
     const code = restoreErrorCode(cause);
     if (code === 'restore_failed') throw cause;
-    return error(code, code === 'in_use' ? 409 : 422);
+    return error(code, RESTORE_STATUS[code]);
   }
 }
 
@@ -223,9 +249,10 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
           const { name } = c.req.valid('param');
           const file = backupPath(backups.vaultPath, name);
           if (file === null) return error('not_found', 404);
-          return new Response(readFileSync(file), {
+          return new Response(Readable.toWeb(createReadStream(file)) as ReadableStream, {
             headers: {
               'Content-Type': 'application/octet-stream',
+              'Content-Length': String(statSync(file).size),
               'Content-Disposition': `attachment; filename="bhavbook-${name}"`,
             },
           });
@@ -235,14 +262,14 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
         withBackups(live, host, (_, backups) => {
           const file = backupPath(backups.vaultPath, c.req.valid('json').name);
           if (file === null) return error('not_found', 404);
-          return restoreResponse(() => restoreLive(live, backups, file));
+          return restoreResponse(() => restoreListed(live, backups, file));
         }),
       )
       .post('/vault/restore/upload', ...upload(), async (c) => {
-        const bytes = new Uint8Array(await c.req.arrayBuffer());
-        return withBackups(live, host, (_, backups) =>
-          restoreResponse(() => restoreUpload(live, backups, bytes)),
-        );
+        if (live.db === null) live.recover?.();
+        if (host === undefined || live.db === null) return error('no_vault', 503);
+        // Streamed to disk, never buffered: a backup can be hundreds of megabytes.
+        return restoreResponse(() => restoreUpload(live, host, c.req.raw.body));
       })
       .get('/imports', notImplemented)
       .post('/imports', notImplemented)
@@ -383,7 +410,7 @@ export function createApp(options: AppOptions): Hono {
   const app = new Hono();
   app.use('*', logAndHarden(options.logger));
   app.use('*', guard(options));
-  app.route('/api', apiRoutes(options, { db: options.vault }));
+  app.route('/api', apiRoutes(options, liveVault(options.vault, options.backups)));
   webRoutes(app, options.staticRoot);
   app.notFound(() => error('not_found', 404));
   app.onError((cause, c) => {

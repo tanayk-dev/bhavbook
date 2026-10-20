@@ -1,10 +1,13 @@
 // S13a-3b-2: backups over HTTP. A manual backup lands in `<vault>.backups/` and is listed with the automatic ones;
 // a listed backup downloads as a `.bhav` file; a restore (a listed backup, or an uploaded file) closes the live
 // vault, swaps the backup in and reopens it. A bad file leaves the vault as it was and says why with a fixed code.
-import type Database from 'better-sqlite3';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { restoreErrorCode, type BackupHost } from '../../src/http/backups.js';
-import { BackupError, openVault } from '../../src/vault/index.js';
+import { BusyError, ReopenError, restoreErrorCode, type BackupHost } from '../../src/http/backups.js';
+import { BackupError, listBackups, openVault } from '../../src/vault/index.js';
 import { withVault } from '../import/helpers.js';
 import { send, testApp, type TestApp } from './helpers.js';
 
@@ -31,11 +34,13 @@ function harness(db: Database.Database, vaultPath: string): Harness {
   return { test: testApp({ backups }, db), opened };
 }
 
-async function withBackups(run: (h: Harness, db: Database.Database) => Promise<void>): Promise<void> {
+async function withBackups(
+  run: (h: Harness, db: Database.Database, vaultPath: string) => Promise<void>,
+): Promise<void> {
   await withVault(async ({ db, vaultPath }) => {
     const h = harness(db, vaultPath);
     try {
-      await run(h, db);
+      await run(h, db, vaultPath);
     } finally {
       for (const connection of h.opened) connection.close();
     }
@@ -153,19 +158,89 @@ describe('backups', () => {
   });
 });
 
+describe('restore failures', () => {
+  it('answers 409 when another connection holds the vault, and keeps serving the untouched vault', async () => {
+    await withBackups(async ({ test }, _db, vaultPath) => {
+      const saved = await backUp(test);
+      const other = new Database(vaultPath);
+      try {
+        other.exec('BEGIN IMMEDIATE');
+        const response = await send(test, '/api/vault/restore', json('POST', { name: saved.name }));
+        expect([response.status, await response.json()]).toEqual([409, { error: 'in_use' }]);
+        other.exec('ROLLBACK');
+      } finally {
+        other.close();
+      }
+      expect(await profileNames(test)).toEqual(['Swing']);
+      expect((await addProfile(test, 'Long-term')).status).toBe(201);
+    });
+  });
+
+  it('reports a vault that cannot be reopened, and recovers on a later request', async () => {
+    await withVault(async ({ db, vaultPath }) => {
+      const opened: Database.Database[] = [];
+      let failures = 1;
+      const backups: BackupHost = {
+        vaultPath,
+        appVersion: 'test',
+        reopen: () => {
+          if (failures > 0) {
+            failures -= 1;
+            throw new Error('locked by antivirus');
+          }
+          const next = openVault(vaultPath, { appVersion: 'test' });
+          opened.push(next);
+          return next;
+        },
+      };
+      const test = testApp({ backups }, db);
+      try {
+        const saved = await backUp(test);
+        const response = await send(test, '/api/vault/restore', json('POST', { name: saved.name }));
+        expect([response.status, await response.json()]).toEqual([503, { error: 'reopen_failed' }]);
+        expect(await profileNames(test)).toEqual(['Swing']);
+      } finally {
+        for (const connection of opened) connection.close();
+      }
+    });
+  });
+});
+
+describe('listing order', () => {
+  it('puts the newest first, a higher collision counter first within a millisecond, then by name', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'bhavbook-catalog-'));
+    try {
+      const vaultPath = path.join(dir, 'vault.db');
+      mkdirSync(`${vaultPath}.backups`);
+      const names = [
+        'auto-20261020T120000000Z-pre-import.bhav',
+        'auto-20261020T120000000Z-pre-import-2.bhav',
+        'auto-20261020T120000000Z-pre-import-10.bhav',
+        'backup-20261020T120000000Z-manual.bhav',
+        'auto-20261019T120000000Z-pre-undo.bhav',
+        'raw-20261020T120000000Z-pre-restore-raw.db',
+        '.upload-abc.tmp',
+      ];
+      for (const name of names) writeFileSync(path.join(`${vaultPath}.backups`, name), 'x');
+      expect(listBackups(vaultPath).map((entry) => entry.name)).toEqual([
+        'auto-20261020T120000000Z-pre-import-10.bhav',
+        'auto-20261020T120000000Z-pre-import-2.bhav',
+        'auto-20261020T120000000Z-pre-import.bhav',
+        'backup-20261020T120000000Z-manual.bhav',
+        'auto-20261019T120000000Z-pre-undo.bhav',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('restore error codes', () => {
-  it('maps each fixed backup message to what the person can do about it', () => {
-    const cases: [string, string][] = [
-      ['the vault is in use; close BhavBook and try again', 'in_use'],
-      ['backup was made by a newer version of BhavBook; please upgrade', 'newer_version'],
-      ['backup file is too large', 'too_large'],
-      ['not a BhavBook backup (bad header)', 'not_a_backup'],
-      ['backup manifest is not valid JSON', 'not_a_backup'],
-      ['backup checksum does not match; the file is corrupted', 'corrupt'],
-      ['backup database has an unexpected schema (extra or altered objects)', 'corrupt'],
-      ['could not back up the current vault before restoring; nothing was changed', 'restore_failed'],
-    ];
-    for (const [message, code] of cases) expect(restoreErrorCode(new BackupError(message))).toBe(code);
+  it('uses the problem each backup error carries, and the reopen and busy cases', () => {
+    expect(restoreErrorCode(new BackupError('x', { problem: 'corrupt' }))).toBe('corrupt');
+    expect(restoreErrorCode(new BackupError('x'))).toBe('restore_failed');
+    expect(restoreErrorCode(new ReopenError('x'))).toBe('reopen_failed');
+    expect(restoreErrorCode(new BusyError('x'))).toBe('busy');
     expect(restoreErrorCode(new Error('backup file is too large'))).toBe('restore_failed');
   });
 });
