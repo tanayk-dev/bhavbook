@@ -45,8 +45,8 @@ export function AppFrame({ children }: { readonly children: ReactNode }) {
         Skip to content
       </a>
       <header className="col-span-2 flex items-center justify-between border-b border-rule bg-surface px-4">
-        <Link to="/" className="flex h-11 items-center font-semibold tracking-tight lg:h-auto">
-          Bhav<span className="text-primary">Book</span>
+        <Link to="/" className="flex h-11 items-center font-serif text-[15px] font-semibold lg:h-auto">
+          BhavBook
         </Link>
         <ThemeToggle />
       </header>

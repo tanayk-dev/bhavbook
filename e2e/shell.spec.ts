@@ -82,7 +82,7 @@ function focusIndicator(): string {
   const active = document.activeElement;
   if (active === null) return 'nothing';
   const style = getComputedStyle(active);
-  const accent = 'rgb(47, 74, 168)';
+  const accent = 'rgb(31, 90, 138)';
   // Links show the global outline; shadcn buttons draw the same accent as a 2 px ring (box shadow).
   const outline =
     style.outlineStyle === 'solid' && parseFloat(style.outlineWidth) >= 2 && style.outlineColor === accent;

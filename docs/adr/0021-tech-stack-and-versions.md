@@ -53,7 +53,7 @@ These are additions, not changes to the decision above. Each was the latest stab
 | class-variance-authority / clsx / tailwind-merge | 0.7.1 / 2.1.1 / 3.7.0 | shadcn/ui class helpers |
 | tw-animate-css | 1.4.0 | shadcn/ui animations for Tailwind 4 |
 | lucide-react | 1.58.0 | Icons (1.59.0 was under 3 days old) |
-| @fontsource-variable/inter / @fontsource/jetbrains-mono | 5.3.0 / 5.3.0 | Bundled fonts (no runtime fetch) |
+| @fontsource-variable/ibm-plex-sans / @fontsource/ibm-plex-serif / @fontsource/ibm-plex-mono | 5.3.0 / 5.3.0 / 5.3.0 | Bundled fonts (no runtime fetch); replaced Inter and JetBrains Mono on 2026-10-20 (direction §10) |
 | @types/react / @types/react-dom | 19.3.0 | |
 | @testing-library/react / user-event / jest-dom | 16.3.3 / 14.6.8 / 7.0.1 | Component tests |
 | jsdom | 30.1.3 | Vitest DOM environment |

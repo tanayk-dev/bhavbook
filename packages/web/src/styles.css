@@ -1,5 +1,6 @@
 /* BhavBook design tokens (docs/design/direction.md §4). Light "warm paper" is the default; dark follows the
-   `.dark` class. shadcn/ui components read the same variables (background, foreground, primary, ...). */
+   `.dark` class. Colours come from the product, a ruled account book: ledger-rule blue for actions, pencil ochre
+   for attention, green and red only for gain and loss (no Tailwind indigo, no orange, no teal defaults). shadcn/ui components read the same variables (background, foreground, primary, ...). */
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
@@ -11,11 +12,11 @@
   --rule: #e7e3da;
   --ink: #1c1e21;
   --ink-muted: #6b6f76;
-  --accent-ink: #2f4aa8;
+  --accent-ink: #1f5a8a;
   --gain: #1e7a46;
   --loss: #b42318;
-  --attention: #965800;
-  --reconciled: #0f766e;
+  --attention: #7a5c00;
+  --reconciled: #1f5a8a;
 
   /* shadcn/ui names */
   --background: var(--paper);
@@ -30,7 +31,7 @@
   --secondary-foreground: var(--ink);
   --muted: #f1eee7;
   --muted-foreground: var(--ink-muted);
-  --accent: #eef1fb;
+  --accent: #e8f0f7;
   --accent-foreground: var(--accent-ink);
   --destructive: var(--loss);
   --border: var(--rule);
@@ -45,20 +46,21 @@
   --rule: #2a2e33;
   --ink: #e8e6e1;
   --ink-muted: #9ba0a6;
-  --accent-ink: #8da2f0;
+  --accent-ink: #8bb8e8;
   --gain: #5cc48a;
   --loss: #f07a6e;
-  --attention: #e9a23b;
-  --reconciled: #4fc1b3;
+  --attention: #d9b44a;
+  --reconciled: #8bb8e8;
   --primary-foreground: #111315;
   --secondary: #202428;
   --muted: #202428;
-  --accent: #1f2640;
+  --accent: #16283a;
 }
 
 @theme inline {
-  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-sans: 'IBM Plex Sans Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-serif: 'IBM Plex Serif', ui-serif, Georgia, serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
   --color-paper: var(--paper);
   --color-surface: var(--surface);
   --color-rule: var(--rule);
@@ -105,6 +107,11 @@
   body {
     @apply bg-background text-foreground font-sans antialiased;
     line-height: 20px;
+  }
+  /* Page titles are set in Plex Serif, like a ledger's ruled heading; everything else is Plex Sans. */
+  h1 {
+    font-family: var(--font-serif);
+    letter-spacing: -0.005em;
   }
   /* Figures line up like a ledger: tabular, slashed zero (direction §4.1). */
   .figure {
