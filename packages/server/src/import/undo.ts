@@ -70,7 +70,7 @@ function reinsertStatements(
 export function removeBatch(db: Database.Database, batchId: string): UndoResult {
   const accountId = db.prepare('SELECT account_id FROM import_batch WHERE id = ?').pluck().get(batchId) as
     string | undefined;
-  if (accountId === undefined) throw new ImportError('unknown import batch');
+  if (accountId === undefined) throw new ImportError('unknown import batch', { code: 'not_found' });
   const tradeKeys = db
     .prepare('SELECT dedup_key FROM trade_row WHERE batch_id = ?')
     .pluck()

@@ -29,6 +29,7 @@ import {
   renameProfileSchema,
 } from '../services/profiles.js';
 import { breakevenSchema, readSettings, setBreakeven } from '../services/settings.js';
+import { ImportError, MAX_PREVIEW_BYTES, type ImportErrorCode, type ImportService } from '../import/index.js';
 import {
   createTag,
   deleteTag,
@@ -50,6 +51,7 @@ import {
   type LiveVault,
   type RestoreErrorCode,
 } from './backups.js';
+import { importServices, previewFiles } from './imports.js';
 import { jsonResponse } from './json.js';
 import type { Logger } from './logger.js';
 import {
@@ -76,7 +78,7 @@ export interface AppOptions {
   readonly backups?: BackupHost;
 }
 
-type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 500 | 501 | 503;
+type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 410 | 413 | 415 | 422 | 500 | 501 | 503;
 
 const error = (code: string, status: ErrorStatus): Response => jsonResponse({ error: code }, status);
 
@@ -141,6 +143,58 @@ function upload() {
   ] as const;
 }
 
+const accountQuery = z.object({ accountId: z.string().min(1).max(64) });
+const commitSchema = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();
+/** Multipart overhead on top of the files themselves (boundaries, part headers, the account and kind fields). */
+const MULTIPART_SLACK_BYTES = 64 * 1024;
+
+function query<T extends z.ZodType>(schema: T) {
+  return validator('query', (value) => {
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) return error('invalid_request', 400);
+    return parsed.data;
+  });
+}
+
+/** A multipart upload of import files, capped at what one preview may hold. */
+function multipart() {
+  const contentType: MiddlewareHandler = async (c, next) => {
+    const type = c.req.header('content-type') ?? '';
+    if (!/^multipart\/form-data;/i.test(type)) return error('unsupported_media_type', 415);
+    await next();
+    return undefined;
+  };
+  const limit = bodyLimit({
+    maxSize: MAX_PREVIEW_BYTES + MULTIPART_SLACK_BYTES,
+    onError: () => error('payload_too_large', 413),
+  });
+  return [contentType, limit] as const;
+}
+
+const IMPORT_STATUS: Readonly<Record<Exclude<ImportErrorCode, 'failed'>, ErrorStatus>> = {
+  not_found: 404,
+  no_files: 400,
+  too_large: 413,
+  preview_expired: 410,
+  backup_failed: 500,
+};
+
+/** Runs an import action; an ImportError answers its fixed code, anything unexpected is a 500. */
+async function withImports(
+  services: () => ImportService | null,
+  action: (service: ImportService) => Promise<Response> | Response,
+): Promise<Response> {
+  const service = services();
+  if (service === null) return error('no_vault', 503);
+  try {
+    return await action(service);
+  } catch (cause) {
+    if (cause instanceof ImportError && cause.code !== 'failed')
+      return error(cause.code, IMPORT_STATUS[cause.code]);
+    throw cause;
+  }
+}
+
 /** Profile and account bodies are a few short labels. */
 const SMALL_JSON_BYTES = 4 * 1024;
 
@@ -203,6 +257,7 @@ async function restoreResponse(
 
 function apiRoutes(options: AppOptions, live: LiveVault) {
   const host = options.backups;
+  const imports = importServices(live, host);
   return (
     new Hono()
       .get('/health', () => jsonResponse({ ok: true }))
@@ -271,9 +326,29 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
         // Streamed to disk, never buffered: a backup can be hundreds of megabytes.
         return restoreResponse(() => restoreUpload(live, host, c.req.raw.body));
       })
-      .get('/imports', notImplemented)
-      .post('/imports', notImplemented)
-      .get('/coverage', notImplemented)
+      .get('/imports', query(accountQuery), (c) =>
+        withImports(imports, (service) =>
+          c.json({ imports: service.history(c.req.valid('query').accountId) }),
+        ),
+      )
+      // Preview: writes nothing; the reply's token commits exactly what was previewed, once, within 15 minutes.
+      .post('/imports', ...multipart(), query(accountQuery), (c) =>
+        withImports(imports, async (service) => {
+          const files = await previewFiles(c);
+          return jsonResponse(await service.previewImport(c.req.valid('query').accountId, files));
+        }),
+      )
+      .post('/imports/commit', ...json(commitSchema, SMALL_JSON_BYTES), (c) =>
+        withImports(imports, (service) => jsonResponse(service.commitImport(c.req.valid('json').token))),
+      )
+      .delete('/imports/:id', params(idParam), (c) =>
+        withImports(imports, (service) => jsonResponse(service.undoImport(c.req.valid('param').id))),
+      )
+      .get('/coverage', query(accountQuery), (c) =>
+        withImports(imports, (service) =>
+          c.json({ coverage: service.coverage(c.req.valid('query').accountId) }),
+        ),
+      )
       .get('/issues', notImplemented)
       .post('/issues/:id/resolve', params(idParam), notImplemented)
       .get('/positions', notImplemented)

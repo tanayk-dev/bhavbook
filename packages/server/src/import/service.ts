@@ -8,6 +8,7 @@ import { autoBackup } from '../vault/index.js';
 import { writeBatches, type CommittedBatch } from './commit.js';
 import { accountCoverage, type KindCoverage } from './coverage.js';
 import { ImportError } from './errors.js';
+import { listImports, type ImportRecord } from './history.js';
 import { previewFile, type FilePreview, type ImportFile, type ParsedFile, type SeenKeys } from './preview.js';
 import { MAX_IMPORT_BYTES } from './read.js';
 import { removeBatch, type UndoResult } from './undo.js';
@@ -52,6 +53,8 @@ export interface ImportService {
   /** Removes one committed batch (pre-undo backup, one transaction, then the recompute hook). */
   undoImport(batchId: string): UndoResult;
   coverage(accountId: string): KindCoverage[];
+  /** The account's committed batches, newest first. */
+  history(accountId: string): ImportRecord[];
 }
 
 interface Pending {
@@ -66,10 +69,12 @@ interface Account {
 }
 
 function checkBounds(files: readonly ImportFile[]): void {
-  if (files.length === 0) throw new ImportError('no files to preview');
-  if (files.length > MAX_PREVIEW_FILES) throw new ImportError('too many files in one preview');
+  if (files.length === 0) throw new ImportError('no files to preview', { code: 'no_files' });
+  if (files.length > MAX_PREVIEW_FILES)
+    throw new ImportError('too many files in one preview', { code: 'too_large' });
   const total = files.reduce((sum, file) => sum + file.bytes.length, 0);
-  if (total > MAX_PREVIEW_BYTES) throw new ImportError('the files are too large to preview together');
+  if (total > MAX_PREVIEW_BYTES)
+    throw new ImportError('the files are too large to preview together', { code: 'too_large' });
 }
 
 export function createImportService(options: ImportServiceOptions): ImportService {
@@ -81,7 +86,7 @@ export function createImportService(options: ImportServiceOptions): ImportServic
   const accountOf = (accountId: string): Account => {
     const account = db.prepare('SELECT id, broker FROM broker_account WHERE id = ?').get(accountId) as
       Account | undefined;
-    if (account === undefined) throw new ImportError('unknown account');
+    if (account === undefined) throw new ImportError('unknown account', { code: 'not_found' });
     return account;
   };
 
@@ -129,13 +134,17 @@ export function createImportService(options: ImportServiceOptions): ImportServic
     commitImport(token) {
       forgetExpired();
       const entry = pending.get(token);
-      if (entry === undefined) throw new ImportError('the preview has expired; preview the files again');
+      if (entry === undefined)
+        throw new ImportError('the preview has expired; preview the files again', {
+          code: 'preview_expired',
+        });
       accountOf(entry.accountId);
       const at = now();
       try {
         autoBackup(db, vaultPath, 'pre-import', { appVersion, now: () => at });
       } catch (error) {
         throw new ImportError('could not back up the vault before importing; nothing was written', {
+          code: 'backup_failed',
           cause: error,
         });
       }
@@ -154,13 +163,14 @@ export function createImportService(options: ImportServiceOptions): ImportServic
     undoImport(batchId) {
       // Cheap check first, so an unknown or already-undone batch never costs a backup.
       if (db.prepare('SELECT 1 FROM import_batch WHERE id = ?').get(batchId) === undefined) {
-        throw new ImportError('unknown import batch');
+        throw new ImportError('unknown import batch', { code: 'not_found' });
       }
       const at = now();
       try {
         autoBackup(db, vaultPath, 'pre-undo', { appVersion, now: () => at });
       } catch (error) {
         throw new ImportError('could not back up the vault before the undo; nothing was changed', {
+          code: 'backup_failed',
           cause: error,
         });
       }
@@ -178,6 +188,11 @@ export function createImportService(options: ImportServiceOptions): ImportServic
     coverage(accountId) {
       accountOf(accountId);
       return accountCoverage(db, accountId);
+    },
+
+    history(accountId) {
+      accountOf(accountId);
+      return listImports(db, accountId);
     },
   };
 }
