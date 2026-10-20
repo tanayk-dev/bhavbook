@@ -2,20 +2,21 @@
 // separated by rules, not shadows or nested cards. Surfaces appear in the rail as their plan steps build them.
 // Touch targets grow to 44 px on the phone layout (direction §7).
 import { Link } from '@tanstack/react-router';
-import { BookOpen, Moon, Settings, Sun, type LucideIcon } from 'lucide-react';
+import { BookOpen, FileUp, Moon, Settings, Sun, type LucideIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { applyTheme, currentTheme, safeStorage, type Theme } from '@/lib/theme';
 
 export interface NavItem {
-  readonly to: '/' | '/settings';
+  readonly to: '/' | '/import' | '/settings';
   readonly label: string;
   readonly icon: LucideIcon;
 }
 
-/** The surfaces built so far (PRD §4); later steps add Review, Positions, Issues, Dashboard, Import and more. */
+/** The surfaces built so far (PRD §4); later steps add Review, Positions, Issues, Dashboard and more. */
 export const NAV: readonly NavItem[] = [
   { to: '/', label: 'Overview', icon: BookOpen },
+  { to: '/import', label: 'Import', icon: FileUp },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 

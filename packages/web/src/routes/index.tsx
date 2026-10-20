@@ -86,8 +86,10 @@ function Overview() {
         <>
           <Accounts profiles={profiles.data} />
           <EmptyState title="No trades yet">
-            Import a Zerodha tradebook or a Dhan trade history to rebuild your positions. The import wizard
-            arrives in a later step of this pre-alpha build.
+            <Link to="/import" className="text-primary underline-offset-4 hover:underline">
+              Import a Zerodha tradebook or a Dhan trade history
+            </Link>{' '}
+            to rebuild your positions.
           </EmptyState>
         </>
       ) : null}
