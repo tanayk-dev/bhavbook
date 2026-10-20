@@ -185,6 +185,15 @@ function webRoutes(app: Hono, staticRoot: string | null | undefined): void {
       return undefined;
     });
     app.get('*', serveStatic({ root: staticRoot }));
+    // Client routes (`/settings`, `/positions/:id`): the SPA's index.html. Paths with a file extension (a missing
+    // asset) and the API stay 404.
+    app.get('*', async (c, next) => {
+      const last = c.req.path.split('/').at(-1) ?? '';
+      if (c.req.path.startsWith('/api/') || last.includes('.')) return error('not_found', 404);
+      await next();
+      return undefined;
+    });
+    app.get('*', serveStatic({ root: staticRoot, path: 'index.html' }));
     return;
   }
   app.get('/', (c: Context) => c.html(PLACEHOLDER_PAGE));

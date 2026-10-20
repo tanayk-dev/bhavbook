@@ -5,6 +5,7 @@ import prettier from 'eslint-config-prettier';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 import bhavbook from 'eslint-plugin-bhavbook';
+import reactHooks from 'eslint-plugin-react-hooks';
 
 // Source only: tests may read fixtures from disk and build expectations freely.
 const MONEY_PACKAGES = ['packages/core/src/**/*.ts', 'packages/adapters/src/**/*.ts'];
@@ -44,6 +45,9 @@ export default defineConfig(
       'plans/**',
       '**/fixtures/**',
       'tools/eslint-plugin-bhavbook/test/fixtures/**',
+      '**/routeTree.gen.ts',
+      'playwright-report/**',
+      'test-results/**',
     ],
   },
   js.configs.recommended,
@@ -84,6 +88,28 @@ export default defineConfig(
             name,
             message: 'core and adapters are pure: do I/O in packages/server (plan invariant 6).',
           })),
+        },
+      ],
+    },
+  },
+  {
+    // The browser bundle: hooks rules, and only the browser-safe parts of the workspace. The server is imported
+    // for its types only (the RPC contract); core only through its money subpath (no zod or fee-rule JSON).
+    files: ['packages/web/src/**/*.{ts,tsx}'],
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@bhavbook/server',
+              allowTypeImports: true,
+              message: 'The server runs in Node: import its types only.',
+            },
+            { name: '@bhavbook/core', message: 'Import browser-safe subpaths such as @bhavbook/core/money.' },
+          ],
         },
       ],
     },

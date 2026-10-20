@@ -156,6 +156,21 @@ describe('static web build', () => {
     });
   });
 
+  it('serves index.html for client routes (deep links), never for API paths or missing assets', async () => {
+    await withTempDir(async (dir) => {
+      mkdirSync(path.join(dir, 'assets'));
+      writeFileSync(path.join(dir, 'index.html'), '<p>web build</p>');
+      const test = testApp({ staticRoot: dir });
+      for (const route of ['/settings', '/positions/abc', '/review']) {
+        const response = await send(test, route);
+        expect([route, response.status, await response.text()]).toEqual([route, 200, '<p>web build</p>']);
+      }
+      expect((await send(test, '/assets/missing.js')).status).toBe(404);
+      expect((await send(test, '/api/nope')).status).toBe(404);
+      expect((await send(test, '/settings', { headers: { cookie: null } })).status).toBe(401);
+    });
+  });
+
   it('serves a placeholder page when there is no web build yet', async () => {
     const response = await send(testApp({ staticRoot: null }), '/');
     expect(response.status).toBe(200);

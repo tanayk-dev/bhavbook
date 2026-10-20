@@ -54,3 +54,43 @@ jobs:
 
       - name: PII scan
         run: pnpm pii:scan
+
+  e2e:
+    name: e2e (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable pnpm via corepack (version from package.json packageManager)
+        run: corepack enable
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium for Playwright
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build the web app and run the end-to-end tests
+        run: pnpm e2e
+
+      - name: Keep screenshots and traces
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: e2e-${{ matrix.os }}
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

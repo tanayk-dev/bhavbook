@@ -32,3 +32,5 @@ docs/broker-exports/**
 !docs/broker-exports/**/
 !docs/broker-exports/**/*.md
 !docs/broker-exports/**/.gitkeep
+playwright-report/
+test-results/

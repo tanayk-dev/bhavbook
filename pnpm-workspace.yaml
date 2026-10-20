@@ -9,6 +9,9 @@ minimumReleaseAge: 4320
 # but were younger than the 3-day window at install time. Remove each entry once it has aged out.
 minimumReleaseAgeExclude:
   - eslint@10.13.0
+  - '@tanstack/react-query@5.104.4'
+  - '@tanstack/query-core@5.104.4'
+  - shadcn@4.22.1
 
 # Install scripts are denied by default; allow only packages that need a native/binary step.
 allowBuilds:
