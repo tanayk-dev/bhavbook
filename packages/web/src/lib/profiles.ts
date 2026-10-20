@@ -64,15 +64,20 @@ export async function createAccount(input: {
   return createdId(await readJson(await send(() => api.accounts.$post({ json: input }))));
 }
 
+const SAVE_ERRORS: Readonly<Record<string, string>> = {
+  identifier: 'That looks like a client ID or PAN. Choose a name of your own.',
+  invalid: 'Use 1 to 40 letters, digits or spaces, without line breaks.',
+  invalid_request: 'Use 1 to 40 letters, digits or spaces, without line breaks.',
+  not_found: 'That profile no longer exists. Reload the page and try again.',
+};
+
 /** What to tell the person when saving failed. */
 export function saveError(error: unknown, what: 'profile' | 'account'): string {
-  if (error instanceof ApiError && error.code === 'conflict') {
+  if (!(error instanceof ApiError)) return 'Could not save. Try again.';
+  if (error.code === 'conflict') {
     return what === 'profile'
       ? 'You already have a profile with this name.'
       : 'This profile already has an account with this nickname.';
   }
-  if (error instanceof ApiError && (error.code === 'invalid_request' || error.code === 'invalid')) {
-    return 'Use 1 to 40 characters, without line breaks.';
-  }
-  return 'Could not save. Try again.';
+  return SAVE_ERRORS[error.code] ?? 'Could not save. Try again.';
 }

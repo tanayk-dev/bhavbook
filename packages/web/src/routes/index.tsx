@@ -62,7 +62,7 @@ function Overview() {
   const failure = vault.error ?? profiles.error;
   const disconnection = failure instanceof ApiError ? failure.disconnection : null;
   if (disconnection !== null) return <Disconnected reason={disconnection} />;
-  if (profiles.isSuccess && profiles.data.length === 0) return <Navigate to="/onboarding" />;
+  if (profiles.isSuccess && profiles.data.length === 0) return <Navigate to="/onboarding" replace />;
   return (
     <div className="space-y-5">
       <div className="flex items-baseline justify-between gap-4">

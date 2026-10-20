@@ -78,14 +78,14 @@ function params<T extends z.ZodType>(schema: T) {
 }
 
 /** JSON bodies: application/json only, size-capped, parsed, then validated. Failures never echo the input. */
-function json<T extends z.ZodType>(schema: T) {
+function json<T extends z.ZodType>(schema: T, maxSize = MAX_JSON_BYTES) {
   const contentType: MiddlewareHandler = async (c, next) => {
     const type = c.req.header('content-type') ?? '';
     if (!/^application\/json(;|$)/i.test(type)) return error('unsupported_media_type', 415);
     await next();
     return undefined;
   };
-  const limit = bodyLimit({ maxSize: MAX_JSON_BYTES, onError: () => error('payload_too_large', 413) });
+  const limit = bodyLimit({ maxSize, onError: () => error('payload_too_large', 413) });
   const parse = validator('json', (value) => {
     const parsed = schema.safeParse(value);
     if (!parsed.success) return error('invalid_request', 400);
@@ -94,8 +94,12 @@ function json<T extends z.ZodType>(schema: T) {
   return [contentType, limit, parse] as const;
 }
 
+/** Profile and account bodies are a few short labels. */
+const SMALL_JSON_BYTES = 4 * 1024;
+
 const PROFILE_ERRORS: Readonly<Record<ProfileError['code'], ErrorStatus>> = {
   invalid: 400,
+  identifier: 400,
   conflict: 409,
   not_found: 404,
 };
@@ -120,10 +124,10 @@ function apiRoutes(options: AppOptions) {
         : jsonResponse({ schemaVersion: currentVersion(options.vault) }),
     )
     .get('/profiles', (c) => withVault(options, (db) => c.json({ profiles: listProfiles(db) })))
-    .post('/profiles', ...json(profileInputSchema), (c) =>
+    .post('/profiles', ...json(profileInputSchema, SMALL_JSON_BYTES), (c) =>
       withVault(options, (db) => c.json({ id: createProfile(db, c.req.valid('json')) }, 201)),
     )
-    .post('/accounts', ...json(accountInputSchema), (c) =>
+    .post('/accounts', ...json(accountInputSchema, SMALL_JSON_BYTES), (c) =>
       withVault(options, (db) => c.json({ id: createAccount(db, c.req.valid('json')) }, 201)),
     )
     .post('/vault/backup', notImplemented)

@@ -186,3 +186,63 @@ describe('onboarding', () => {
     expect(profiles[0]?.accounts).toEqual([{ id: 'a1', broker: 'zerodha', nickname: 'Z main' }]);
   });
 });
+
+describe('onboarding (review follow-ups)', () => {
+  it('the redirect to onboarding replaces the history entry (no Back-button trap)', async () => {
+    const { routes } = onboardingServer();
+    const { router } = renderApp(routes);
+    await screen.findByLabelText('Profile name');
+    expect(router.state.location.pathname).toBe('/onboarding');
+    expect(router.history.length).toBe(1);
+  });
+
+  it('each new step takes the keyboard focus, and a failed save returns it to the field', async () => {
+    const { routes } = onboardingServer();
+    renderApp(routes);
+    await userEvent.type(await screen.findByLabelText('Profile name'), 'Swing{Enter}');
+    expect(await screen.findByRole('heading', { name: 'Add a broker account' })).toHaveFocus();
+    await userEvent.click(screen.getByRole('button', { name: 'Create another profile instead' }));
+    expect(await screen.findByRole('heading', { name: 'Name a profile' })).toHaveFocus();
+    await userEvent.type(screen.getByLabelText('Profile name'), 'swing{Enter}');
+    expect(await screen.findByText('You already have a profile with this name.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Profile name')).toHaveFocus();
+    await userEvent.type(screen.getByLabelText('Profile name'), 'x');
+    expect(screen.queryByText('You already have a profile with this name.')).toBeNull();
+  });
+
+  it('"Create another profile" has a way back, and the step line follows the form', async () => {
+    const { profiles, routes } = onboardingServer();
+    profiles.push({ id: 'p1', name: 'Swing', accounts: [] });
+    renderApp(routes, '/onboarding');
+    expect(await screen.findByText(/Step 2 of 2/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Create another profile instead' }));
+    expect(screen.getByText(/Step 1 of 2/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the account' }));
+    expect(await screen.findByRole('heading', { name: 'Add a broker account' })).toHaveFocus();
+  });
+
+  it('a new profile is preselected for its first account', async () => {
+    const { profiles, routes } = onboardingServer();
+    profiles.push({ id: 'p1', name: 'Swing', accounts: [] });
+    renderApp(routes, '/onboarding');
+    await userEvent.click(await screen.findByRole('button', { name: 'Create another profile instead' }));
+    await userEvent.type(screen.getByLabelText('Profile name'), 'Long-term{Enter}');
+    expect(await screen.findByLabelText('Profile')).toHaveDisplayValue('Long-term');
+  });
+
+  it('explains an identifier-shaped nickname and a vanished profile', async () => {
+    const { profiles, routes } = onboardingServer();
+    profiles.push({ id: 'p1', name: 'Swing', accounts: [] });
+    let reply = { status: 400, body: { error: 'identifier' } };
+    renderApp({ ...routes, 'POST /api/accounts': () => reply }, '/onboarding');
+    await userEvent.type(await screen.findByLabelText('Nickname'), 'ZM1234{Enter}');
+    expect(
+      await screen.findByText('That looks like a client ID or PAN. Choose a name of your own.'),
+    ).toBeInTheDocument();
+    reply = { status: 404, body: { error: 'not_found' } };
+    await userEvent.type(screen.getByLabelText('Nickname'), '{Backspace}{Enter}');
+    expect(
+      await screen.findByText('That profile no longer exists. Reload the page and try again.'),
+    ).toBeInTheDocument();
+  });
+});

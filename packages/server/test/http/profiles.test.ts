@@ -137,3 +137,108 @@ describe('profiles and accounts (HTTP)', () => {
     });
   });
 });
+
+describe('S13a-2 review: labels and requests', () => {
+  const code = (run: () => unknown): string => {
+    try {
+      run();
+      return 'ok';
+    } catch (error) {
+      return error instanceof ProfileError ? error.code : 'other';
+    }
+  };
+
+  it.each([
+    ['a PAN', 'ABCDE1234F'],
+    ['a PAN with spaces', 'abcde 1234 f'],
+    ['a Zerodha-style client ID', 'ZM1234'],
+    ['a numeric client ID', '1100123456'],
+  ])('refuses a label shaped like %s', async (_, nickname) => {
+    await withFreshVault((db) => {
+      const profile = createProfile(db, { name: 'Swing' });
+      expect(code(() => createAccount(db, { profileId: profile, broker: 'dhan', nickname }))).toBe(
+        'identifier',
+      );
+      expect(code(() => createProfile(db, { name: nickname }))).toBe('identifier');
+    });
+  });
+
+  it.each([
+    ['a line separator', 'a\u2028b'],
+    ['a paragraph separator', 'a\u2029b'],
+    ['a no-break space', 'a\u00a0b'],
+    ['a blank-looking filler only', '\u3164\u3164'],
+    ['braille blanks only', '\u2800'],
+    ['punctuation only', '---'],
+    ['a private-use character', 'a\ue000'],
+    ['a lone surrogate', 'a\ud800b'],
+  ])('refuses a label with %s', async (_, name) => {
+    await withFreshVault((db) => {
+      expect(code(() => createProfile(db, { name }))).toBe('invalid');
+    });
+  });
+
+  it('keeps ordinary labels, NFC-normalised, and folds case beyond ASCII', async () => {
+    await withFreshVault((db) => {
+      createProfile(db, { name: 'Cafe\u0301 swing' });
+      expect(listProfiles(db).map((profile) => profile.name)).toEqual(['Caf\u00e9 swing']);
+      expect(code(() => createProfile(db, { name: 'CAF\u00c9 SWING' }))).toBe('conflict');
+      expect(code(() => createProfile(db, { name: 'Long-term 2024' }))).toBe('ok');
+    });
+  });
+
+  it('the database itself refuses a duplicate (ASCII case-insensitive)', async () => {
+    await withFreshVault((db) => {
+      const profile = createProfile(db, { name: 'Swing' });
+      createAccount(db, { profileId: profile, broker: 'dhan', nickname: 'Main' });
+      const entity = db.prepare('SELECT pan_entity_id FROM profile').pluck().get();
+      expect(() =>
+        db
+          .prepare("INSERT INTO profile (id, pan_entity_id, name, created_at) VALUES ('x', ?, 'SWING', 'x')")
+          .run(entity),
+      ).toThrow(/UNIQUE/);
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO broker_account (id, profile_id, broker, nickname, created_at) VALUES ('y', ?, 'dhan', 'MAIN', 'x')",
+          )
+          .run(profile),
+      ).toThrow(/UNIQUE/);
+    });
+  });
+
+  it('mutating routes refuse a missing Origin, a cross-site fetch, the wrong content type and big bodies', async () => {
+    await withFreshVault(async (db) => {
+      const test = testApp({}, db);
+      const json = { 'content-type': 'application/json' };
+      const statuses = [
+        (await send(test, '/api/profiles', { ...post({ name: 'A' }), headers: { ...json, origin: null } }))
+          .status,
+        (
+          await send(test, '/api/profiles', {
+            ...post({ name: 'A' }),
+            headers: { ...json, 'sec-fetch-site': 'cross-site' },
+          })
+        ).status,
+        (
+          await send(test, '/api/profiles', {
+            ...post({ name: 'A' }),
+            headers: { 'content-type': 'text/plain' },
+          })
+        ).status,
+        (await send(test, '/api/profiles', post({ name: 'x'.repeat(5000) }))).status,
+      ];
+      expect(statuses).toEqual([403, 403, 415, 413]);
+      expect(db.prepare('SELECT count(*) FROM profile').pluck().get()).toBe(0n);
+    });
+  });
+
+  it('never logs a label', async () => {
+    await withFreshVault(async (db) => {
+      const test = testApp({}, db);
+      await send(test, '/api/profiles', post({ name: 'MARKER profile' }));
+      await send(test, '/api/profiles', post({ name: 'MARKER profile' }));
+      expect(test.lines.join('\n')).not.toContain('MARKER');
+    });
+  });
+});
