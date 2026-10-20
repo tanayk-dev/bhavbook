@@ -7,3 +7,6 @@ docs/broker-exports
 docs
 plans
 .claude
+**/routeTree.gen.ts
+playwright-report
+test-results

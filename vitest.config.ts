@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import react from '@vitejs/plugin-react';
 import { defineConfig, type TestProjectInlineConfiguration } from 'vitest/config';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -12,6 +13,19 @@ const NO_OUTBOUND = path.join(ROOT, 'scripts', 'no-outbound-sockets.ts');
 // (ADR-0005).
 const OVERRIDES: Readonly<Record<string, TestProjectInlineConfiguration['test']>> = {
   '@bhavbook/core': { env: { TZ: 'America/New_York' } },
+  // The web UI renders in jsdom with Testing Library's matchers.
+  '@bhavbook/web': {
+    environment: 'jsdom',
+    setupFiles: [NO_OUTBOUND, path.join(ROOT, 'packages', 'web', 'test', 'setup.ts')],
+  },
+};
+
+/** Project-level (non-test) settings: the web project compiles TSX and resolves its `@/` alias. */
+const PROJECT_EXTRAS: Readonly<Record<string, Omit<TestProjectInlineConfiguration, 'test'>>> = {
+  '@bhavbook/web': {
+    plugins: [react()],
+    resolve: { alias: { '@': path.join(ROOT, 'packages', 'web', 'src') } },
+  },
 };
 
 /** One project per package and tool, inheriting this root config (setup files) via `extends: true`. */
@@ -22,7 +36,7 @@ function projects(): TestProjectInlineConfiguration[] {
       .filter((dir) => existsSync(path.join(dir, 'package.json')))
       .map((dir) => {
         const { name } = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name: string };
-        return { extends: true, test: { name, root: dir, ...OVERRIDES[name] } };
+        return { extends: true, ...PROJECT_EXTRAS[name], test: { name, root: dir, ...OVERRIDES[name] } };
       }),
   );
 }
@@ -41,7 +55,9 @@ export default defineConfig({
       include: ['packages/*/src/**', 'tools/*/src/**'],
       // Worker-thread bodies run outside the main isolate, where V8 coverage can't see them; they are exercised
       // end-to-end by their callers' tests. Keep them to a thin shell over an in-process, covered module.
-      exclude: ['**/*-worker.mjs'],
+      // The router's generated route tree and the browser entry (exercised end to end by Playwright) are not unit
+      // tested.
+      exclude: ['**/*-worker.mjs', '**/routeTree.gen.ts', 'packages/web/src/main.tsx'],
       reporter: ['text', 'html', 'json-summary'],
       thresholds: {
         lines: 80,

@@ -4,6 +4,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import Database from 'better-sqlite3';
 import {
@@ -30,6 +31,9 @@ export interface CliIo {
 }
 
 const MIN_NODE: readonly [number, number] = [24, 11];
+
+/** The web build (`pnpm --filter @bhavbook/web build`); without it the server shows a placeholder page. */
+const WEB_BUILD = fileURLToPath(new URL('../../web/dist/', import.meta.url));
 
 const USAGE = `usage:
   bhavbook [--vault <path>] [--port <n>] [--no-open]   start BhavBook and open it in your browser
@@ -124,7 +128,9 @@ async function serveCommand(args: Parsed, io: CliIo): Promise<number> {
       const logger = createLogger((line) => {
         io.err(line);
       });
-      const server = await startServer({ token, logger, vault: db, port: args.port });
+      if (!existsSync(WEB_BUILD))
+        io.err('The web interface is not built yet: run pnpm --filter @bhavbook/web build.');
+      const server = await startServer({ token, logger, vault: db, port: args.port, staticRoot: WEB_BUILD });
       try {
         io.out(`BhavBook is running at ${server.url}`);
         io.out('Press Ctrl+C to stop.');
