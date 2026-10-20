@@ -202,7 +202,7 @@ Every surface implements these states. Each state names what triggers it, what t
 - **Keyboard first.** Every action is reachable from the keyboard, focus is always visible (2 px `--accent` ring), and the review queue has the keyboard model in §5.1.
 - **Labels and targets.** Every input and icon button has a label, and touch targets on the phone layout are at least 44 px.
 - **Gain and loss** always pair colour with a sign and a glyph (§4.2).
-- **Rendered finish gate** for each screen build step (S13a–S13d):
+- **Rendered finish gate** for each screen build step (S13a–S15b):
   - Playwright screenshots at 1440×900, 1280×800, 1024×768 and 390×844, in light and dark, each content state exercised.
   - Kept as artifacts with a JSON evidence record checked by the design skill's `check-evidence.js`.
   - Untested states are reported as untested.

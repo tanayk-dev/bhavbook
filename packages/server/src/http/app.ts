@@ -13,6 +13,14 @@ import { HTTPException } from 'hono/http-exception';
 import { routePath } from 'hono/route';
 import { validator } from 'hono/validator';
 import { z } from 'zod';
+import {
+  accountInputSchema,
+  createAccount,
+  createProfile,
+  listProfiles,
+  ProfileError,
+  profileInputSchema,
+} from '../services/profiles.js';
 import { currentVersion } from '../vault/index.js';
 import { jsonResponse } from './json.js';
 import type { Logger } from './logger.js';
@@ -38,7 +46,7 @@ export interface AppOptions {
   readonly staticRoot?: string | null;
 }
 
-type ErrorStatus = 400 | 401 | 403 | 404 | 413 | 415 | 500 | 501 | 503;
+type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 500 | 501 | 503;
 
 const error = (code: string, status: ErrorStatus): Response => jsonResponse({ error: code }, status);
 
@@ -70,20 +78,41 @@ function params<T extends z.ZodType>(schema: T) {
 }
 
 /** JSON bodies: application/json only, size-capped, parsed, then validated. Failures never echo the input. */
-function json<T extends z.ZodType>(schema: T) {
+function json<T extends z.ZodType>(schema: T, maxSize = MAX_JSON_BYTES) {
   const contentType: MiddlewareHandler = async (c, next) => {
     const type = c.req.header('content-type') ?? '';
     if (!/^application\/json(;|$)/i.test(type)) return error('unsupported_media_type', 415);
     await next();
     return undefined;
   };
-  const limit = bodyLimit({ maxSize: MAX_JSON_BYTES, onError: () => error('payload_too_large', 413) });
+  const limit = bodyLimit({ maxSize, onError: () => error('payload_too_large', 413) });
   const parse = validator('json', (value) => {
     const parsed = schema.safeParse(value);
     if (!parsed.success) return error('invalid_request', 400);
     return parsed.data;
   });
   return [contentType, limit, parse] as const;
+}
+
+/** Profile and account bodies are a few short labels. */
+const SMALL_JSON_BYTES = 4 * 1024;
+
+const PROFILE_ERRORS: Readonly<Record<ProfileError['code'], ErrorStatus>> = {
+  invalid: 400,
+  identifier: 400,
+  conflict: 409,
+  not_found: 404,
+};
+
+/** Runs a vault action; a missing vault is 503 and a ProfileError its fixed code (ADR-0019). */
+function withVault(options: AppOptions, action: (db: Database.Database) => Response): Response {
+  if (options.vault === null) return error('no_vault', 503);
+  try {
+    return action(options.vault);
+  } catch (cause) {
+    if (cause instanceof ProfileError) return error(cause.code, PROFILE_ERRORS[cause.code]);
+    throw cause;
+  }
 }
 
 function apiRoutes(options: AppOptions) {
@@ -93,6 +122,13 @@ function apiRoutes(options: AppOptions) {
       options.vault === null
         ? error('no_vault', 503)
         : jsonResponse({ schemaVersion: currentVersion(options.vault) }),
+    )
+    .get('/profiles', (c) => withVault(options, (db) => c.json({ profiles: listProfiles(db) })))
+    .post('/profiles', ...json(profileInputSchema, SMALL_JSON_BYTES), (c) =>
+      withVault(options, (db) => c.json({ id: createProfile(db, c.req.valid('json')) }, 201)),
+    )
+    .post('/accounts', ...json(accountInputSchema, SMALL_JSON_BYTES), (c) =>
+      withVault(options, (db) => c.json({ id: createAccount(db, c.req.valid('json')) }, 201)),
     )
     .post('/vault/backup', notImplemented)
     .post('/vault/restore', notImplemented)
