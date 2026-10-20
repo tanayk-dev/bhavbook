@@ -40,11 +40,13 @@ export function listBackups(vaultPath: string): BackupEntry[] {
     const stats = statSync(path.join(dir, name), { throwIfNoEntry: false });
     if (stats?.isFile() === true) entries.push({ ...parsed, bytes: stats.size });
   }
-  // Same millisecond: the bare name is the first, then -2, -3 (string order would put -10 before -2).
+  // Newest first. Same millisecond: a higher collision counter is newer (numeric, so -10 is newer than -2), then
+  // by name so the order never depends on the directory listing.
   const counter = (name: string) => Number.parseInt(BACKUP_NAME.exec(name)?.[8] ?? '1', 10);
-  return entries.sort((a, b) =>
-    a.createdAt === b.createdAt ? counter(b.name) - counter(a.name) : a.createdAt < b.createdAt ? 1 : -1,
-  );
+  return entries.sort((a, b) => {
+    if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+    return counter(b.name) - counter(a.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  });
 }
 
 /** The path of a listed backup, or null when the name is not one of ours or the file is gone. */

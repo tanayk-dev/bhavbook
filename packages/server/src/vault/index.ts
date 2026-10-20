@@ -17,7 +17,7 @@ export {
   type BackupManifest,
   type BackupMeta,
 } from './container.js';
-export { BackupError, VaultError } from './errors.js';
+export { BackupError, VaultError, type BackupProblem } from './errors.js';
 export {
   appliedMigrations,
   assertHistoryMatches,

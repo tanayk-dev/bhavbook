@@ -238,14 +238,12 @@ function SettingsPage() {
         </>
       ) : null}
       {backups.isSuccess ? (
-        <>
-          <Section id="backups-title" title="Backups">
-            <p className="text-ink-muted">
-              Backups are saved next to your vault. Download one to keep a copy elsewhere.
-            </p>
-            <BackupsPanel backups={backups.data} announce={announce} />
-          </Section>
-        </>
+        <Section id="backups-title" title="Backups">
+          <p className="text-ink-muted">
+            Backups are saved next to your vault. Download one to keep a copy elsewhere.
+          </p>
+          <BackupsPanel backups={backups.data} announce={announce} />
+        </Section>
       ) : null}
     </div>
   );

@@ -22,6 +22,8 @@ export function backup(value: unknown): Backup {
     (value.kind === 'manual' || value.kind === 'auto') &&
     typeof value.reason === 'string' &&
     typeof value.createdAt === 'string' &&
+    // An explicit zone, so the machine's own timezone never interprets it.
+    /(Z|[+-]\d\d:\d\d)$/.test(value.createdAt) &&
     !Number.isNaN(Date.parse(value.createdAt)) &&
     typeof value.bytes === 'number' &&
     Number.isSafeInteger(value.bytes) &&
@@ -72,6 +74,7 @@ export async function restoreFile(file: Blob): Promise<void> {
   );
 }
 
+/** Failures where the server says nothing was changed. */
 const RESTORE_ERRORS: Readonly<Record<string, string>> = {
   in_use: 'Another program has the vault open. Close it and try again.',
   newer_version: 'This backup was made by a newer version of BhavBook. Update BhavBook, then restore it.',
@@ -80,12 +83,18 @@ const RESTORE_ERRORS: Readonly<Record<string, string>> = {
   too_large: 'That file is too large to be a BhavBook backup.',
   payload_too_large: 'That file is too large to be a BhavBook backup.',
   not_found: 'That backup no longer exists. Reload the page.',
+  busy: 'Another restore is running. Wait for it to finish.',
 };
 
-/** What to tell the person when a restore failed. Nothing was changed in every case. */
+/** What to tell the person when a restore failed. "Unchanged" only when the server said so. */
 export function restoreError(error: unknown): string {
-  const reason = error instanceof ApiError ? RESTORE_ERRORS[error.code] : undefined;
-  return `${reason ?? 'The restore failed.'} Your current data is unchanged.`;
+  const code = error instanceof ApiError ? error.code : '';
+  const reason = RESTORE_ERRORS[code];
+  if (reason !== undefined) return `${reason} Your current data is unchanged.`;
+  if (code === 'reopen_failed') {
+    return 'BhavBook could not reopen its data after the restore. Reload the page; if that fails, restart BhavBook.';
+  }
+  return 'The restore did not report back, so it may or may not have happened. Reload the page to see your data.';
 }
 
 const REASONS: Readonly<Record<string, string>> = {
@@ -101,6 +110,7 @@ export const backupReason = (reason: string): string => REASONS[reason] ?? reaso
 /** "48 KB", "1.2 MB": sizes on screen. */
 export function formatBytes(bytes: number): string {
   const kib = 1024;
-  if (bytes < kib * kib) return `${Math.max(1, Math.round(bytes / kib)).toLocaleString('en-IN')} KB`;
+  const kb = Math.max(1, Math.round(bytes / kib));
+  if (kb < kib) return `${kb.toLocaleString('en-IN')} KB`;
   return `${(bytes / (kib * kib)).toFixed(1)} MB`;
 }
