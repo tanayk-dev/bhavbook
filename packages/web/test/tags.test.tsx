@@ -29,6 +29,7 @@ function server() {
     'GET /api/profiles': { body: { profiles: [{ id: 'p1', name: 'Swing', accounts: [] }] } },
     'GET /api/settings': { body: { breakevenThresholdMicro: '0', feeRules: [] } },
     'GET /api/tags': () => ({ body: { tags: state.tags } }),
+    'GET /api/vault/backups': { body: { backups: [] } },
     'POST /api/tags': (body) => {
       const { kind, name } = body as { kind: 'setup' | 'mistake'; name: string };
       state.calls.push(`create ${kind} ${name}`);

@@ -123,7 +123,7 @@ function stamp(date: Date): string {
 }
 
 /** A file name in the backup directory that doesn't exist yet: `<prefix>-<UTC ms>-<reason>[-n].<ext>`. */
-function uniqueBackupPath(
+export function uniqueBackupPath(
   dir: string,
   prefix: string,
   date: Date,
@@ -144,7 +144,7 @@ function uniqueBackupPath(
   return path.join(dir, `${base}-${String(highest + 1)}.${extension}`);
 }
 
-function ensureBackupDir(vaultPath: string): string {
+export function ensureBackupDir(vaultPath: string): string {
   const dir = backupDir(vaultPath);
   mkdirSync(dir, { recursive: true, mode: OWNER_ONLY_DIR });
   return dir;
@@ -190,7 +190,7 @@ function readBounded(file: string): Buffer {
   const fd = openSync(file, 'r');
   try {
     const size = fstatSync(fd).size;
-    if (size > MAX_BACKUP_BYTES) throw new BackupError('backup file is too large');
+    if (size > MAX_BACKUP_BYTES) throw new BackupError('backup file is too large', { problem: 'too_large' });
     const buffer = Buffer.alloc(size);
     let offset = 0;
     while (offset < size) {
@@ -198,7 +198,8 @@ function readBounded(file: string): Buffer {
       if (read === 0) break;
       offset += read;
     }
-    if (offset !== size) throw new BackupError('backup file changed while it was being read');
+    if (offset !== size)
+      throw new BackupError('backup file changed while it was being read', { problem: 'corrupt' });
     return buffer;
   } finally {
     closeSync(fd);
@@ -211,26 +212,29 @@ function verifyStaged(staged: string, manifestVersion: number, migrations: reado
   try {
     hardenConnection(db);
     if (Number(db.pragma('application_id', { simple: true })) !== APPLICATION_ID) {
-      throw new BackupError('backup is not a BhavBook vault');
+      throw new BackupError('backup is not a BhavBook vault', { problem: 'not_a_backup' });
     }
     if (db.pragma('integrity_check', { simple: true }) !== 'ok')
-      throw new BackupError('backup failed its integrity check');
+      throw new BackupError('backup failed its integrity check', { problem: 'corrupt' });
     if ((db.pragma('foreign_key_check') as unknown[]).length > 0)
-      throw new BackupError('backup has broken references');
+      throw new BackupError('backup has broken references', { problem: 'corrupt' });
     const history = appliedMigrations(db);
     try {
       assertHistoryMatches(history, migrations);
     } catch (error) {
       throw new BackupError('backup migration history does not match this version of BhavBook', {
+        problem: 'corrupt',
         cause: error,
       });
     }
     if ((history.at(-1)?.version ?? 0) !== manifestVersion) {
-      throw new BackupError('backup manifest and migration history disagree');
+      throw new BackupError('backup manifest and migration history disagree', { problem: 'corrupt' });
     }
     const expected = referenceFingerprint(migrations, manifestVersion).join('\n');
     if (schemaFingerprint(db).join('\n') !== expected) {
-      throw new BackupError('backup database has an unexpected schema (extra or altered objects)');
+      throw new BackupError('backup database has an unexpected schema (extra or altered objects)', {
+        problem: 'corrupt',
+      });
     }
   } finally {
     db.close();
@@ -281,7 +285,7 @@ function rebuildFromBackup(
     })();
     db.exec('DETACH DATABASE backup');
     if ((db.pragma('foreign_key_check') as unknown[]).length > 0) {
-      throw new BackupError('backup has broken references');
+      throw new BackupError('backup has broken references', { problem: 'corrupt' });
     }
     db.pragma('foreign_keys = ON');
     migrate(db, migrations, now);
@@ -338,7 +342,10 @@ function retireLiveVault(vaultPath: string, options: BackupOptions): void {
     live.pragma('wal_checkpoint(TRUNCATE)');
   } catch (error) {
     if (isBusy(error))
-      throw new BackupError('the vault is in use; close BhavBook and try again', { cause: error });
+      throw new BackupError('the vault is in use; close BhavBook and try again', {
+        problem: 'in_use',
+        cause: error,
+      });
     if (error instanceof VaultError) throw error;
     // Only a vault SQLite itself reports as corrupt may be replaced without a snapshot; any other failure (disk
     // full, permissions, a failed VACUUM) stops the restore so the current vault is never lost.
@@ -392,12 +399,15 @@ export function restoreBackup(
   const rebuilt = tempPath(vaultPath, 'rebuilt');
   try {
     const { manifest, db: bytes } = decodeBhav(readBounded(file));
-    if (manifest.schemaVersion < 1) throw new BackupError('backup manifest has an invalid schema version');
+    if (manifest.schemaVersion < 1)
+      throw new BackupError('backup manifest has an invalid schema version', { problem: 'not_a_backup' });
     if (manifest.schemaVersion > latestVersion(migrations)) {
-      throw new BackupError('backup was made by a newer version of BhavBook; please upgrade');
+      throw new BackupError('backup was made by a newer version of BhavBook; please upgrade', {
+        problem: 'newer_version',
+      });
     }
     if (!looksLikeSqlite(bytes) || bytes.length < SQLITE_MIN_PAGE || bytes.length % SQLITE_MIN_PAGE !== 0) {
-      throw new BackupError('backup does not contain a SQLite database');
+      throw new BackupError('backup does not contain a SQLite database', { problem: 'not_a_backup' });
     }
     writeFileSync(staged, bytes, { flag: 'wx', mode: OWNER_ONLY_FILE });
     verifyStaged(staged, manifest.schemaVersion, migrations);

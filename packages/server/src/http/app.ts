@@ -3,7 +3,8 @@
 //   2. Host/Origin allowlist, then the session token (launch URL -> cookie)
 //   3. routes: the typed /api tree (501 until each step implements its service), then the web build
 // Errors never echo bodies, messages or cell values (ADR-0019).
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import { serveStatic } from '@hono/node-server/serve-static';
 import type Database from 'better-sqlite3';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
@@ -39,7 +40,16 @@ import {
   tagInputSchema,
 } from '../services/tags.js';
 import { recompute } from '../recompute/index.js';
-import { currentVersion } from '../vault/index.js';
+import { backupPath, currentVersion, listBackups, manualBackup, MAX_BACKUP_BYTES } from '../vault/index.js';
+import {
+  liveVault,
+  restoreErrorCode,
+  restoreListed,
+  restoreUpload,
+  type BackupHost,
+  type LiveVault,
+  type RestoreErrorCode,
+} from './backups.js';
 import { jsonResponse } from './json.js';
 import type { Logger } from './logger.js';
 import {
@@ -62,9 +72,11 @@ export interface AppOptions {
   readonly vault: Database.Database | null;
   /** Directory holding the web build (S13a). Missing or null serves a placeholder page. */
   readonly staticRoot?: string | null;
+  /** Where the vault lives and how to reopen it, for backups and restore. Absent: those routes answer 503. */
+  readonly backups?: BackupHost;
 }
 
-type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 500 | 501 | 503;
+type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 500 | 501 | 503;
 
 const error = (code: string, status: ErrorStatus): Response => jsonResponse({ error: code }, status);
 
@@ -80,6 +92,9 @@ const CLIENT_ERRORS: ReadonlyMap<number, readonly [string, ErrorStatus]> = new M
 const notImplemented = (): Response => error('not_implemented', 501);
 
 const idParam = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/) });
+/** A backup file name; the catalog resolves only names it would have made itself. */
+const backupParam = z.object({ name: z.string().regex(/^[a-z0-9-]{1,80}\.bhav$/i) });
+const restoreSchema = z.object({ name: z.string().max(80) }).strict();
 
 /**
  * Placeholder body schema for routes whose step has not defined one yet: any JSON object. The implementing step
@@ -112,6 +127,20 @@ function json<T extends z.ZodType>(schema: T, maxSize = MAX_JSON_BYTES) {
   return [contentType, limit, parse] as const;
 }
 
+/** A `.bhav` upload: application/octet-stream only, capped at the largest backup restore will read. */
+function upload() {
+  const contentType: MiddlewareHandler = async (c, next) => {
+    const type = c.req.header('content-type') ?? '';
+    if (!/^application\/octet-stream(;|$)/i.test(type)) return error('unsupported_media_type', 415);
+    await next();
+    return undefined;
+  };
+  return [
+    contentType,
+    bodyLimit({ maxSize: MAX_BACKUP_BYTES, onError: () => error('payload_too_large', 413) }),
+  ] as const;
+}
+
 /** Profile and account bodies are a few short labels. */
 const SMALL_JSON_BYTES = 4 * 1024;
 
@@ -124,54 +153,124 @@ const PROFILE_ERRORS: Readonly<Record<ProfileError['code'], ErrorStatus>> = {
 };
 
 /** Runs a vault action; a missing vault is 503 and a ProfileError its fixed code (ADR-0019). */
-function withVault(options: AppOptions, action: (db: Database.Database) => Response): Response {
-  if (options.vault === null) return error('no_vault', 503);
+function withVault<R extends Response | Promise<Response>>(
+  live: LiveVault,
+  action: (db: Database.Database) => R,
+): R | Response {
+  // After a restore that could not reopen the vault, every request tries again.
+  if (live.db === null) live.recover?.();
+  if (live.db === null) return error('no_vault', 503);
   try {
-    return action(options.vault);
+    return action(live.db);
   } catch (cause) {
     if (cause instanceof ProfileError) return error(cause.code, PROFILE_ERRORS[cause.code]);
     throw cause;
   }
 }
 
-function apiRoutes(options: AppOptions) {
+/** Runs a backup action against the live vault; 503 without a vault or a backup host. */
+function withBackups<R extends Response | Promise<Response>>(
+  live: LiveVault,
+  host: BackupHost | undefined,
+  action: (db: Database.Database, host: BackupHost) => R,
+): R | Response {
+  if (host === undefined) return error('no_vault', 503);
+  return withVault(live, (db) => action(db, host));
+}
+
+const RESTORE_STATUS: Readonly<Record<Exclude<RestoreErrorCode, 'restore_failed'>, ErrorStatus>> = {
+  in_use: 409,
+  busy: 409,
+  reopen_failed: 503,
+  too_large: 413,
+  newer_version: 422,
+  not_a_backup: 422,
+  corrupt: 422,
+};
+
+/** Restores, answering the restore's fixed error code; anything unexpected is a 500 (logged by name only). */
+async function restoreResponse(
+  restore: () => Promise<{ schemaVersion: number }> | { schemaVersion: number },
+) {
+  try {
+    return jsonResponse(await restore());
+  } catch (cause) {
+    const code = restoreErrorCode(cause);
+    if (code === 'restore_failed') throw cause;
+    return error(code, RESTORE_STATUS[code]);
+  }
+}
+
+function apiRoutes(options: AppOptions, live: LiveVault) {
+  const host = options.backups;
   return (
     new Hono()
       .get('/health', () => jsonResponse({ ok: true }))
       .get('/vault', () =>
-        options.vault === null
-          ? error('no_vault', 503)
-          : jsonResponse({ schemaVersion: currentVersion(options.vault) }),
+        live.db === null ? error('no_vault', 503) : jsonResponse({ schemaVersion: currentVersion(live.db) }),
       )
-      .get('/profiles', (c) => withVault(options, (db) => c.json({ profiles: listProfiles(db) })))
+      .get('/profiles', (c) => withVault(live, (db) => c.json({ profiles: listProfiles(db) })))
       .post('/profiles', ...json(profileInputSchema, SMALL_JSON_BYTES), (c) =>
-        withVault(options, (db) => c.json({ id: createProfile(db, c.req.valid('json')) }, 201)),
+        withVault(live, (db) => c.json({ id: createProfile(db, c.req.valid('json')) }, 201)),
       )
       .post('/accounts', ...json(accountInputSchema, SMALL_JSON_BYTES), (c) =>
-        withVault(options, (db) => c.json({ id: createAccount(db, c.req.valid('json')) }, 201)),
+        withVault(live, (db) => c.json({ id: createAccount(db, c.req.valid('json')) }, 201)),
       )
       .patch('/profiles/:id', params(idParam), ...json(renameProfileSchema, SMALL_JSON_BYTES), (c) =>
-        withVault(options, (db) => {
+        withVault(live, (db) => {
           renameProfile(db, c.req.valid('param').id, c.req.valid('json'));
           return c.json({ ok: true });
         }),
       )
       .patch('/accounts/:id', params(idParam), ...json(renameAccountSchema, SMALL_JSON_BYTES), (c) =>
-        withVault(options, (db) => {
+        withVault(live, (db) => {
           renameAccount(db, c.req.valid('param').id, c.req.valid('json'));
           return c.json({ ok: true });
         }),
       )
       // PRD §2 C5: the move and the account's recompute succeed or fail together.
       .post('/accounts/:id/move', params(idParam), ...json(moveAccountSchema, SMALL_JSON_BYTES), (c) =>
-        withVault(options, (db) => {
+        withVault(live, (db) => {
           const { id } = c.req.valid('param');
           const summary = moveAccount(db, id, c.req.valid('json'), (accountId) => recompute(db, accountId));
           return c.json({ moved: summary !== null, recomputed: summary?.positions ?? 0 });
         }),
       )
-      .post('/vault/backup', notImplemented)
-      .post('/vault/restore', notImplemented)
+      .get('/vault/backups', (c) =>
+        withBackups(live, host, (_, backups) => c.json({ backups: listBackups(backups.vaultPath) })),
+      )
+      .post('/vault/backup', (c) =>
+        withBackups(live, host, (db, backups) =>
+          c.json(manualBackup(db, backups.vaultPath, { appVersion: backups.appVersion }), 201),
+        ),
+      )
+      .get('/vault/backups/:name', params(backupParam), (c) =>
+        withBackups(live, host, (_, backups) => {
+          const { name } = c.req.valid('param');
+          const file = backupPath(backups.vaultPath, name);
+          if (file === null) return error('not_found', 404);
+          return new Response(Readable.toWeb(createReadStream(file)) as ReadableStream, {
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'Content-Length': String(statSync(file).size),
+              'Content-Disposition': `attachment; filename="bhavbook-${name}"`,
+            },
+          });
+        }),
+      )
+      .post('/vault/restore', ...json(restoreSchema, SMALL_JSON_BYTES), (c) =>
+        withBackups(live, host, (_, backups) => {
+          const file = backupPath(backups.vaultPath, c.req.valid('json').name);
+          if (file === null) return error('not_found', 404);
+          return restoreResponse(() => restoreListed(live, backups, file));
+        }),
+      )
+      .post('/vault/restore/upload', ...upload(), async (c) => {
+        if (live.db === null) live.recover?.();
+        if (host === undefined || live.db === null) return error('no_vault', 503);
+        // Streamed to disk, never buffered: a backup can be hundreds of megabytes.
+        return restoreResponse(() => restoreUpload(live, host, c.req.raw.body));
+      })
       .get('/imports', notImplemented)
       .post('/imports', notImplemented)
       .get('/coverage', notImplemented)
@@ -181,28 +280,28 @@ function apiRoutes(options: AppOptions) {
       .get('/positions/:id', params(idParam), notImplemented)
       .get('/journal', notImplemented)
       .post('/journal', ...json(pendingBody), notImplemented)
-      .get('/settings', (c) => withVault(options, (db) => c.json(readSettings(db))))
+      .get('/settings', (c) => withVault(live, (db) => c.json(readSettings(db))))
       .put('/settings', ...json(breakevenSchema, SMALL_JSON_BYTES), (c) =>
-        withVault(options, (db) => {
+        withVault(live, (db) => {
           setBreakeven(db, c.req.valid('json'));
           return c.json(readSettings(db));
         }),
       )
-      .get('/tags', (c) => withVault(options, (db) => c.json({ tags: listTags(db) })))
+      .get('/tags', (c) => withVault(live, (db) => c.json({ tags: listTags(db) })))
       .post('/tags', ...json(tagInputSchema, SMALL_JSON_BYTES), (c) =>
-        withVault(options, (db) => c.json({ id: createTag(db, c.req.valid('json')) }, 201)),
+        withVault(live, (db) => c.json({ id: createTag(db, c.req.valid('json')) }, 201)),
       )
       .patch('/tags/:id', params(idParam), ...json(renameTagSchema, SMALL_JSON_BYTES), (c) =>
-        withVault(options, (db) => {
+        withVault(live, (db) => {
           renameTag(db, c.req.valid('param').id, c.req.valid('json'));
           return c.json({ ok: true });
         }),
       )
       .delete('/tags/:id', params(idParam), (c) =>
-        withVault(options, (db) => c.json({ detached: deleteTag(db, c.req.valid('param').id) })),
+        withVault(live, (db) => c.json({ detached: deleteTag(db, c.req.valid('param').id) })),
       )
       .post('/tags/:id/merge', params(idParam), ...json(mergeTagSchema, SMALL_JSON_BYTES), (c) =>
-        withVault(options, (db) =>
+        withVault(live, (db) =>
           c.json({ merged: mergeTag(db, c.req.valid('param').id, c.req.valid('json')) }),
         ),
       )
@@ -311,7 +410,7 @@ export function createApp(options: AppOptions): Hono {
   const app = new Hono();
   app.use('*', logAndHarden(options.logger));
   app.use('*', guard(options));
-  app.route('/api', apiRoutes(options));
+  app.route('/api', apiRoutes(options, liveVault(options.vault, options.backups)));
   webRoutes(app, options.staticRoot);
   app.notFound(() => error('not_found', 404));
   app.onError((cause, c) => {

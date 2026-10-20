@@ -17,7 +17,7 @@ export {
   type BackupManifest,
   type BackupMeta,
 } from './container.js';
-export { BackupError, VaultError } from './errors.js';
+export { BackupError, VaultError, type BackupProblem } from './errors.js';
 export {
   appliedMigrations,
   assertHistoryMatches,
@@ -35,3 +35,5 @@ export { openVault, openVaultReadOnly, type OpenVaultOptions } from './open.js';
 export { APPLICATION_ID, hardenConnection, referenceFingerprint, schemaFingerprint } from './schema.js';
 export { acquireVaultLock, lockPath, STALE_LOCK_MS, type VaultLock } from './lock.js';
 export { recoverInterruptedRestore, type RecoveryResult } from './recover.js';
+export { ensureBackupDir } from './backup.js';
+export { backupPath, listBackups, manualBackup, type BackupEntry } from './catalog.js';
