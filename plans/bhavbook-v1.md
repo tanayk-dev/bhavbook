@@ -64,7 +64,8 @@
 | S12b | Reconciliation and FIFO cross-check | S12a, S10a | **strongest** | — |
 | S13a-1 | Web shell: scaffold, design tokens, app frame, RPC client, token handling, E2E harness | S7, S11 | default | **yes** |
 | S13a-2 | Onboarding: profiles and broker accounts (API + screens) | S13a-1 | default | **yes** |
-| S13a-3 | Settings: accounts (move + recompute), tags, backups, fee versions, breakeven | S13a-2 | default | **yes** |
+| S13a-3a | Settings: profiles and accounts (rename, move + recompute), breakeven, fee versions | S13a-2 | default | **yes** |
+| S13a-3b | Settings: tags (CRUD, merge) and backups (create, download, restore, list) | S13a-3a | default | **yes** |
 | S13b | Import wizard and coverage view | S13a | default | — |
 | S13c | Issues inbox | S13b, S10a, S10b, S12b | default | — |
 | S14a | Review queue, position detail, journal, screenshots | S13c, S10c | default | **yes** |
@@ -81,7 +82,7 @@ W4  S5b ∥ S6 ∥ S11
 W5  S7-1 → S7-2
 W6  S8
 W7  S9-1 → S9-2
-W8  S10a-1 → S10a-2 ∥ S10b-1 → S10b-2 ∥ S12a-1 → S12a-2 ∥ S13a-1 → S13a-2 → S13a-3
+W8  S10a-1 → S10a-2 ∥ S10b-1 → S10b-2 ∥ S12a-1 → S12a-2 ∥ S13a-1 → S13a-2 → S13a-3a → S13a-3b
 W9  S10c ∥ S12b ∥ S13b
 W10 S13c ∥ S15a
 W11 S14a ∥ S14b
@@ -834,6 +835,7 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
 
 ## Changelog
 
+- 2026-10-20 r15: S13a-2 merged, then a design revision (PR 21): the build was checked against published "AI slop" tells and the indigo accent, Inter and orange attention colour were replaced with ledger-rule blue, IBM Plex and pencil ochre (direction §10). S13a-3 split into S13a-3a (profiles and accounts, breakeven, fee versions) and S13a-3b (tags, backups). Moving an account applies the move and its recompute in one transaction (PRD §2 C5): if the recompute fails nothing moves.
 - 2026-10-20 r14: S13a-1 merged. S13a-2 notes: profile names and account nicknames are free text the user chooses (not identifiers under ADR-0019); the server stores them NFC-normalised, refuses control, separator, blank-filler and private-use characters, and refuses any label shaped like a PAN or a broker client ID, so one cannot be stored by mistake. Migration 0003 adds case-insensitive unique indexes as the database backstop; writes use IMMEDIATE transactions so two BhavBook processes on one vault cannot race. Onboarding creates one default PAN entity (label only); managing entities is not in v1 onboarding.
 - 2026-10-20 r13: S12a-1 and S12a-2 merged. Design direction accepted (`docs/design/direction.md`: ledger, light warm-paper default, bundled Inter + JetBrains Mono, read-only review on phones). S13a split into S13a-1 (shell and E2E harness), S13a-2 (onboarding) and S13a-3 (settings), each with a security review. The CLI always opens the vault (default path or `--vault`), so onboarding's "create or open a vault" is the CLI's job and the UI shows which vault is open. The server already moves the launch token from `?t=` into a cookie and redirects to `/`; the client also strips `t=` with `history.replaceState` as a second line. `@tanstack/react-query` stays at ADR-0021's 5.104.4 (5.104.5 is out; versions change only via an ADR). S13a-1 is about 1,500 changed lines without the lockfile, over the ~800-line split rule; it is kept whole on purpose: a new package's scaffold (configs, the generated route tree, the shadcn button) and its tests, with little that can ship on its own. The new web dependencies are added to ADR-0021's table as additions.
 - 2026-10-20 r12: S12a-1 merged. S12a-2 finding: with the real orders through the vault, Dhan FY 2024-25 matches on every day for every component except two differences in Dhan's own billing, pinned exactly: STT on 18 Sep 2024 (billed Rs 40, formula Rs 39, even with the IPO buy present, so S12b's expectation that the opening lot makes this day match is dropped; it is A1's one mismatching day) and GST on 9 May 2024 (Rs 0.02, unchanged with the real orders). Charges are computed on the trades as imported and carried onto the post-corporate-action allocations by value; trades with no rule version raise one `fees_unrated` issue. Charge shares of shares a corporate action cashed out are reported in a `charges_unattached` issue. **For S12b:** `fill_charge` rows hang off `fill_allocation`, which every recompute deletes and rebuilds, so statement-reported charges must be kept keyed to the trade row or statement row and re-attached on each recompute, or they would be wiped.

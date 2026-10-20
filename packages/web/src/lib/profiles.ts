@@ -69,6 +69,7 @@ const SAVE_ERRORS: Readonly<Record<string, string>> = {
   invalid: 'Use 1 to 40 letters, digits or spaces, without line breaks.',
   invalid_request: 'Use 1 to 40 letters, digits or spaces, without line breaks.',
   not_found: 'That profile no longer exists. Reload the page and try again.',
+  recompute_failed: "This account's positions could not be rebuilt, so nothing was moved.",
 };
 
 /** What to tell the person when saving failed. */

@@ -19,8 +19,6 @@ describe('route tree', () => {
     ['GET', '/api/positions/7'],
     ['GET', '/api/journal'],
     ['POST', '/api/journal'],
-    ['GET', '/api/settings'],
-    ['PUT', '/api/settings'],
     ['GET', '/api/analytics/summary'],
   ])('%s %s answers 501 until its step implements it', async (method, target) => {
     const response = await send(testApp(), target, {

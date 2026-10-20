@@ -11,13 +11,16 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 
-export type ProfileErrorCode = 'invalid' | 'identifier' | 'conflict' | 'not_found';
+export type ProfileErrorCode = 'invalid' | 'identifier' | 'conflict' | 'not_found' | 'recompute_failed';
 
 export class ProfileError extends Error {
   override readonly name = 'ProfileError';
 
-  constructor(readonly code: ProfileErrorCode) {
-    super(`profile request failed: ${code}`);
+  constructor(
+    readonly code: ProfileErrorCode,
+    options?: ErrorOptions,
+  ) {
+    super(`profile request failed: ${code}`, options);
   }
 }
 
@@ -191,5 +194,86 @@ export function createAccount(db: Database.Database, input: unknown, options: Cr
       'INSERT INTO broker_account (id, profile_id, broker, nickname, created_at) VALUES (?, ?, ?, ?, ?)',
     ).run(id, parsed.profileId, parsed.broker, nickname, at);
     return id;
+  });
+}
+
+export const renameProfileSchema = z.object({ name: label }).strict();
+export const renameAccountSchema = z.object({ nickname: label }).strict();
+export const moveAccountSchema = z.object({ profileId: z.string().min(1).max(64) }).strict();
+
+/** Renames a profile; the same rules as creating one. */
+export function renameProfile(db: Database.Database, id: string, input: unknown): void {
+  const name = acceptLabel(parse(renameProfileSchema, input).name);
+  write(db, () => {
+    const entity: unknown = db.prepare('SELECT pan_entity_id FROM profile WHERE id = ?').pluck().get(id);
+    if (typeof entity !== 'string') throw new ProfileError('not_found');
+    const others = db
+      .prepare('SELECT name FROM profile WHERE pan_entity_id = ? AND id <> ?')
+      .pluck()
+      .all(entity, id);
+    if (clashes(others, name)) throw new ProfileError('conflict');
+    db.prepare('UPDATE profile SET name = ? WHERE id = ?').run(name, id);
+  });
+}
+
+/** Renames an account; the same rules as adding one. */
+export function renameAccount(db: Database.Database, id: string, input: unknown): void {
+  const nickname = acceptLabel(parse(renameAccountSchema, input).nickname);
+  write(db, () => {
+    const profile: unknown = db.prepare('SELECT profile_id FROM broker_account WHERE id = ?').pluck().get(id);
+    if (typeof profile !== 'string') throw new ProfileError('not_found');
+    const others = db
+      .prepare('SELECT nickname FROM broker_account WHERE profile_id = ? AND id <> ?')
+      .pluck()
+      .all(profile, id);
+    if (clashes(others, nickname)) throw new ProfileError('conflict');
+    db.prepare('UPDATE broker_account SET nickname = ? WHERE id = ?').run(nickname, id);
+  });
+}
+
+interface AccountRow {
+  readonly profile_id: string;
+  readonly nickname: string;
+  readonly pan_entity_id: string;
+}
+
+/**
+ * Moves an account to another profile and rebuilds it (PRD §2 C5: an account belongs to exactly one profile), all
+ * under the vault's write lock: if the recompute fails, nothing moves (`recompute_failed`). A move to the profile
+ * it is already in does nothing and recomputes nothing (returns null). The nickname must be free in the target
+ * profile, and both profiles must belong to the same PAN entity (tax buckets are per entity).
+ */
+export function moveAccount<T>(
+  db: Database.Database,
+  id: string,
+  input: unknown,
+  rebuild: (accountId: string) => T,
+): T | null {
+  const { profileId } = parse(moveAccountSchema, input);
+  return write(db, () => {
+    const account = db
+      .prepare(
+        `SELECT a.profile_id, a.nickname, p.pan_entity_id FROM broker_account a JOIN profile p ON p.id = a.profile_id
+         WHERE a.id = ?`,
+      )
+      .get(id) as AccountRow | undefined;
+    const target: unknown = db
+      .prepare('SELECT pan_entity_id FROM profile WHERE id = ?')
+      .pluck()
+      .get(profileId);
+    if (account === undefined || typeof target !== 'string') throw new ProfileError('not_found');
+    if (account.profile_id === profileId) return null;
+    if (target !== account.pan_entity_id) throw new ProfileError('invalid');
+    const taken = db
+      .prepare('SELECT nickname FROM broker_account WHERE profile_id = ?')
+      .pluck()
+      .all(profileId);
+    if (clashes(taken, account.nickname)) throw new ProfileError('conflict');
+    db.prepare('UPDATE broker_account SET profile_id = ? WHERE id = ?').run(profileId, id);
+    try {
+      return rebuild(id);
+    } catch (cause) {
+      throw new ProfileError('recompute_failed', { cause });
+    }
   });
 }
