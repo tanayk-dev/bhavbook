@@ -29,6 +29,26 @@ import {
   renameProfileSchema,
 } from '../services/profiles.js';
 import { breakevenSchema, readSettings, setBreakeven } from '../services/settings.js';
+import { adjustmentInputSchema } from '../services/adjustments.js';
+import { ActionError, type ActionErrorCode } from '../services/errors.js';
+import {
+  instrumentNames,
+  issueFilterSchema,
+  issueSummary,
+  listIssues,
+  mapInstrumentSchema,
+  mapIssueInstrument,
+  reopenIssue,
+  suggestionsForIssue,
+  applyAccountAdjustment,
+} from '../services/issues.js';
+import {
+  acceptStatementSuggestion,
+  dismissIssue,
+  replaceRedundantLot,
+  restoreAndRecompute,
+  revertAndRecompute,
+} from '../recompute/actions.js';
 import { ImportError, MAX_PREVIEW_BYTES, type ImportErrorCode, type ImportService } from '../import/index.js';
 import {
   createTag,
@@ -197,6 +217,34 @@ async function withImports(
   }
 }
 
+const ACTION_STATUS: Readonly<Record<Exclude<ActionErrorCode, 'failed'>, ErrorStatus>> = {
+  not_found: 404,
+  invalid: 400,
+};
+
+/** Runs an issue or adjustment action; an ActionError answers its fixed code, anything else is a 500. */
+function withAction<R extends Response>(live: LiveVault, action: (db: Database.Database) => R): R | Response {
+  return withVault(live, (db) => {
+    try {
+      return action(db);
+    } catch (cause) {
+      if (cause instanceof ActionError && cause.code !== 'failed') {
+        return error(cause.code, ACTION_STATUS[cause.code]);
+      }
+      throw cause;
+    }
+  });
+}
+
+/** Every instrument key an issue subject names (`instrumentKey`, `isin`), for display names. */
+function subjectKeys(subjects: readonly unknown[]): string[] {
+  return subjects.flatMap((subject) => {
+    if (typeof subject !== 'object' || subject === null) return [];
+    const record = subject as Record<string, unknown>;
+    return [record.instrumentKey, record.isin].filter((key): key is string => typeof key === 'string');
+  });
+}
+
 /** Profile and account bodies are a few short labels. */
 const SMALL_JSON_BYTES = 4 * 1024;
 
@@ -351,8 +399,71 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
           c.json({ coverage: service.coverage(c.req.valid('query').accountId) }),
         ),
       )
-      .get('/issues', notImplemented)
-      .post('/issues/:id/resolve', params(idParam), notImplemented)
+      .get('/issues', query(issueFilterSchema), (c) =>
+        withVault(live, (db) => {
+          const { issues, total } = listIssues(db, c.req.valid('query'));
+          const instruments = instrumentNames(db, subjectKeys(issues.map((issue) => issue.subject)));
+          return c.json({ issues, total, instruments });
+        }),
+      )
+      .get('/issues/summary', (c) => withVault(live, (db) => c.json(issueSummary(db))))
+      .post('/issues/:id/dismiss', params(idParam), (c) =>
+        withAction(live, (db) => {
+          dismissIssue(db, c.req.valid('param').id);
+          return c.json({ ok: true });
+        }),
+      )
+      .post('/issues/:id/reopen', params(idParam), (c) =>
+        withAction(live, (db) => {
+          reopenIssue(db, c.req.valid('param').id);
+          return c.json({ ok: true });
+        }),
+      )
+      // "Fill from broker statement": the suggested lot becomes an opening lot, and the account is recomputed.
+      .post('/issues/:id/accept', params(idParam), (c) =>
+        withAction(live, (db) =>
+          c.json({ adjustmentId: acceptStatementSuggestion(db, c.req.valid('param').id) }),
+        ),
+      )
+      // E7: real fills now cover an opening lot; the user replaces it.
+      .post('/issues/:id/replace', params(idParam), (c) =>
+        withAction(live, (db) => {
+          replaceRedundantLot(db, c.req.valid('param').id);
+          return c.json({ ok: true });
+        }),
+      )
+      .get('/issues/:id/suggestions', params(idParam), (c) =>
+        withAction(live, (db) => c.json({ suggestions: suggestionsForIssue(db, c.req.valid('param').id) })),
+      )
+      .post('/issues/:id/map', params(idParam), ...json(mapInstrumentSchema, SMALL_JSON_BYTES), (c) =>
+        withAction(live, (db) => {
+          mapIssueInstrument(db, c.req.valid('param').id, c.req.valid('json'));
+          return c.json({ ok: true });
+        }),
+      )
+      .post(
+        '/accounts/:id/adjustments',
+        params(idParam),
+        ...json(adjustmentInputSchema, SMALL_JSON_BYTES),
+        (c) =>
+          withAction(live, (db) => {
+            const id = applyAccountAdjustment(db, c.req.valid('param').id, c.req.valid('json'));
+            return c.json({ id }, 201);
+          }),
+      )
+      .post('/adjustments/:id/revert', params(idParam), (c) =>
+        withAction(live, (db) => {
+          revertAndRecompute(db, c.req.valid('param').id);
+          return c.json({ ok: true });
+        }),
+      )
+      // Fixes are revertible both ways (ADR-0013).
+      .post('/adjustments/:id/restore', params(idParam), (c) =>
+        withAction(live, (db) => {
+          restoreAndRecompute(db, c.req.valid('param').id);
+          return c.json({ ok: true });
+        }),
+      )
       .get('/positions', notImplemented)
       .get('/positions/:id', params(idParam), notImplemented)
       .get('/journal', notImplemented)

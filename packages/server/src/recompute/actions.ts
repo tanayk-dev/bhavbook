@@ -26,7 +26,7 @@ function openIssue(db: Database.Database, issueId: string, kind: string): OpenIs
   const issue = db
     .prepare("SELECT account_id, kind, fingerprint, subject_json FROM issue WHERE id = ? AND status = 'open'")
     .get(issueId) as OpenIssue | undefined;
-  if (issue?.kind !== kind) throw new AdjustmentError('no such open issue');
+  if (issue?.kind !== kind) throw new AdjustmentError('no such open issue', { code: 'not_found' });
   return issue;
 }
 
@@ -47,10 +47,10 @@ function suggestionOf(issue: OpenIssue): z.infer<typeof suggestionSchema> {
   try {
     value = JSON.parse(issue.subject_json);
   } catch (error) {
-    throw new AdjustmentError('invalid suggestion', { cause: error });
+    throw new AdjustmentError('invalid suggestion', { code: 'failed', cause: error });
   }
   const parsed = suggestionSchema.safeParse(value);
-  if (!parsed.success) throw new AdjustmentError('invalid suggestion');
+  if (!parsed.success) throw new AdjustmentError('invalid suggestion', { code: 'failed' });
   return parsed.data;
 }
 
@@ -136,5 +136,5 @@ export function dismissIssue(db: Database.Database, issueId: string): void {
   const changes = db
     .prepare("UPDATE issue SET status = 'dismissed' WHERE id = ? AND status = 'open'")
     .run(issueId).changes;
-  if (changes === 0) throw new AdjustmentError('no such open issue');
+  if (changes === 0) throw new AdjustmentError('no such open issue', { code: 'not_found' });
 }

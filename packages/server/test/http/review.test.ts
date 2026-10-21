@@ -22,14 +22,19 @@ describe('fetch metadata and unsafe methods', () => {
   });
 
   it('rejects a state-changing request without an Origin header', async () => {
-    const response = await send(testApp(), '/api/issues/x/resolve', {
+    const response = await send(testApp(), '/api/journal', {
       method: 'POST',
       headers: { origin: null },
     });
     expect(response.status).toBe(403);
     expect(
-      (await send(testApp(), '/api/issues/x/resolve', { method: 'POST', headers: { origin: ORIGIN } }))
-        .status,
+      (
+        await send(testApp(), '/api/journal', {
+          method: 'POST',
+          headers: { origin: ORIGIN, 'content-type': 'application/json' },
+          body: '{}',
+        })
+      ).status,
     ).toBe(501);
   });
 

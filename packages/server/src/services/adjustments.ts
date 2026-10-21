@@ -6,8 +6,9 @@ import { randomUUID } from 'node:crypto';
 import { reconstructAccount, type Adjustment } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
+import { ActionError } from './errors.js';
 
-export class AdjustmentError extends Error {
+export class AdjustmentError extends ActionError {
   override readonly name = 'AdjustmentError';
 }
 
@@ -23,7 +24,7 @@ export const quantitySchema = z.string().regex(/^[1-9]\d{0,11}$/);
 export const microSchema = z.string().regex(/^\d{1,18}$/);
 
 /** What callers (and the payload column) hold: bigints as decimal strings. */
-const inputSchema = z.discriminatedUnion('kind', [
+export const adjustmentInputSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('opening_lot'),
@@ -43,7 +44,7 @@ const inputSchema = z.discriminatedUnion('kind', [
     .strict(),
 ]);
 
-export type AdjustmentInput = z.infer<typeof inputSchema>;
+export type AdjustmentInput = z.infer<typeof adjustmentInputSchema>;
 
 interface Row {
   readonly id: string;
@@ -78,8 +79,8 @@ function toCore(id: string, accountId: string, input: AdjustmentInput): Adjustme
 }
 
 function parseInput(input: unknown): AdjustmentInput {
-  const parsed = inputSchema.safeParse(input);
-  if (!parsed.success) throw new AdjustmentError('invalid adjustment');
+  const parsed = adjustmentInputSchema.safeParse(input);
+  if (!parsed.success) throw new AdjustmentError('invalid adjustment', { code: 'invalid' });
   return parsed.data;
 }
 
@@ -90,18 +91,22 @@ function parseStored(row: Row): AdjustmentInput {
     value = JSON.parse(row.payload_json);
   } catch (error) {
     throw new AdjustmentError('a stored adjustment is unreadable', {
+      code: 'failed',
       cause: { adjustmentId: row.id, error },
     });
   }
-  const parsed = inputSchema.safeParse(value);
+  const parsed = adjustmentInputSchema.safeParse(value);
   if (!parsed.success)
-    throw new AdjustmentError('a stored adjustment is unreadable', { cause: { adjustmentId: row.id } });
+    throw new AdjustmentError('a stored adjustment is unreadable', {
+      code: 'failed',
+      cause: { adjustmentId: row.id },
+    });
   return parsed.data;
 }
 
 function accountExists(db: Database.Database, accountId: string): void {
   if (db.prepare('SELECT 1 FROM broker_account WHERE id = ?').get(accountId) === undefined) {
-    throw new AdjustmentError('unknown account');
+    throw new AdjustmentError('unknown account', { code: 'not_found' });
   }
 }
 
@@ -159,7 +164,7 @@ export function createAdjustment(
   try {
     reconstructAccount([], [toCore(id, accountId, adjustment)]);
   } catch (error) {
-    throw new AdjustmentError('invalid adjustment', { cause: error });
+    throw new AdjustmentError('invalid adjustment', { code: 'invalid', cause: error });
   }
   const at = (options.now?.() ?? new Date()).toISOString();
   return db.transaction(() => {
@@ -206,7 +211,8 @@ function transition(
     )
     .pluck()
     .get(to, id, from, accountId ?? null, accountId ?? null);
-  if (typeof account !== 'string') throw new AdjustmentError(`no ${from} adjustment with that id`);
+  if (typeof account !== 'string')
+    throw new AdjustmentError(`no ${from} adjustment with that id`, { code: 'not_found' });
   return account;
 }
 
