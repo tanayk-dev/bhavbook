@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ImportRouteImport } from './routes/import'
+import { Route as IssuesRouteImport } from './routes/issues'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as SettingsRouteImport } from './routes/settings'
 
@@ -22,6 +23,11 @@ const IndexRoute = IndexRouteImport.update({
 const ImportRoute = ImportRouteImport.update({
   id: '/import',
   path: '/import',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IssuesRoute = IssuesRouteImport.update({
+  id: '/issues',
+  path: '/issues',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OnboardingRoute = OnboardingRouteImport.update({
@@ -38,12 +44,14 @@ const SettingsRoute = SettingsRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/import': typeof ImportRoute
+  '/issues': typeof IssuesRoute
   '/onboarding': typeof OnboardingRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/import': typeof ImportRoute
+  '/issues': typeof IssuesRoute
   '/onboarding': typeof OnboardingRoute
   '/settings': typeof SettingsRoute
 }
@@ -51,20 +59,22 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/import': typeof ImportRoute
+  '/issues': typeof IssuesRoute
   '/onboarding': typeof OnboardingRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/import' | '/onboarding' | '/settings'
+  fullPaths: '/' | '/import' | '/issues' | '/onboarding' | '/settings'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/import' | '/onboarding' | '/settings'
-  id: '__root__' | '/' | '/import' | '/onboarding' | '/settings'
+  to: '/' | '/import' | '/issues' | '/onboarding' | '/settings'
+  id: '__root__' | '/' | '/import' | '/issues' | '/onboarding' | '/settings'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ImportRoute: typeof ImportRoute
+  IssuesRoute: typeof IssuesRoute
   OnboardingRoute: typeof OnboardingRoute
   SettingsRoute: typeof SettingsRoute
 }
@@ -83,6 +93,13 @@ declare module '@tanstack/react-router' {
       path: '/import'
       fullPath: '/import'
       preLoaderRoute: typeof ImportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/issues': {
+      id: '/issues'
+      path: '/issues'
+      fullPath: '/issues'
+      preLoaderRoute: typeof IssuesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/onboarding': {
@@ -105,6 +122,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ImportRoute: ImportRoute,
+  IssuesRoute: IssuesRoute,
   OnboardingRoute: OnboardingRoute,
   SettingsRoute: SettingsRoute,
 }

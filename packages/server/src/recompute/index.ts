@@ -382,6 +382,8 @@ function incompleteFindings(positions: readonly Position[]): Map<string, string>
           bucket: position.bucket,
           orphanQty: position.orphanQty.toString(),
           openedAtUtc: position.openedAtUtc,
+          // The inbox's "Exclude" names the position by it (an exclude adjustment).
+          anchorKey: position.anchorKey,
         }),
       ]),
   );
