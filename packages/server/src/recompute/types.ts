@@ -16,6 +16,10 @@ export const CASH_IN_LIEU = 'cash_in_lieu';
 export const FEES_UNRATED = 'fees_unrated';
 /** Charges of shares a corporate action cashed out (the cash-in-lieu sale is the user's to record). */
 export const CHARGES_UNATTACHED = 'charges_unattached';
+/** A journal entry whose anchor fill no recompute can find (its import was undone): parked, never deleted. */
+export const JOURNAL_UNATTACHED = 'journal_unattached';
+/** Two or more journal entries on one position (older history merged their positions): merge or keep both. */
+export const JOURNAL_COLLISION = 'journal_collision';
 
 export interface IssueForecast {
   readonly kind: typeof INCOMPLETE_POSITION;

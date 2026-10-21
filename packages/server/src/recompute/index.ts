@@ -58,10 +58,13 @@ import {
   CHARGES_UNATTACHED,
   FILL_FROM_STATEMENT,
   INCOMPLETE_POSITION,
+  JOURNAL_COLLISION,
+  JOURNAL_UNATTACHED,
   OPENING_LOT_REDUNDANT,
   RECOMPUTE_FAILED,
   type IssueForecast,
 } from './types.js';
+import { attachJournal } from './journal.js';
 
 export * from './types.js';
 
@@ -196,13 +199,6 @@ function sourceColumns(allocation: FillAllocation): [bigint | null, string | nul
   return [tradeRowId, adjustmentId, corporateActionId];
 }
 
-/** Closed positions first (oldest close first), open ones last: the live position of an anchor is written last. */
-function liveLast(a: Position, b: Position): number {
-  const rank = (position: Position): string =>
-    position.closedAtUtc === null ? `1${position.openedAtUtc}` : `0${position.closedAtUtc}`;
-  return rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : 0;
-}
-
 function idOf(ids: ReadonlyMap<string, bigint>, key: string): bigint {
   const id = ids.get(key);
   if (id === undefined) throw new Error('lot references an unknown allocation');
@@ -322,25 +318,6 @@ function unratedFindings(unrated: readonly string[]): Map<string, string> {
   const findings = new Map<string, string>();
   if (unrated.length > 0) findings.set('fees', JSON.stringify({ fills: unrated.length }));
   return findings;
-}
-
-/**
- * Journal entries follow their position across a re-key (migration 0001: anchor_instrument_key is refreshed).
- * Positions can share an anchor across instruments: the sold part of a converted lot stays on the old ISIN (the
- * live one is written last), and a demerger child shares its parent's anchor (an entry on an open position of its
- * current instrument stays there).
- */
-function refreshAnchors(db: Database.Database, accountId: string, positions: readonly Position[]): void {
-  const refresh = db.prepare(
-    `UPDATE journal_entry SET anchor_instrument_key = ?
-     WHERE anchor_account_id = ? AND anchor_key = ?
-       AND NOT EXISTS (SELECT 1 FROM position p WHERE p.account_id = journal_entry.anchor_account_id
-         AND p.anchor_key = journal_entry.anchor_key AND p.instrument_key = journal_entry.anchor_instrument_key
-         AND p.state = 'OPEN')`,
-  );
-  for (const position of [...positions].sort(liveLast)) {
-    refresh.run(position.instrumentKey, accountId, position.anchorKey);
-  }
 }
 
 function digest(...parts: string[]): string {
@@ -565,7 +542,9 @@ export function recompute(
     const allocationIds = writeDerived(db, accountId, allocations, positions);
     const { charges, unrated, unattached } = chargesOf(broker, fills, adjustments, allocations);
     writeCharges(db, allocationIds, charges);
-    refreshAnchors(db, accountId, positions);
+    const journal = attachJournal(db, accountId, allocations, positions);
+    syncIssues(db, accountId, JOURNAL_UNATTACHED, journal.unattached, at);
+    syncIssues(db, accountId, JOURNAL_COLLISION, journal.collisions, at);
     syncIssues(db, accountId, FEES_UNRATED, unratedFindings(unrated), at);
     syncIssues(db, accountId, CHARGES_UNATTACHED, unattachedFindings(unattached), at);
     syncIssues(db, accountId, INCOMPLETE_POSITION, incompleteFindings(positions), at);
