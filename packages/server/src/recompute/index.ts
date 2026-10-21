@@ -371,10 +371,14 @@ function syncIssues(
 }
 
 /** One per INCOMPLETE position, fingerprinted by its anchor (which survives re-keying). */
+/**
+ * Incomplete positions the user has not decided on. Excluding one is a fix (ADR-0013): the position keeps its
+ * INCOMPLETE flag, but its issue resolves, and comes back if the exclusion is reverted.
+ */
 function incompleteFindings(positions: readonly Position[]): Map<string, string> {
   return new Map(
     positions
-      .filter((position) => position.incomplete)
+      .filter((position) => position.incomplete && !position.excluded)
       .map((position) => [
         position.anchorKey,
         JSON.stringify({
@@ -382,6 +386,8 @@ function incompleteFindings(positions: readonly Position[]): Map<string, string>
           bucket: position.bucket,
           orphanQty: position.orphanQty.toString(),
           openedAtUtc: position.openedAtUtc,
+          // The inbox's "Exclude" names the position by it (an exclude adjustment).
+          anchorKey: position.anchorKey,
         }),
       ]),
   );

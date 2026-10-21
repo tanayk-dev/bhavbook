@@ -2,13 +2,15 @@
 // separated by rules, not shadows or nested cards. Surfaces appear in the rail as their plan steps build them.
 // Touch targets grow to 44 px on the phone layout (direction §7).
 import { Link } from '@tanstack/react-router';
-import { BookOpen, FileUp, Moon, Settings, Sun, type LucideIcon } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { BookOpen, FileUp, Inbox, Moon, Settings, Sun, type LucideIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
+import { issueSummaryQuery } from '@/lib/issues';
 import { applyTheme, currentTheme, safeStorage, type Theme } from '@/lib/theme';
 
 export interface NavItem {
-  readonly to: '/' | '/import' | '/settings';
+  readonly to: '/' | '/issues' | '/import' | '/settings';
   readonly label: string;
   readonly icon: LucideIcon;
 }
@@ -16,9 +18,23 @@ export interface NavItem {
 /** The surfaces built so far (PRD §4); later steps add Review, Positions, Issues, Dashboard and more. */
 export const NAV: readonly NavItem[] = [
   { to: '/', label: 'Overview', icon: BookOpen },
+  { to: '/issues', label: 'Issues', icon: Inbox },
   { to: '/import', label: 'Import', icon: FileUp },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
+
+/** The open-issue count on the Issues link; nothing while there are none (or the count can't be read). */
+function OpenIssues() {
+  const summary = useQuery({ ...issueSummaryQuery, retry: false });
+  const open = summary.data?.open ?? 0;
+  if (open === 0) return null;
+  return (
+    <span className="figure ml-auto rounded-sm bg-attention/15 px-1.5 text-xs text-attention max-lg:absolute max-lg:top-0.5 max-lg:right-0.5">
+      {open.toLocaleString('en-IN')}
+      <span className="sr-only"> open</span>
+    </span>
+  );
+}
 
 export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(() => currentTheme(document.documentElement));
@@ -61,10 +77,11 @@ export function AppFrame({ children }: { readonly children: ReactNode }) {
               <Link
                 to={to}
                 title={label}
-                className="flex h-11 items-center gap-3 rounded-sm px-2 text-ink-muted hover:bg-muted hover:text-ink data-[status=active]:bg-accent data-[status=active]:text-accent-foreground lg:h-8"
+                className="relative flex h-11 items-center gap-3 rounded-sm px-2 text-ink-muted hover:bg-muted hover:text-ink data-[status=active]:bg-accent data-[status=active]:text-accent-foreground lg:h-8"
               >
                 <Icon aria-hidden="true" className="size-4 shrink-0" />
                 <span className="sr-only lg:not-sr-only">{label}</span>
+                {to === '/issues' ? <OpenIssues /> : null}
               </Link>
             </li>
           ))}

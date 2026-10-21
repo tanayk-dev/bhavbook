@@ -12,6 +12,13 @@ export function formatIstDateTime(iso: string): string {
   return `${formatIstDate(ist.slice(0, 10))}, ${ist.slice(11, 16)} IST`;
 }
 
+/** A UTC instant's IST calendar date, `YYYY-MM-DD` (an instant at 00:30 IST is that IST day, not the UTC one). */
+export function istDateOf(iso: string): string {
+  const millis = Date.parse(iso);
+  if (Number.isNaN(millis)) return iso.slice(0, 10);
+  return new Date(millis + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
 export function formatIstDate(date: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   const month = match === null ? undefined : MONTHS[Number.parseInt(match[2] ?? '', 10) - 1];

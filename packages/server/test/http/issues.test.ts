@@ -150,7 +150,7 @@ describe('the inbox', () => {
       expect((await send(test, `/api/adjustments/${id}/revert`, { method: 'POST' })).status).toBe(200);
       expect(status(vault.db, incomplete.id)).toBe('open');
 
-      // Excluding the position instead: it stays incomplete but leaves every metric.
+      // Excluding the position instead: it stays incomplete but leaves every metric, and the issue resolves.
       const anchor = vault.db
         .prepare('SELECT fingerprint FROM issue WHERE id = ?')
         .pluck()
@@ -162,6 +162,13 @@ describe('the inbox', () => {
       );
       expect(excluded.status).toBe(201);
       expect(vault.db.prepare('SELECT count(*) FROM position WHERE excluded = 1').pluck().get()).toBe(1n);
+      expect(
+        vault.db.prepare('SELECT count(*) FROM position WHERE excluded = 1 AND incomplete = 1').pluck().get(),
+      ).toBe(1n);
+      expect(status(vault.db, incomplete.id)).toBe('resolved');
+      const { id: exclusion } = (await excluded.json()) as { id: string };
+      expect((await send(test, `/api/adjustments/${exclusion}/revert`, { method: 'POST' })).status).toBe(200);
+      expect(status(vault.db, incomplete.id)).toBe('open');
     });
   });
 
