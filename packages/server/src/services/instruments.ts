@@ -14,6 +14,7 @@ import {
   type UnresolvedAlias,
 } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
+import type { ActionErrorCode } from './adjustments.js';
 
 export type AliasSource = 'learned' | 'join' | 'file' | 'manual';
 
@@ -24,6 +25,12 @@ export const UNRESOLVED_INSTRUMENT = 'unresolved_instrument';
 
 export class InstrumentError extends Error {
   override readonly name = 'InstrumentError';
+  readonly code: ActionErrorCode;
+
+  constructor(message: string, options: ErrorOptions & { readonly code?: ActionErrorCode } = {}) {
+    super(message, options);
+    this.code = options.code ?? 'failed';
+  }
 }
 
 export interface ResolveOptions {
@@ -369,10 +376,10 @@ export function resolveInstruments(
   return db.transaction(() => {
     const broker = db.prepare('SELECT broker FROM broker_account WHERE id = ?').pluck().get(accountId) as
       string | undefined;
-    if (broker === undefined) throw new InstrumentError('unknown account');
+    if (broker === undefined) throw new InstrumentError('unknown account', { code: 'not_found' });
     if (broker === 'dhan') return resolveDhan(db, accountId, at);
     if (broker === 'zerodha') return resolveZerodha(db, accountId, at);
-    throw new InstrumentError('no instrument resolution for this broker');
+    throw new InstrumentError('no instrument resolution for this broker', { code: 'invalid' });
   })();
 }
 
@@ -387,7 +394,8 @@ export function mapInstrumentManually(
   options: ResolveOptions = {},
 ): void {
   const at = timestamp(options);
-  if ('isin' in target && !ISIN.test(target.isin)) throw new InstrumentError('not a valid ISIN');
+  if ('isin' in target && !ISIN.test(target.isin))
+    throw new InstrumentError('not a valid ISIN', { code: 'invalid' });
   db.transaction(() => {
     let instrumentId: string;
     if ('isin' in target) {
