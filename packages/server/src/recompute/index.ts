@@ -552,6 +552,7 @@ export function recompute(
       allocationIds,
       positions,
       charges,
+      unattached,
       aliases: aliasKeys(db, broker),
     });
     syncIssues(db, accountId, FEE_DISCREPANCY, feeFindings, at);

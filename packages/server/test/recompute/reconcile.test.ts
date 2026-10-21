@@ -5,7 +5,9 @@
 import type Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { acceptStatementSuggestion } from '../../src/recompute/actions.js';
+import { applyCorporateActionAndRecompute } from '../../src/recompute/corporate-actions.js';
 import { recompute } from '../../src/recompute/index.js';
+import { EFFECTIVE_CHARGES_SQL } from '../../src/recompute/reconcile.js';
 import { DHAN, fixtureBytes, fixtureFile, importFiles, withVault, ZERODHA } from '../import/helpers.js';
 
 const now = (): Date => new Date('2026-10-21T12:00:00Z');
@@ -72,6 +74,7 @@ describe('Dhan FY 2024-25 reconciled against Global Transactions', () => {
               {
                 scope: 'row',
                 dateIst: '2024-05-09',
+                exchange: 'NSE',
                 instrumentKey: 'INE175A01038',
                 component: 'gst',
                 estimatedMicro: '8040000',
@@ -84,8 +87,9 @@ describe('Dhan FY 2024-25 reconciled against Global Transactions', () => {
             bucket: 'DELIVERY',
             discrepancies: [
               {
-                scope: 'day',
+                scope: 'note',
                 dateIst: '2024-09-18',
+                exchange: 'NSE',
                 instrumentKey: null,
                 component: 'stt',
                 estimatedMicro: '39000000',
@@ -182,6 +186,69 @@ describe('Dhan FY 2024-25 reconciled against Global Transactions', () => {
         0n,
       );
       expect(used).toBe(billedThatDay);
+    });
+  });
+
+  it('net charges take the reported amount where there is one, never both', async () => {
+    await withVault(async ({ db, service }) => {
+      await importDhan(service);
+      recompute(db, DHAN, { now });
+      const effective = db
+        .prepare(
+          `SELECT source, count(*) AS n, sum(amount_micro) AS total FROM (${EFFECTIVE_CHARGES_SQL}) GROUP BY source`,
+        )
+        .all() as { source: string; n: bigint; total: bigint }[];
+      const reported = db
+        .prepare(
+          "SELECT count(*) AS n, sum(amount_micro) AS total FROM fill_charge WHERE source = 'reported'",
+        )
+        .get() as { n: bigint; total: bigint };
+      expect(effective.find((row) => row.source === 'reported')).toEqual({ source: 'reported', ...reported });
+      // One effective row per (allocation, component).
+      const keys = db
+        .prepare(`SELECT count(*) FROM (SELECT DISTINCT fill_allocation_id, component FROM fill_charge)`)
+        .pluck()
+        .get();
+      expect(effective.reduce((sum, row) => sum + row.n, 0n)).toBe(keys);
+    });
+  });
+
+  it('a corporate action on a covered scrip keeps its charges reconciled on the reshaped parts', async () => {
+    await withVault(async ({ db, service }) => {
+      await importDhan(service);
+      recompute(db, DHAN, { now });
+      const before = statuses(db);
+      // A 2:1 split of a scrip held across the split date inside the period: its allocations become parts of the
+      // imported trades (keys `K~<action>`), which must still be placed by those trades.
+      const held = db
+        .prepare(
+          `SELECT p.instrument_key AS isin, date(l.entry_date_ist, '+1 day') AS exDate FROM lot l
+           JOIN position p ON p.id = l.position_id
+           WHERE p.bucket = 'DELIVERY' AND p.instrument_key GLOB 'IN*' AND l.exit_date_ist <= '2025-03-31'
+             AND julianday(l.exit_date_ist) - julianday(l.entry_date_ist) >= 3
+           ORDER BY l.exit_date_ist LIMIT 1`,
+        )
+        .get() as { isin: string; exDate: string };
+      const bought = () =>
+        db
+          .prepare("SELECT sum(quantity) FROM fill_allocation WHERE instrument_key = ? AND side = 'BUY'")
+          .pluck()
+          .get(held.isin) as bigint;
+      const quantityBefore = bought();
+      applyCorporateActionAndRecompute(
+        db,
+        { type: 'SPLIT', isin: held.isin, exDateIst: held.exDate, ratioNum: '2', ratioDen: '1' },
+        { now },
+      );
+      // The split did reshape covered allocations (else this test would prove nothing).
+      expect(bought()).toBeGreaterThan(quantityBefore);
+      // Positions may merge (the split leaves shares held), but nothing becomes a discrepancy or an estimate.
+      const after = statuses(db);
+      expect([after.FEES_DISCREPANCY, after.FEES_ESTIMATED]).toEqual([
+        before.FEES_DISCREPANCY,
+        before.FEES_ESTIMATED,
+      ]);
+      expect(discrepancies(db)).toHaveLength(3);
     });
   });
 

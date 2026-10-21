@@ -10,16 +10,27 @@ import {
   type ChargedAllocation,
   type ChargeableFill,
   type DateRange,
+  type EstimatedCharge,
   type FillAllocation,
   type FillCharge,
   type LotFacts,
   type Position,
   type ReconciledComponent,
+  type ReconcileResult,
   type StatementChargeRow,
 } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
 
 /** Global Transactions columns, by component (adapters/dhan/statements.ts). */
+const COMPONENTS: readonly ReconciledComponent[] = [
+  'brokerage',
+  'stt',
+  'exchange_txn',
+  'sebi',
+  'ipft',
+  'stamp_duty',
+  'gst',
+];
 const GT_FIELDS: Readonly<Record<ReconciledComponent, string>> = {
   brokerage: 'brokerage_micro',
   stt: 'stt_micro',
@@ -60,44 +71,90 @@ function coverageOf(db: Database.Database, accountId: string, kinds: readonly st
 }
 
 /** Global Transactions rows, keyed to instruments the way trade rows are (an alias, else a local key). */
-function chargeRows(db: Database.Database, accountId: string, aliases: ReadonlyMap<string, string>) {
-  const rows = db
+function chargeRows(
+  db: Database.Database,
+  accountId: string,
+  aliases: ReadonlyMap<string, string>,
+): { rows: StatementChargeRow[]; unreadable: number } {
+  const stored = db
     .prepare("SELECT key_json, data_json FROM statement_row WHERE account_id = ? AND kind = 'dhan.gt.row'")
     .all(accountId) as { key_json: string; data_json: string }[];
-  return rows.flatMap((row): StatementChargeRow[] => {
+  const rows: StatementChargeRow[] = [];
+  let unreadable = 0;
+  for (const row of stored) {
     const key = parseJson(row.key_json);
     const data = parseJson(row.data_json);
     const date = text(key?.date);
     const name = text(key?.name);
-    if (date === null || name === null || data === null) return [];
     const amounts: Partial<Record<ReconciledComponent, bigint>> = {};
-    for (const [component, field] of Object.entries(GT_FIELDS) as [ReconciledComponent, string][]) {
-      const value = data[field];
-      if (typeof value !== 'string' || !MICRO.test(value)) return [];
-      amounts[component] = BigInt(value);
+    for (const component of COMPONENTS) {
+      const value = data?.[GT_FIELDS[component]];
+      if (typeof value === 'string' && MICRO.test(value)) amounts[component] = BigInt(value);
     }
-    return [{ dateIst: date, instrumentKey: aliases.get(name) ?? `local:dhan:${name}`, amounts }];
-  });
+    // A stored row that can't be read must not look like a trade the broker didn't bill: it is counted and reported.
+    if (date === null || name === null || Object.keys(amounts).length !== COMPONENTS.length) {
+      unreadable += 1;
+      continue;
+    }
+    const exchange = text(key?.exchange) ?? '';
+    rows.push({ dateIst: date, exchange, instrumentKey: aliases.get(name) ?? `local:dhan:${name}`, amounts });
+  }
+  return { rows, unreadable };
 }
 
-/** Allocations of imported fills, placed by the fill (opening lots and corporate-action lots carry no charges). */
-function chargedAllocations(
-  fills: readonly ChargeableFill[],
+/** The imported allocation a part came from: the key before the first `~` (fees/account.ts). */
+const rootOf = (key: string): string => key.split('~')[0] ?? key;
+/** The trade row id an imported allocation key (`<fill id>#<bucket>`) belongs to. */
+const fillIdOf = (key: string): string => rootOf(key).split('#')[0] ?? '';
+
+/**
+ * Allocations placed by the imported trade behind them: a corporate action's reshaped and demerged parts carry a
+ * share of that trade's charges, so they are placed by it too. Opening lots carry no charges.
+ */
+function placeAllocations(
+  fills: ReadonlyMap<string, ChargeableFill>,
   allocations: readonly FillAllocation[],
-): ChargedAllocation[] {
-  const byId = new Map(fills.map((fill) => [fill.id, fill]));
-  return allocations.flatMap((allocation) => {
-    const fill = allocation.adjustmentId === null ? byId.get(allocation.fillId) : undefined;
+): Map<string, ChargedAllocation> {
+  const placed = new Map<string, ChargedAllocation>();
+  for (const allocation of allocations) {
+    const fill = allocation.adjustmentId === null ? fills.get(fillIdOf(allocation.key)) : undefined;
+    if (fill === undefined) continue;
+    placed.set(allocation.key, {
+      allocationKey: allocation.key,
+      dateIst: fill.tradeDateIst,
+      exchange: fill.exchange,
+      instrumentKey: fill.instrumentKey,
+      valueMicro: allocation.valueMicro,
+    });
+  }
+  return placed;
+}
+
+/** The engine's estimates placed by their trade, with the shares of cashed-out shares (no allocation) included. */
+function placeEstimates(
+  fills: ReadonlyMap<string, ChargeableFill>,
+  charges: readonly FillCharge[],
+  unattached: readonly FillCharge[],
+): EstimatedCharge[] {
+  const place = (charge: FillCharge, allocationKey: string | null): EstimatedCharge[] => {
+    const fill = fills.get(fillIdOf(charge.allocationKey));
     if (fill === undefined) return [];
+    const { tradeDateIst: dateIst, exchange, instrumentKey } = fill;
     return [
       {
-        allocationKey: allocation.key,
-        dateIst: fill.tradeDateIst,
-        instrumentKey: fill.instrumentKey,
-        valueMicro: allocation.valueMicro,
+        allocationKey,
+        dateIst,
+        exchange,
+        instrumentKey,
+        component: charge.component,
+        amountMicro: charge.amountMicro,
       },
     ];
-  });
+  };
+  return [
+    ...charges.flatMap((charge) => place(charge, charge.allocationKey)),
+    ...unattached.flatMap((charge) => place(charge, null)),
+  ];
 }
 
 /** The allocation keys a position holds: its buys, matched sells and orphaned sells. */
@@ -117,84 +174,135 @@ export interface ReconcileContext {
   readonly allocationIds: ReadonlyMap<string, bigint>;
   readonly positions: readonly Position[];
   readonly charges: readonly FillCharge[];
+  /** Charges of shares a corporate action cashed out (chargeAccount's `unattached`). */
+  readonly unattached: readonly FillCharge[];
   readonly aliases: ReadonlyMap<string, string>;
 }
 
-/** The discrepancies that touch a position: its (date, instrument) groups, and day-level ones on its dates. */
+const placeKey = (place: { dateIst: string; exchange: string; instrumentKey: string | null }): string =>
+  JSON.stringify([place.dateIst, place.exchange, place.instrumentKey]);
+const noteKey = (place: { dateIst: string; exchange: string }): string =>
+  JSON.stringify([place.dateIst, place.exchange]);
+
+/** The discrepancies that touch a position: its groups' own, and contract-note ones of the notes it traded in. */
 function discrepanciesOf(
   keys: readonly string[],
   placed: ReadonlyMap<string, ChargedAllocation>,
   discrepancies: readonly ChargeDiscrepancy[],
 ): ChargeDiscrepancy[] {
   const groups = new Set<string>();
-  const dates = new Set<string>();
+  const notes = new Set<string>();
   for (const key of keys) {
     const allocation = placed.get(key);
     if (allocation === undefined) continue;
-    groups.add(`${allocation.dateIst}|${allocation.instrumentKey}`);
-    dates.add(allocation.dateIst);
+    groups.add(placeKey(allocation));
+    notes.add(noteKey(allocation));
   }
   return discrepancies.filter((entry) =>
-    entry.instrumentKey === null
-      ? dates.has(entry.dateIst)
-      : groups.has(`${entry.dateIst}|${entry.instrumentKey}`),
+    entry.instrumentKey === null ? notes.has(noteKey(entry)) : groups.has(placeKey(entry)),
   );
 }
 
+const NOTHING_RECONCILED: ReconcileResult = {
+  reported: [],
+  reportedUnattachedMicro: 0n,
+  status: new Map(),
+  discrepancies: [],
+  unmatchedRows: [],
+};
+
 /**
  * Writes reported charges and every position's charge_reconciliation row; returns the `fee_discrepancy` findings
- * (positions beyond tolerance, and statement rows matching no trade). Only Dhan's Global Transactions is a charge
- * statement in v1; Zerodha positions stay estimated until a Tax P&L tolerance is verified (PRD §16).
+ * (positions beyond tolerance, statement rows matching no trade, unreadable statement rows). Only Dhan's Global
+ * Transactions is a charge statement in v1; Zerodha positions stay estimated until a Tax P&L tolerance is verified
+ * (PRD §16).
  */
 export function reconcileAccount(
   db: Database.Database,
   accountId: string,
   context: ReconcileContext,
 ): Map<string, string> {
-  const placedList = chargedAllocations(context.fills, context.allocations);
+  const fills = new Map(context.fills.map((fill) => [fill.id, fill]));
+  const placed = placeAllocations(fills, context.allocations);
+  const statement =
+    context.broker === 'dhan' ? chargeRows(db, accountId, context.aliases) : { rows: [], unreadable: 0 };
   const result =
     context.broker === 'dhan'
       ? reconcileCharges({
-          allocations: placedList,
-          estimated: context.charges,
-          rows: chargeRows(db, accountId, context.aliases),
+          allocations: [...placed.values()],
+          estimated: placeEstimates(fills, context.charges, context.unattached),
+          rows: statement.rows,
           coverage: coverageOf(db, accountId, ['dhan.global_transactions']),
         })
-      : { reported: [], status: new Map(), discrepancies: [], unmatchedRows: [] };
-  const insertCharge = db.prepare(
+      : NOTHING_RECONCILED;
+  writeReported(db, context.allocationIds, result.reported);
+  const findings = writeStatuses(db, context.positions, placed, result);
+  for (const row of result.unmatchedRows) {
+    findings.set(
+      `statement:${placeKey(row)}`,
+      toJson({
+        dateIst: row.dateIst,
+        exchange: row.exchange,
+        instrumentKey: row.instrumentKey,
+        unmatchedStatementRow: true,
+      }),
+    );
+  }
+  if (statement.unreadable > 0)
+    findings.set('statement:unreadable', toJson({ unreadableStatementRows: statement.unreadable }));
+  return findings;
+}
+
+function writeReported(
+  db: Database.Database,
+  allocationIds: ReadonlyMap<string, bigint>,
+  reported: ReconcileResult['reported'],
+): void {
+  const insert = db.prepare(
     `INSERT INTO fill_charge (fill_allocation_id, component, amount_micro, source, rule_version)
      VALUES (?, ?, ?, 'reported', NULL)`,
   );
-  for (const charge of result.reported) {
-    const id = context.allocationIds.get(charge.allocationKey);
+  for (const charge of reported) {
+    const id = allocationIds.get(charge.allocationKey);
     if (id === undefined) throw new Error('a reported charge references an unknown allocation');
-    insertCharge.run(id, charge.component, charge.amountMicro);
+    insert.run(id, charge.component, charge.amountMicro);
   }
-  const placed = new Map(placedList.map((allocation) => [allocation.allocationKey, allocation]));
-  const insertStatus = db.prepare(
+}
+
+/** Every position's status row; the positions in discrepancy as findings, keyed so two sharing an anchor stay apart. */
+function writeStatuses(
+  db: Database.Database,
+  positions: readonly Position[],
+  placed: ReadonlyMap<string, ChargedAllocation>,
+  result: ReconcileResult,
+): Map<string, string> {
+  const insert = db.prepare(
     'INSERT INTO charge_reconciliation (position_id, status, diff_json) VALUES (?, ?, ?)',
   );
   const findings = new Map<string, string>();
-  for (const position of context.positions) {
+  for (const position of positions) {
     const keys = memberKeys(position);
     const status = positionChargeStatus(keys, result.status);
     const diffs = status === 'FEES_DISCREPANCY' ? discrepanciesOf(keys, placed, result.discrepancies) : [];
-    insertStatus.run(position.id, status, toJson({ discrepancies: diffs }));
-    if (status === 'FEES_DISCREPANCY') {
-      findings.set(
-        `position:${position.anchorKey}`,
-        toJson({ instrumentKey: position.instrumentKey, bucket: position.bucket, discrepancies: diffs }),
-      );
-    }
-  }
-  for (const row of result.unmatchedRows) {
+    insert.run(position.id, status, toJson({ discrepancies: diffs }));
+    if (status !== 'FEES_DISCREPANCY') continue;
     findings.set(
-      `statement:${row.dateIst}|${row.instrumentKey ?? ''}`,
-      toJson({ dateIst: row.dateIst, instrumentKey: row.instrumentKey, unmatchedStatementRow: true }),
+      `position:${JSON.stringify([position.anchorKey, position.instrumentKey, position.bucket])}`,
+      toJson({ instrumentKey: position.instrumentKey, bucket: position.bucket, discrepancies: diffs }),
     );
   }
   return findings;
 }
+
+/**
+ * Net charges for analytics (PRD §9.2): per allocation and component, the reported amount where a statement covers
+ * it, otherwise the estimate. `fill_charge` keeps both rows, so summing it directly would count a charge twice.
+ */
+export const EFFECTIVE_CHARGES_SQL = `
+  SELECT c.fill_allocation_id, c.component, c.amount_micro, c.source FROM fill_charge c
+  WHERE c.source = 'reported' OR NOT EXISTS (
+    SELECT 1 FROM fill_charge r
+    WHERE r.fill_allocation_id = c.fill_allocation_id AND r.component = c.component AND r.source = 'reported')`;
 
 /** Tax-report lots (Dhan Tax Report, Zerodha Tax P&L) with an ISIN; malformed rows are skipped. */
 function statementLots(db: Database.Database, accountId: string): LotFacts[] {
