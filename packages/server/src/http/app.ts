@@ -29,8 +29,8 @@ import {
   renameProfileSchema,
 } from '../services/profiles.js';
 import { breakevenSchema, readSettings, setBreakeven } from '../services/settings.js';
-import { AdjustmentError, type ActionErrorCode } from '../services/adjustments.js';
-import { InstrumentError } from '../services/instruments.js';
+import { adjustmentInputSchema } from '../services/adjustments.js';
+import { ActionError, type ActionErrorCode } from '../services/errors.js';
 import {
   instrumentNames,
   issueFilterSchema,
@@ -40,12 +40,13 @@ import {
   mapIssueInstrument,
   reopenIssue,
   suggestionsForIssue,
+  applyAccountAdjustment,
 } from '../services/issues.js';
 import {
   acceptStatementSuggestion,
-  applyAdjustment,
   dismissIssue,
   replaceRedundantLot,
+  restoreAndRecompute,
   revertAndRecompute,
 } from '../recompute/actions.js';
 import { ImportError, MAX_PREVIEW_BYTES, type ImportErrorCode, type ImportService } from '../import/index.js';
@@ -221,14 +222,15 @@ const ACTION_STATUS: Readonly<Record<Exclude<ActionErrorCode, 'failed'>, ErrorSt
   invalid: 400,
 };
 
-/** Runs an issue or adjustment action; its typed error answers a fixed code, anything else is a 500. */
-function withAction(live: LiveVault, action: (db: Database.Database) => Response): Response {
+/** Runs an issue or adjustment action; an ActionError answers its fixed code, anything else is a 500. */
+function withAction<R extends Response>(live: LiveVault, action: (db: Database.Database) => R): R | Response {
   return withVault(live, (db) => {
     try {
       return action(db);
     } catch (cause) {
-      const known = cause instanceof AdjustmentError || cause instanceof InstrumentError;
-      if (known && cause.code !== 'failed') return error(cause.code, ACTION_STATUS[cause.code]);
+      if (cause instanceof ActionError && cause.code !== 'failed') {
+        return error(cause.code, ACTION_STATUS[cause.code]);
+      }
       throw cause;
     }
   });
@@ -242,9 +244,6 @@ function subjectKeys(subjects: readonly unknown[]): string[] {
     return [record.instrumentKey, record.isin].filter((key): key is string => typeof key === 'string');
   });
 }
-
-/** An adjustment as sent: the service validates its shape (opening lot, exclusion, product override). */
-const adjustmentBody = z.looseObject({ kind: z.enum(['opening_lot', 'exclude', 'product_override']) });
 
 /** Profile and account bodies are a few short labels. */
 const SMALL_JSON_BYTES = 4 * 1024;
@@ -402,9 +401,9 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
       )
       .get('/issues', query(issueFilterSchema), (c) =>
         withVault(live, (db) => {
-          const issues = listIssues(db, c.req.valid('query'));
+          const { issues, total } = listIssues(db, c.req.valid('query'));
           const instruments = instrumentNames(db, subjectKeys(issues.map((issue) => issue.subject)));
-          return jsonResponse({ issues, instruments });
+          return c.json({ issues, total, instruments });
         }),
       )
       .get('/issues/summary', (c) => withVault(live, (db) => c.json(issueSummary(db))))
@@ -442,15 +441,26 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
           return c.json({ ok: true });
         }),
       )
-      .post('/accounts/:id/adjustments', params(idParam), ...json(adjustmentBody, SMALL_JSON_BYTES), (c) =>
-        withAction(live, (db) => {
-          const id = applyAdjustment(db, c.req.valid('param').id, c.req.valid('json'));
-          return c.json({ id }, 201);
-        }),
+      .post(
+        '/accounts/:id/adjustments',
+        params(idParam),
+        ...json(adjustmentInputSchema, SMALL_JSON_BYTES),
+        (c) =>
+          withAction(live, (db) => {
+            const id = applyAccountAdjustment(db, c.req.valid('param').id, c.req.valid('json'));
+            return c.json({ id }, 201);
+          }),
       )
       .post('/adjustments/:id/revert', params(idParam), (c) =>
         withAction(live, (db) => {
           revertAndRecompute(db, c.req.valid('param').id);
+          return c.json({ ok: true });
+        }),
+      )
+      // Fixes are revertible both ways (ADR-0013).
+      .post('/adjustments/:id/restore', params(idParam), (c) =>
+        withAction(live, (db) => {
+          restoreAndRecompute(db, c.req.valid('param').id);
           return c.json({ ok: true });
         }),
       )

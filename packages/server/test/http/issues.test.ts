@@ -35,10 +35,10 @@ interface Issue {
 async function issues(
   test: TestApp,
   filter = '',
-): Promise<{ issues: Issue[]; instruments: Record<string, string> }> {
+): Promise<{ issues: Issue[]; total: number; instruments: Record<string, string> }> {
   const response = await send(test, `/api/issues${filter}`);
   expect(response.status).toBe(200);
-  return (await response.json()) as { issues: Issue[]; instruments: Record<string, string> };
+  return (await response.json()) as { issues: Issue[]; total: number; instruments: Record<string, string> };
 }
 
 async function only(test: TestApp, kind: string): Promise<Issue> {
@@ -213,10 +213,143 @@ describe('the inbox', () => {
         [404, { error: 'not_found' }],
         [404, { error: 'not_found' }],
         [404, { error: 'not_found' }],
-        [400, { error: 'invalid' }],
+        // The route's strict schema refuses a malformed adjustment before the service sees it.
+        [400, { error: 'invalid_request' }],
         [404, { error: 'not_found' }],
         [404, { error: 'not_found' }],
       ]);
+    });
+  });
+
+  it('caps a listing and reports the total; filters are validated', async () => {
+    await withVault(async (vault) => {
+      await withoutAllotment(vault);
+      const test = testApp({}, vault.db);
+      const all = await issues(test);
+      expect(all.total).toBe(all.issues.length);
+      const one = await issues(test, '?limit=1');
+      expect([one.issues.length, one.total]).toEqual([1, all.total]);
+      for (const filter of ['?limit=0', '?limit=501', '?kind=Bad-Kind', '?unknown=1']) {
+        expect((await send(test, `/api/issues${filter}`)).status).toBe(400);
+      }
+    });
+  });
+
+  it('the summary counts open issues only', async () => {
+    await withVault(async (vault) => {
+      await withoutAllotment(vault);
+      const test = testApp({}, vault.db);
+      const summary = async () =>
+        ((await (await send(test, '/api/issues/summary')).json()) as { open: number }).open;
+      const before = await summary();
+      const fill = await only(test, 'fill_from_statement');
+      await send(test, `/api/issues/${fill.id}/dismiss`, { method: 'POST' });
+      expect(await summary()).toBe(before - 1);
+    });
+  });
+
+  it('reopening recomputes: an issue whose cause is gone resolves at once', async () => {
+    await withVault(async (vault) => {
+      await withoutAllotment(vault);
+      const test = testApp({}, vault.db);
+      const incomplete = await only(test, 'incomplete_position');
+      await send(test, `/api/issues/${incomplete.id}/dismiss`, { method: 'POST' });
+      // Fixed meanwhile: the Tax Report lot is accepted.
+      const fill = await only(test, 'fill_from_statement');
+      await send(test, `/api/issues/${fill.id}/accept`, { method: 'POST' });
+      expect(status(vault.db, incomplete.id)).toBe('dismissed');
+      await send(test, `/api/issues/${incomplete.id}/reopen`, { method: 'POST' });
+      expect(status(vault.db, incomplete.id)).toBe('resolved');
+    });
+  });
+
+  it('a reverted fix can be restored', async () => {
+    await withVault(async (vault) => {
+      await withoutAllotment(vault);
+      const test = testApp({}, vault.db);
+      const fill = await only(test, 'fill_from_statement');
+      const accepted = await send(test, `/api/issues/${fill.id}/accept`, { method: 'POST' });
+      const { adjustmentId } = (await accepted.json()) as { adjustmentId: string };
+      await send(test, `/api/adjustments/${adjustmentId}/revert`, { method: 'POST' });
+      expect((await issues(test, '?kind=incomplete_position')).issues).toHaveLength(1);
+      expect((await send(test, `/api/adjustments/${adjustmentId}/restore`, { method: 'POST' })).status).toBe(
+        200,
+      );
+      expect((await issues(test, '?kind=incomplete_position')).issues).toEqual([]);
+      const twice = await send(test, `/api/adjustments/${adjustmentId}/restore`, { method: 'POST' });
+      expect(twice.status).toBe(404);
+    });
+  });
+
+  it('refuses adjustments that name no position or instrument of the account', async () => {
+    await withVault(async (vault) => {
+      await withoutAllotment(vault);
+      const test = testApp({}, vault.db);
+      const override = {
+        kind: 'product_override',
+        instrumentKey: 'INE000X00000',
+        tradeDateIst: '2024-09-18',
+        bucket: 'DELIVERY',
+      };
+      const replies = [
+        await send(
+          test,
+          `/api/accounts/${DHAN}/adjustments`,
+          json('POST', { kind: 'exclude', anchorKey: 'typo' }),
+        ),
+        await send(test, `/api/accounts/${DHAN}/adjustments`, json('POST', override)),
+      ];
+      expect(await Promise.all(replies.map(async (reply) => [reply.status, await reply.json()]))).toEqual([
+        [400, { error: 'invalid' }],
+        [400, { error: 'invalid' }],
+      ]);
+    });
+  });
+
+  it("a product override re-buckets an instrument's day", async () => {
+    await withVault(async (vault) => {
+      await withoutAllotment(vault);
+      const test = testApp({}, vault.db);
+      const intraday = () =>
+        vault.db
+          .prepare("SELECT count(*) FROM position WHERE instrument_key = ? AND bucket = 'INTRADAY'")
+          .pluck()
+          .get(BAJAJ);
+      expect(intraday()).toBe(1n);
+      const override = {
+        kind: 'product_override',
+        instrumentKey: BAJAJ,
+        tradeDateIst: '2024-09-18',
+        bucket: 'DELIVERY',
+      };
+      const response = await send(test, `/api/accounts/${DHAN}/adjustments`, json('POST', override));
+      expect(response.status).toBe(201);
+      expect(intraday()).toBe(0n);
+    });
+  });
+
+  it('maps to a new instrument without an ISIN, and refuses a bad ISIN without changing anything', async () => {
+    await withVault(async ({ db, service }) => {
+      await importFiles(service, DHAN, [fixtureFile('dhan', 'trade_history')]);
+      recompute(db, DHAN);
+      const test = testApp({}, db);
+      const [first, second] = (await issues(test, '?kind=unresolved_instrument')).issues;
+      if (first === undefined || second === undefined) throw new Error('need two unresolved instruments');
+      const bad = await send(test, `/api/issues/${first.id}/map`, json('POST', { isin: 'NOTANISIN' }));
+      expect([bad.status, await bad.json()]).toEqual([400, { error: 'invalid' }]);
+      expect(status(db, first.id)).toBe('open');
+      const created = await send(
+        test,
+        `/api/issues/${second.id}/map`,
+        json('POST', { newDisplayName: 'My scrip' }),
+      );
+      expect(created.status).toBe(200);
+      expect(status(db, second.id)).toBe('resolved');
+      const instruments = db
+        .prepare("SELECT count(*) FROM instrument WHERE isin IS NULL AND display_name = 'My scrip'")
+        .pluck()
+        .get();
+      expect(instruments).toBe(1n);
     });
   });
 });

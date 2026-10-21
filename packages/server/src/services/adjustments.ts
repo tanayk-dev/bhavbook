@@ -6,18 +6,10 @@ import { randomUUID } from 'node:crypto';
 import { reconstructAccount, type Adjustment } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
+import { ActionError } from './errors.js';
 
-/** What the HTTP layer answers with (a reworded message never changes what the UI shows). */
-export type ActionErrorCode = 'not_found' | 'invalid' | 'failed';
-
-export class AdjustmentError extends Error {
+export class AdjustmentError extends ActionError {
   override readonly name = 'AdjustmentError';
-  readonly code: ActionErrorCode;
-
-  constructor(message: string, options: ErrorOptions & { readonly code?: ActionErrorCode } = {}) {
-    super(message, options);
-    this.code = options.code ?? 'failed';
-  }
 }
 
 export type AdjustmentSource = 'manual' | 'broker_statement';
@@ -32,7 +24,7 @@ export const quantitySchema = z.string().regex(/^[1-9]\d{0,11}$/);
 export const microSchema = z.string().regex(/^\d{1,18}$/);
 
 /** What callers (and the payload column) hold: bigints as decimal strings. */
-const inputSchema = z.discriminatedUnion('kind', [
+export const adjustmentInputSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('opening_lot'),
@@ -52,7 +44,7 @@ const inputSchema = z.discriminatedUnion('kind', [
     .strict(),
 ]);
 
-export type AdjustmentInput = z.infer<typeof inputSchema>;
+export type AdjustmentInput = z.infer<typeof adjustmentInputSchema>;
 
 interface Row {
   readonly id: string;
@@ -87,7 +79,7 @@ function toCore(id: string, accountId: string, input: AdjustmentInput): Adjustme
 }
 
 function parseInput(input: unknown): AdjustmentInput {
-  const parsed = inputSchema.safeParse(input);
+  const parsed = adjustmentInputSchema.safeParse(input);
   if (!parsed.success) throw new AdjustmentError('invalid adjustment', { code: 'invalid' });
   return parsed.data;
 }
@@ -103,7 +95,7 @@ function parseStored(row: Row): AdjustmentInput {
       cause: { adjustmentId: row.id, error },
     });
   }
-  const parsed = inputSchema.safeParse(value);
+  const parsed = adjustmentInputSchema.safeParse(value);
   if (!parsed.success)
     throw new AdjustmentError('a stored adjustment is unreadable', {
       code: 'failed',

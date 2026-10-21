@@ -14,7 +14,7 @@ import {
   type UnresolvedAlias,
 } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
-import type { ActionErrorCode } from './adjustments.js';
+import { ActionError } from './errors.js';
 
 export type AliasSource = 'learned' | 'join' | 'file' | 'manual';
 
@@ -23,14 +23,8 @@ const SOURCE_RANK: Readonly<Record<AliasSource, number>> = { learned: 0, join: 1
 const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;
 export const UNRESOLVED_INSTRUMENT = 'unresolved_instrument';
 
-export class InstrumentError extends Error {
+export class InstrumentError extends ActionError {
   override readonly name = 'InstrumentError';
-  readonly code: ActionErrorCode;
-
-  constructor(message: string, options: ErrorOptions & { readonly code?: ActionErrorCode } = {}) {
-    super(message, options);
-    this.code = options.code ?? 'failed';
-  }
 }
 
 export interface ResolveOptions {
