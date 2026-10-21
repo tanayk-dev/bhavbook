@@ -10,3 +10,4 @@ export * from './positions/index.js';
 export * from './adjustments/index.js';
 export * from './corporate-actions/index.js';
 export * from './fees/index.js';
+export * from './analytics/index.js';
