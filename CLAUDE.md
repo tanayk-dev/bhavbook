@@ -32,4 +32,5 @@ pnpm pii:scan            # scan fixtures for personal data (add ~/.bhavbook-pii-
 - **`core` and `adapters` are pure.** All I/O (SQLite, workers, files, HTTP) lives in `packages/server`.
 - **Test first** for `core` and `adapters`: failing tests in the first commit.
 - **Privacy:** never open or commit files under `docs/broker-exports/` other than `*.md` (they're real exports with personal data). Use the anonymised fixtures in `packages/adapters/fixtures/`. Never store or log names, PAN, client IDs, mobile numbers, emails or original file names.
-- Ask the user before outward-facing actions: making the repo public, npm publish, tagging releases.
+- Ask the user before outward-facing actions: npm publish, tagging releases, changing repo settings or visibility.
+- The user has authorised the GitHub workflow on this repo through `gh`: push branches, open and update PRs, re-run CI, and squash-merge a PR (`gh pr merge <n> --squash --delete-branch`) once CI is green on all three OSes and the plan's reviews report no CRITICAL or HIGH findings. Never stack a PR on another unmerged branch: merging the base with `--delete-branch` closes it.

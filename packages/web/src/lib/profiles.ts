@@ -9,6 +9,8 @@ export const BROKERS = [
 ] as const;
 export type BrokerId = (typeof BROKERS)[number]['id'];
 
+export const brokerLabel = (id: string): string => BROKERS.find((broker) => broker.id === id)?.label ?? id;
+
 export interface Account {
   readonly id: string;
   readonly broker: string;
