@@ -56,6 +56,8 @@ describe('golden: Dhan FY 2024-25 realised P&L', () => {
            WHERE l.exit_date_ist BETWEEN '2024-04-01' AND '2025-03-31'`,
         )
         .all() as { position_id: string; exit_date_ist: string; gross: bigint; instrument_key: string }[];
+      // safeIntegers is on for the vault: money arrives as bigint, never as a lossy number.
+      expect(rows.every((row) => typeof row.gross === 'bigint')).toBe(true);
       const lots: RealisedLot[] = rows.map((row) => ({
         positionId: row.position_id,
         exitDateIst: row.exit_date_ist,
@@ -64,7 +66,9 @@ describe('golden: Dhan FY 2024-25 realised P&L', () => {
       }));
       const report = pnlReport();
       const ours = [...realisedBy(lots, 'month').values()].reduce((sum, month) => sum + month.grossMicro, 0n);
-      expect(ours - report.grossMicro).toBe(-30_000n);
+      const known = [...REPORT_ROUNDING.values()].reduce((sum, delta) => sum + delta, 0n);
+      expect(known).toBe(-30_000n);
+      expect(ours - report.grossMicro).toBe(known);
 
       const oursByIsin = new Map<string, bigint>();
       for (const row of rows) {

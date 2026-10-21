@@ -21,9 +21,10 @@ export interface Realised {
 /** Realised P&L per exit day or month, in date order. */
 export function realisedBy(lots: readonly RealisedLot[], by: 'day' | 'month'): Map<string, Realised> {
   const totals = new Map<string, Realised>();
-  for (const lot of [...lots].sort((a, b) =>
-    a.exitDateIst < b.exitDateIst ? -1 : a.exitDateIst > b.exitDateIst ? 1 : 0,
-  )) {
+  const ordered = lots
+    .slice()
+    .sort((a, b) => (a.exitDateIst < b.exitDateIst ? -1 : a.exitDateIst > b.exitDateIst ? 1 : 0));
+  for (const lot of ordered) {
     const key = by === 'day' ? lot.exitDateIst : lot.exitDateIst.slice(0, 7);
     const total = totals.get(key) ?? { lots: 0, grossMicro: 0n, chargesMicro: 0n, netMicro: 0n };
     totals.set(key, {
@@ -45,26 +46,40 @@ export interface LotLink {
   readonly quantity: bigint;
 }
 
+export interface LotCharges {
+  readonly shares: Map<string, bigint>;
+  /** Charges of allocations no lot holds (an orphaned sell has no lot): kept visible, never dropped. */
+  readonly unallocatedMicro: bigint;
+}
+
 /**
  * Each allocation's charges spread over the lots it belongs to by quantity, with exact sums (largest remainder):
- * a lot's charge is its share of its entry fill's charges plus its share of its exit fill's.
+ * a lot's charge is its share of its entry fill's charges plus its share of its exit fill's. Pass every lot of
+ * the positions concerned, open ones too, or a fill's whole charge lands on the lots passed.
  */
 export function apportionLotCharges(
   allocationCharges: ReadonlyMap<string, bigint>,
   lots: readonly LotLink[],
-): Map<string, bigint> {
+): LotCharges {
   const byAllocation = new Map<string, LotLink[]>();
   for (const lot of lots) {
     for (const key of lot.exit === null ? [lot.entry] : [lot.entry, lot.exit]) {
-      byAllocation.set(key, [...(byAllocation.get(key) ?? []), lot]);
+      const members = byAllocation.get(key);
+      if (members === undefined) byAllocation.set(key, [lot]);
+      else members.push(lot);
     }
   }
   const shares = new Map(lots.map((lot) => [lot.lotKey, 0n]));
-  for (const [key, members] of byAllocation) {
-    const charge = allocationCharges.get(key) ?? 0n;
+  let unallocatedMicro = 0n;
+  for (const [key, charge] of allocationCharges) {
+    const members = byAllocation.get(key);
+    if (members === undefined) {
+      unallocatedMicro += charge;
+      continue;
+    }
     for (const { item, part } of splitByWeight(charge, members, (lot) => lot.quantity)) {
       shares.set(item.lotKey, (shares.get(item.lotKey) ?? 0n) + part);
     }
   }
-  return shares;
+  return { shares, unallocatedMicro };
 }

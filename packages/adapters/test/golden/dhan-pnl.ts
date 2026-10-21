@@ -3,12 +3,8 @@
 import { parseDecimalToMicro } from '@bhavbook/core';
 
 export interface DhanPnl {
-  /** `Gross P&L` from the summary line. */
+  /** `Gross P&L` from the summary line; checked against the rows' sum. */
   readonly grossMicro: bigint;
-  /** `Net P&L` from the summary line. */
-  readonly netMicro: bigint;
-  /** `Total Charges` from the summary line. */
-  readonly chargesMicro: bigint;
   /** Per scrip: `Realised P&L`. */
   readonly realised: ReadonlyMap<string, bigint>;
 }
@@ -48,10 +44,9 @@ export function readDhanPnl(text: string): DhanPnl {
     if (index < 0) throw new Error(`the P&L summary has no ${label}`);
     return parseDecimalToMicro(summary[index + 1] ?? '');
   };
-  return {
-    grossMicro: value('Gross P&L'),
-    netMicro: value('Net P&L'),
-    chargesMicro: value('Total Charges'),
-    realised,
-  };
+  const grossMicro = value('Gross P&L');
+  const rows = [...realised.values()].reduce((sum, amount) => sum + amount, 0n);
+  // A row the parser skipped would otherwise vanish from every comparison.
+  if (rows !== grossMicro) throw new Error('the P&L rows do not add up to its Gross P&L');
+  return { grossMicro, realised };
 }
