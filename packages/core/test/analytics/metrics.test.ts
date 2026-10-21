@@ -7,7 +7,7 @@ import {
   apportionLotCharges,
   computeMetrics,
   costOfMistakes,
-  holdingDays,
+  tradeHoldingDays,
   plannedRiskMicro,
   ratio,
   realisedBy,
@@ -69,9 +69,9 @@ describe('computeMetrics', () => {
     expect(metrics.chargesMicro).toBe(50n * RUPEE);
     expect(metrics.netMicro).toBe(350n * RUPEE);
     expect(metrics.winRate).toEqual(ratio(2n, 3n));
-    expect(metrics.expectancyMicro).toEqual(ratio(350n * RUPEE, 4n));
-    expect(metrics.avgWinnerMicro).toEqual(ratio(450n * RUPEE, 2n));
-    expect(metrics.avgLoserMicro).toEqual(ratio(-100n * RUPEE, 1n));
+    expect(metrics.expectancy).toEqual(ratio(350n * RUPEE, 4n));
+    expect(metrics.avgWinner).toEqual(ratio(450n * RUPEE, 2n));
+    expect(metrics.avgLoser).toEqual(ratio(-100n * RUPEE, 1n));
     expect(metrics.profitFactor).toEqual(ratio(450n, 100n));
   });
 
@@ -86,14 +86,14 @@ describe('computeMetrics', () => {
     expect(empty).toMatchObject({
       trades: 0,
       winRate: null,
-      expectancyMicro: null,
+      expectancy: null,
       profitFactor: null,
       avgR: null,
     });
     expect(computeMetrics([net(10n), net(20n)], OPTIONS).profitFactor).toBe('no_losses');
     const flat = computeMetrics([net(0n), net(0n)], OPTIONS);
     expect(flat).toMatchObject({ trades: 2, breakevens: 2, winRate: null, profitFactor: null });
-    expect(flat.expectancyMicro).toEqual(ratio(0n, 1n));
+    expect(flat.expectancy).toEqual(ratio(0n, 1n));
   });
 
   it('includes only closed, complete, non-excluded trades, and counts what it left out', () => {
@@ -181,10 +181,10 @@ describe('planned risk and R', () => {
   });
 });
 
-describe('holdingDays', () => {
+describe('tradeHoldingDays', () => {
   it('counts IST calendar days from the first entry to the final exit; intraday is 0', () => {
-    expect(holdingDays(trade({ openedDateIst: '2024-05-02', closedDateIst: '2024-05-02' }))).toBe(0);
-    expect(holdingDays(trade({ openedDateIst: '2023-12-31', closedDateIst: '2024-03-01' }))).toBe(61);
+    expect(tradeHoldingDays(trade({ openedDateIst: '2024-05-02', closedDateIst: '2024-05-02' }))).toBe(0);
+    expect(tradeHoldingDays(trade({ openedDateIst: '2023-12-31', closedDateIst: '2024-03-01' }))).toBe(61);
   });
 });
 
