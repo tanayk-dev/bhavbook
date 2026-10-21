@@ -67,7 +67,8 @@
 | S13a-3a | Settings: profiles and accounts (rename, move + recompute), breakeven, fee versions | S13a-2 | default | **yes** |
 | S13a-3b-1 | Settings: tags (CRUD, merge) | S13a-3a | default | **yes** |
 | S13a-3b-2 | Settings: backups (create, download, restore, list) | S13a-3b-1 | default | **yes** |
-| S13b | Import wizard and coverage view | S13a | default | — |
+| S13b-1 | Import API: preview, commit, history, undo, coverage | S13a | default | — |
+| S13b-2 | Import wizard and coverage view (UI) | S13b-1 | default | — |
 | S13c | Issues inbox | S13b, S10a, S10b, S12b | default | — |
 | S14a | Review queue, position detail, journal, screenshots | S13c, S10c | default | **yes** |
 | S14b | Corporate actions UI and diagnostics export | S13c | default | — |
@@ -84,7 +85,7 @@ W5  S7-1 → S7-2
 W6  S8
 W7  S9-1 → S9-2
 W8  S10a-1 → S10a-2 ∥ S10b-1 → S10b-2 ∥ S12a-1 → S12a-2 ∥ S13a-1 → S13a-2 → S13a-3a → S13a-3b-1 → S13a-3b-2
-W9  S10c ∥ S12b ∥ S13b
+W9  S10c ∥ S12b ∥ S13b-1 → S13b-2
 W10 S13c ∥ S15a
 W11 S14a ∥ S14b
 W12 S15b
@@ -836,6 +837,7 @@ git check-ignore -q docs/broker-exports/dhan/tax-report/x.xls && echo ignored
 
 ## Changelog
 
+- 2026-10-21 r18: S13a-3b-2 merged (PR 25); Wave 8 is done. S13b split into S13b-1 (the import API) and S13b-2 (the wizard and coverage UI). The import service is rebuilt whenever the live vault connection changes, so a restore drops previews made against the old vault (committing one answers `preview_expired`). Preview uploads are multipart; file names are not sent (the browser keeps them, ADR-0019), and a `kind` part per file carries the person's pick when detection is ambiguous. ImportError carries a typed `code` like BackupError.
 - 2026-10-20 r17: S13a-3b-2 (backups). The repo is public (macOS Actions runners were unavailable to the private repo). The server's vault connection is now replaceable: a restore closes it, restores, and reopens whatever is on disk; if the reopen fails, every later request retries it. **S13b and later steps must read the vault through the app's live connection, never capture `AppOptions.vault`**, or a restore leaves them on a closed handle. Backup errors carry a typed `problem` instead of being matched by message. Uploads stream to disk (cap 512 MB), one restore runs at a time, and stale upload files are swept. Manual backups are `backup-<UTC>-manual.bhav` and never rotate; restoring the oldest automatic backup of a reason can rotate that file away after it has been read (the restore is unaffected).
 - 2026-10-20 r16: S13a-3a merged (PR 22; a focus assertion raced on the macOS runner and now waits for focus). S13a-3b split into S13a-3b-1 (tags) and S13a-3b-2 (backups): restoring from the UI must close, replace and reopen the vault the running server holds, which deserves its own review. Tags: names follow the profile-label rules and are unique per kind ignoring case (migration 0004 backs that up); merge and delete change only tag links, never journal entries, and report how many entries they touch. S13a-3b-1 is about 940 changed lines, a third of them tests, and is kept whole.
 - 2026-10-20 r15: S13a-2 merged, then a design revision (PR 21): the build was checked against published "AI slop" tells and the indigo accent, Inter and orange attention colour were replaced with ledger-rule blue, IBM Plex and pencil ochre (direction §10). S13a-3 split into S13a-3a (profiles and accounts, breakeven, fee versions) and S13a-3b (tags, backups). Moving an account applies the move and its recompute in one transaction (PRD §2 C5): if the recompute fails nothing moves.

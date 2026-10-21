@@ -93,6 +93,22 @@ describe('previewImport', () => {
     );
   });
 
+  it("honours the person's pick for an ambiguous file only when it is one of the tied candidates", async () => {
+    const twin: BrokerAdapter = { ...zerodhaAdapter, broker: 'dhan' };
+    await withVault(
+      async ({ service }) => {
+        const file = fixtureFile('zerodha', 'tradebook');
+        const preview = await service.previewImport(ZERODHA, [
+          { ...file, kind: 'zerodha.tradebook' },
+          { ...file, kind: 'dhan.trade_history' },
+        ]);
+        expect(preview.files.map((entry) => entry.status)).toEqual(['ready', 'ambiguous']);
+        expect(preview.files[0]).toMatchObject({ broker: 'zerodha', kind: 'zerodha.tradebook' });
+      },
+      { adapters: [zerodhaAdapter, twin] },
+    );
+  });
+
   it('only shows a bounded sample of row errors, as line + code', async () => {
     await withVault(async ({ service }) => {
       const header =

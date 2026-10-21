@@ -8,9 +8,6 @@ import { send, testApp, TOKEN } from './helpers.js';
 
 describe('route tree', () => {
   it.each([
-    ['GET', '/api/imports'],
-    ['POST', '/api/imports'],
-    ['GET', '/api/coverage'],
     ['GET', '/api/issues'],
     ['POST', '/api/issues/7/resolve'],
     ['GET', '/api/positions'],

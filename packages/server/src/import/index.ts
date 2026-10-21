@@ -7,7 +7,8 @@ export {
   type ImportFile,
   type PreviewCounts,
 } from './preview.js';
-export { ImportError } from './errors.js';
+export { ImportError, type ImportErrorCode } from './errors.js';
+export { listImports, type ImportRecord } from './history.js';
 export {
   decodeStatementPayload,
   decodeTradePayload,

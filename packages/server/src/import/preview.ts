@@ -22,6 +22,8 @@ export interface ImportFile {
   readonly bytes: Buffer;
   /** Shown back in the preview only; never stored (ADR-0019). */
   readonly name?: string;
+  /** The person's choice when detection was ambiguous: honoured only if it is one of the tied candidates. */
+  readonly kind?: ReportKind;
 }
 
 export interface PreviewCounts {
@@ -181,29 +183,33 @@ export async function previewFile(
   const [top] = candidates;
   if (top === undefined) return { preview: { ...base, status: 'unrecognised' }, parsed: null };
   const ties = candidates.filter((candidate) => candidate.confidence === top.confidence);
-  if (ties.length > 1) {
+  const chosen = ties.length > 1 ? ties.find((candidate) => candidate.kind === file.kind) : top;
+  if (chosen === undefined) {
     const options = ties.map(({ broker, kind, confidence }) => ({ broker, kind, confidence }));
     return { preview: { ...base, status: 'ambiguous', candidates: options }, parsed: null };
   }
-  if (top.rejected !== undefined) {
+  if (chosen.rejected !== undefined) {
     const preview = {
       ...base,
       status: 'rejected',
-      broker: top.broker,
-      kind: top.kind,
-      message: top.rejected,
+      broker: chosen.broker,
+      kind: chosen.kind,
+      message: chosen.rejected,
     } as const;
     return { preview, parsed: null };
   }
-  if (top.broker !== account.broker) {
-    return { preview: { ...base, status: 'wrong_broker', broker: top.broker, kind: top.kind }, parsed: null };
+  if (chosen.broker !== account.broker) {
+    return {
+      preview: { ...base, status: 'wrong_broker', broker: chosen.broker, kind: chosen.kind },
+      parsed: null,
+    };
   }
-  const adapter = context.adapters.find((candidate) => candidate.broker === top.broker);
+  const adapter = context.adapters.find((candidate) => candidate.broker === chosen.broker);
   if (adapter === undefined) throw new Error('detected broker has no adapter');
   let result: ParseResult;
   try {
     // Adapters are ours, but their output still crosses a boundary into the vault: check it against the contract.
-    result = parseResultSchema.parse(adapter.parse(read.input, top.kind));
+    result = parseResultSchema.parse(adapter.parse(read.input, chosen.kind));
   } catch {
     return { preview: { ...base, status: 'unreadable', reason: 'malformed' }, parsed: null };
   }
@@ -219,8 +225,8 @@ export async function previewFile(
   const preview: FilePreview = {
     ...base,
     status: 'ready',
-    broker: top.broker,
-    kind: top.kind,
+    broker: chosen.broker,
+    kind: chosen.kind,
     counts,
     errors: result.errors.slice(0, ERROR_SAMPLE),
     coverage: result.coverage,
@@ -228,7 +234,7 @@ export async function previewFile(
     issueForecast: forecast ?? [],
   };
   const parsed = {
-    kind: top.kind,
+    kind: chosen.kind,
     adapterVersion: adapter.version,
     sha256: read.sha256,
     result,
