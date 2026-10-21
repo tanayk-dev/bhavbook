@@ -37,6 +37,18 @@ async function importFiles(page: Page, files: string[]): Promise<void> {
   await expect(page.getByText(/^Imported \d+ new trade rows?/)).toBeVisible();
 }
 
+/** The trade file without the 17 Sep 2024 IPO allotment, as the PRD describes the export (plan E11). */
+function tradesWithoutAllotment(outputPath: string): string {
+  writeFileSync(
+    outputPath,
+    readFileSync(fixture('trade_history'), 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => !line.startsWith('2024-09-17,09:22:16,Bajaj Housing Finance'))
+      .join('\r\n'),
+  );
+  return outputPath;
+}
+
 const openCount = (page: Page) =>
   page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: /Issues/ });
 
@@ -61,15 +73,7 @@ test('the statement lot completes the IPO position; a fee difference is read and
   page,
   app,
 }, info) => {
-  // The export the PRD describes: the 17 Sep 2024 IPO allotment is not in the trade file (plan E11).
-  const trades = info.outputPath('trades-without-allotment.csv');
-  writeFileSync(
-    trades,
-    readFileSync(fixture('trade_history'), 'utf8')
-      .split(/\r?\n/)
-      .filter((line) => !line.startsWith('2024-09-17,09:22:16,Bajaj Housing Finance'))
-      .join('\r\n'),
-  );
+  const trades = tradesWithoutAllotment(info.outputPath('trades-without-allotment.csv'));
   await onboardDhan(page, app.launch);
   await importFiles(page, [
     trades,
@@ -100,4 +104,38 @@ test('the statement lot completes the IPO position; a fee difference is read and
   await expect(page.getByRole('article', { name: /Charges differ/ })).toHaveCount(feeCount - 1);
   await page.getByLabel('Show').selectOption('dismissed');
   await expect(page.getByRole('article', { name: /Charges differ/ })).toHaveCount(1);
+});
+
+test('an opening lot completes the position by hand', async ({ page, app }, info) => {
+  await onboardDhan(page, app.launch);
+  await importFiles(page, [tradesWithoutAllotment(info.outputPath('trades.csv'))]);
+  await page.getByRole('link', { name: /Issues/ }).click();
+  const incomplete = page.getByRole('article', { name: /Incomplete position: Bajaj Housing/ });
+  await incomplete.getByRole('button', { name: 'Add opening lot…' }).click();
+  await incomplete.getByLabel('Total cost (₹)').fill('35,200');
+  await incomplete.getByLabel('Bought on').fill('2024-09-17');
+  await incomplete.getByRole('button', { name: 'Add opening lot', exact: true }).click();
+  await expect(page.getByText('Added the opening lot; the position was recomputed.')).toBeVisible();
+  await expect(incomplete).toHaveCount(0);
+  await page.getByLabel('Show').selectOption('resolved');
+  await expect(incomplete).toContainText('Resolved: nothing to do.');
+});
+
+test('excluding a position resolves it; the kind filter and j/k find their way', async ({
+  page,
+  app,
+}, info) => {
+  await onboardDhan(page, app.launch);
+  await importFiles(page, [tradesWithoutAllotment(info.outputPath('trades.csv'))]);
+  await page.getByRole('link', { name: /Issues/ }).click();
+  await page.getByLabel('Kind').selectOption('incomplete_position');
+  const cards = page.getByRole('article');
+  await expect(cards).toHaveCount(1);
+  await cards.first().getByRole('button', { name: 'Exclude…' }).focus();
+  await page.keyboard.press('j');
+  await expect(page.getByRole('heading', { name: /Incomplete position: Bajaj Housing/ })).toBeFocused();
+  await cards.first().getByRole('button', { name: 'Exclude…' }).click();
+  await cards.first().getByRole('button', { name: 'Exclude position' }).click();
+  await expect(page.getByText(/^Excluded the position from every metric/)).toBeVisible();
+  await expect(page.getByText('Nothing needs your attention')).toBeVisible();
 });

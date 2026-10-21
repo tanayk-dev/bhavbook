@@ -1,13 +1,14 @@
-// One inbox issue (PRD §4): what it means in plain words, and its fixes. Every fix is the user's choice and is
-// recomputed on the server (ADR-0013); dismissing is "I know, leave it". Amounts go through Money (formatINR), dates
-// are IST, and nothing relies on colour alone.
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+// One inbox issue (PRD §4): what it means in plain words, and its fixes. Fixes and Dismiss are offered on open
+// issues only; a dismissed issue can be reopened, and a resolved one is read-only. Every fix is the user's choice and
+// is recomputed on the server (ADR-0013). One action per card at a time. Amounts go through Money (formatINR),
+// dates are IST, and nothing relies on colour alone.
+import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { MapInstrumentForm, OpeningLotForm } from '@/components/issue-fixes';
 import { Money } from '@/components/money';
 import { TableRegion, TOUCH } from '@/components/settings';
 import { Button } from '@/components/ui/button';
-import { formatIstDate } from '@/lib/format';
+import { formatIstDate, istDateOf } from '@/lib/format';
 import {
   actionError,
   addAdjustment,
@@ -37,7 +38,7 @@ const COMPONENTS: Readonly<Record<string, string>> = {
 
 const GENERIC: Readonly<Record<string, string>> = {
   corporate_action_suspected:
-    'The trades look like a split, bonus or other corporate action that has not been entered. Enter it under corporate actions (coming in a later step), or dismiss this if it is wrong.',
+    'The trades look like a split, bonus or other corporate action that has not been entered. Entering corporate actions arrives in a later version; dismiss this if it is wrong.',
   cash_in_lieu: 'A corporate action left a fraction of a share, which the broker pays out as cash.',
   journal_unattached:
     'The trade a journal entry was written for is no longer imported. The entry is kept; re-import the trade to bring it back.',
@@ -47,17 +48,53 @@ const GENERIC: Readonly<Record<string, string>> = {
     'Some trades fall before the charge rules BhavBook ships, so their charges are unknown, not guessed.',
   charges_unattached: 'Charges of shares a corporate action cashed out have no position left to sit on.',
   recompute_failed: 'BhavBook could not rebuild positions for this account. Its last good state is kept.',
+  opening_lot_redundant: 'Real trades now cover an opening lot you added.',
 };
 
-interface FixProps {
-  readonly issue: Issue;
-  readonly name: (key: string | null) => string;
-  readonly done: (message: string) => void;
+/** What a fix reports back: success (the card will usually leave the list) or a failure message. */
+export interface Outcome {
+  readonly onDone: (message: string) => void;
+  readonly onFailed: (message: string) => void;
 }
 
-function FillFromStatement({ issue, name, done }: FixProps) {
+interface FixProps extends Outcome {
+  readonly issue: Issue;
+  readonly name: (key: string | null) => string;
+  /** Any action of this card is running: the others wait. */
+  readonly busy: boolean;
+}
+
+/** Refetches everything a fix can change, then reports. */
+function useRefresh() {
+  const queryClient = useQueryClient();
+  return () => queryClient.invalidateQueries();
+}
+
+function useAction(
+  issue: Issue,
+  action: 'accept' | 'replace' | 'dismiss' | 'reopen',
+  outcome: Outcome,
+  message: string,
+) {
+  const refresh = useRefresh();
+  return useMutation({
+    mutationKey: ['issue', issue.id],
+    mutationFn: () => issueAction(issue.id, action),
+    onSuccess: async () => {
+      await refresh();
+      outcome.onDone(message);
+    },
+    onError: async (error) => {
+      // Announced by the page: if the issue changed meanwhile, the refetch removes this card with its alert.
+      outcome.onFailed(actionError(error));
+      await refresh();
+    },
+  });
+}
+
+function FillFromStatement({ issue, name, busy, ...outcome }: FixProps) {
   const lot = lotSuggestion(issue.subject);
-  const accept = useAction(issue, 'accept', done, 'Used the statement lot; the position was recomputed.');
+  const accept = useAction(issue, 'accept', outcome, 'Used the statement lot; the position was recomputed.');
   if (lot === null) return <Unreadable />;
   return (
     <>
@@ -66,10 +103,10 @@ function FillFromStatement({ issue, name, done }: FixProps) {
         of {name(lot.instrumentKey)} bought on {formatIstDate(lot.entryDateIst)} for{' '}
         <Money valueMicro={lot.totalCostMicro} />.
       </p>
-      <Actions issue={issue} done={done} error={accept.error}>
+      <Actions issue={issue} busy={busy} error={accept.error} {...outcome}>
         <Button
           className={TOUCH}
-          disabled={accept.isPending}
+          disabled={busy}
           onClick={() => {
             accept.mutate();
           }}
@@ -81,90 +118,102 @@ function FillFromStatement({ issue, name, done }: FixProps) {
   );
 }
 
-function Incomplete({ issue, name, done }: FixProps) {
+function Incomplete({ issue, name, busy, ...outcome }: FixProps) {
   const position = incompletePosition(issue.subject);
   const [open, setOpen] = useState<'lot' | 'exclude' | null>(null);
-  const queryClient = useQueryClient();
+  const refresh = useRefresh();
   const exclude = useMutation({
-    mutationFn: () => addAdjustment(issue.accountId ?? '', { kind: 'exclude', anchorKey: anchorOf(issue) }),
+    mutationKey: ['issue', issue.id],
+    mutationFn: (anchorKey: string) => addAdjustment(issue.accountId ?? '', { kind: 'exclude', anchorKey }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries();
-      done('Excluded the position from every metric; it can be included again.');
+      await refresh();
+      outcome.onDone('Excluded the position from every metric. It stays visible on its account.');
+    },
+    onError: (error) => {
+      outcome.onFailed(actionError(error));
     },
   });
   if (position === null || issue.accountId === null) return <Unreadable />;
+  const { accountId } = issue;
+  const { anchorKey } = position;
+  // An intraday run can't be completed by an older lot (intraday never carries over a day); it can be excluded.
+  const canAddLot = position.bucket !== 'INTRADAY';
   return (
     <>
       <p>
         {name(position.instrumentKey)} ({position.bucket.toLowerCase()}):{' '}
-        {plural(position.orphanQty, 'share')} sold that BhavBook never saw bought, from{' '}
-        {formatIstDate(position.openedAtUtc.slice(0, 10))}. Older trades may be missing: import them, or add
-        the shares as an opening lot.
+        {plural(position.orphanQty, 'share')} sold that BhavBook never saw bought, in a position from{' '}
+        {formatIstDate(istDateOf(position.openedAtUtc))}. Older trades may be missing: import them, or add the
+        shares as an opening lot.
       </p>
       {open === 'lot' ? (
         <OpeningLotForm
-          accountId={issue.accountId}
+          issueId={issue.id}
+          accountId={accountId}
           position={position}
+          busy={busy}
           onDone={async () => {
-            await queryClient.invalidateQueries();
-            done('Added the opening lot; the position was recomputed.');
+            await refresh();
+            outcome.onDone('Added the opening lot; the position was recomputed.');
           }}
         />
       ) : null}
-      {open === 'exclude' ? (
+      {open === 'exclude' && anchorKey !== null ? (
         <div role="group" aria-label="Confirm excluding this position" className="space-y-2">
-          <p>Leave this position out of every metric? It stays visible and can be included again.</p>
+          <p>Leave this position out of every metric? It stays visible on its account.</p>
           <Button
             variant="destructive"
             className={TOUCH}
-            disabled={exclude.isPending}
+            disabled={busy}
             onClick={() => {
-              exclude.mutate();
+              exclude.mutate(anchorKey);
             }}
           >
             {exclude.isPending ? 'Excluding…' : 'Exclude position'}
           </Button>
         </div>
       ) : null}
-      <Actions issue={issue} done={done} error={exclude.error}>
-        <Button
-          variant="outline"
-          className={TOUCH}
-          onClick={() => {
-            setOpen(open === 'lot' ? null : 'lot');
-          }}
-        >
-          Add opening lot…
-        </Button>
-        <Button
-          variant="outline"
-          className={TOUCH}
-          onClick={() => {
-            setOpen(open === 'exclude' ? null : 'exclude');
-          }}
-        >
-          Exclude…
-        </Button>
+      <Actions issue={issue} busy={busy} error={exclude.error} {...outcome}>
+        {canAddLot ? (
+          <Button
+            variant="outline"
+            className={TOUCH}
+            disabled={busy}
+            aria-expanded={open === 'lot'}
+            onClick={() => {
+              setOpen(open === 'lot' ? null : 'lot');
+            }}
+          >
+            Add opening lot…
+          </Button>
+        ) : null}
+        {anchorKey === null ? null : (
+          <Button
+            variant="outline"
+            className={TOUCH}
+            disabled={busy}
+            aria-expanded={open === 'exclude'}
+            onClick={() => {
+              setOpen(open === 'exclude' ? null : 'exclude');
+            }}
+          >
+            Exclude…
+          </Button>
+        )}
       </Actions>
     </>
   );
 }
 
-/** The position an incomplete-position issue is about, as its anchor (for an exclude adjustment). */
-const anchorOf = (issue: Issue): string => {
-  const subject = issue.subject as { anchorKey?: unknown } | null;
-  return typeof subject?.anchorKey === 'string' ? subject.anchorKey : '';
-};
-
-function RedundantLot({ issue, done }: FixProps) {
-  const replace = useAction(issue, 'replace', done, 'Replaced the opening lot with the real trades.');
+function RedundantLot({ issue, busy, ...outcome }: FixProps) {
+  const replace = useAction(issue, 'replace', outcome, 'Replaced the opening lot with the real trades.');
   return (
     <>
-      <p>Real trades now cover an opening lot you added. Replace the lot with them?</p>
-      <Actions issue={issue} done={done} error={replace.error}>
+      <p>{GENERIC.opening_lot_redundant} Replace the lot with them?</p>
+      <Actions issue={issue} busy={busy} error={replace.error} {...outcome}>
         <Button
           className={TOUCH}
-          disabled={replace.isPending}
+          disabled={busy}
           onClick={() => {
             replace.mutate();
           }}
@@ -176,9 +225,9 @@ function RedundantLot({ issue, done }: FixProps) {
   );
 }
 
-function Unresolved({ issue, done }: FixProps) {
+function Unresolved({ issue, busy, ...outcome }: FixProps) {
   const instrument = unresolvedInstrument(issue.subject);
-  const queryClient = useQueryClient();
+  const refresh = useRefresh();
   if (instrument === null) return <Unreadable />;
   return (
     <>
@@ -186,20 +235,25 @@ function Unresolved({ issue, done }: FixProps) {
         BhavBook cannot tell which instrument “{instrument.alias}” is, so its trades are kept apart from
         everything else.
       </p>
-      <MapInstrumentForm
-        issueId={issue.id}
-        alias={instrument.alias}
-        onDone={async () => {
-          await queryClient.invalidateQueries();
-          done(`Mapped “${instrument.alias}”; positions were recomputed.`);
-        }}
-      />
-      <Actions issue={issue} done={done} error={null} />
+      {issue.status === 'open' ? (
+        <MapInstrumentForm
+          issueId={issue.id}
+          alias={instrument.alias}
+          busy={busy}
+          onDone={async () => {
+            await refresh();
+            outcome.onDone(`Mapped “${instrument.alias}”; positions were recomputed.`);
+          }}
+        />
+      ) : null}
+      <Actions issue={issue} busy={busy} error={null} {...outcome} />
     </>
   );
 }
 
-function Fees({ issue, name, done }: FixProps) {
+const SCOPE_NOTES: Readonly<Record<string, string>> = { note: ' (whole contract note)', missing: '' };
+
+function Fees({ issue, name, busy, ...outcome }: FixProps) {
   const fees = feeDiscrepancy(issue.subject);
   if (fees === null) return <Unreadable />;
   if (fees.unmatchedRow !== null) {
@@ -210,15 +264,18 @@ function Fees({ issue, name, done }: FixProps) {
           {formatIstDate(fees.unmatchedRow.dateIst)}, but no trade that day matches it. A trade may be
           missing, or the scrip name may need mapping.
         </p>
-        <Actions issue={issue} done={done} error={null} />
+        <Actions issue={issue} busy={busy} error={null} {...outcome} />
       </>
     );
   }
+  const missing = fees.differences.some((difference) => difference.scope === 'missing');
   return (
     <>
       <p>
-        {name(fees.instrumentKey)}: the broker billed differently from BhavBook's estimate. The billed amount
-        is the one used.
+        {name(fees.instrumentKey)}:{' '}
+        {missing
+          ? "the statement has no row for some of this position's trades, so BhavBook's estimate is kept for them."
+          : "the broker billed differently from BhavBook's estimate. The billed amount is the one used."}
       </p>
       <TableRegion label="Charge differences">
         <table className="w-full min-w-lg border-y border-rule bg-surface text-left text-sm">
@@ -247,29 +304,29 @@ function Fees({ issue, name, done }: FixProps) {
                 </th>
                 <td className="px-3">
                   {COMPONENTS[difference.component] ?? difference.component}
-                  {difference.scope === 'note'
-                    ? ' (whole contract note)'
-                    : difference.scope === 'missing'
-                      ? ' (not on the statement)'
-                      : ''}
+                  {SCOPE_NOTES[difference.scope] ?? ''}
                 </td>
                 <td className="px-3 text-right">
                   <Money valueMicro={difference.estimatedMicro} />
                 </td>
                 <td className="px-3 text-right">
-                  <Money valueMicro={difference.reportedMicro} />
+                  {difference.scope === 'missing' ? (
+                    <span className="text-ink-muted">Not on the statement</span>
+                  ) : (
+                    <Money valueMicro={difference.reportedMicro} />
+                  )}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </TableRegion>
-      <Actions issue={issue} done={done} error={null} />
+      <Actions issue={issue} busy={busy} error={null} {...outcome} />
     </>
   );
 }
 
-function Lots({ issue, name, done }: FixProps) {
+function Lots({ issue, name, busy, ...outcome }: FixProps) {
   const lot = fifoMismatch(issue.subject);
   if (lot === null) return <Unreadable />;
   return (
@@ -281,16 +338,16 @@ function Lots({ issue, name, done }: FixProps) {
         ), BhavBook has {plural(lot.ourQuantity, 'share')} (<Money valueMicro={lot.ourValueMicro} />
         ). History may be missing, or a corporate action may not be entered.
       </p>
-      <Actions issue={issue} done={done} error={null} />
+      <Actions issue={issue} busy={busy} error={null} {...outcome} />
     </>
   );
 }
 
-function Generic({ issue, done }: FixProps) {
+function Generic({ issue, busy, ...outcome }: FixProps) {
   return (
     <>
       <p>{GENERIC[issue.kind] ?? 'BhavBook flagged this for a look.'}</p>
-      <Actions issue={issue} done={done} error={null} />
+      <Actions issue={issue} busy={busy} error={null} {...outcome} />
     </>
   );
 }
@@ -299,34 +356,19 @@ function Unreadable() {
   return <p className="text-ink-muted">The details of this issue could not be read.</p>;
 }
 
-function useAction(
-  issue: Issue,
-  action: 'accept' | 'replace' | 'dismiss' | 'reopen',
-  done: (message: string) => void,
-  message: string,
-) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () => issueAction(issue.id, action),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries();
-      done(message);
-    },
-    onError: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['issues'] });
-    },
-  });
-}
-
-/** The kind's own fixes, then dismiss (or reopen, for a dismissed issue), and the last error. */
+/**
+ * The kind's own fixes and Dismiss on an open issue; Reopen on a dismissed one; nothing on a resolved one. The last
+ * error shows here too (the page also announces it).
+ */
 function Actions({
   issue,
-  done,
+  busy,
   error,
   children,
-}: {
+  ...outcome
+}: Outcome & {
   readonly issue: Issue;
-  readonly done: (message: string) => void;
+  readonly busy: boolean;
   readonly error: unknown;
   readonly children?: ReactNode;
 }) {
@@ -334,9 +376,10 @@ function Actions({
   const toggle = useAction(
     issue,
     dismissed ? 'reopen' : 'dismiss',
-    done,
+    outcome,
     dismissed ? 'Reopened the issue.' : 'Dismissed the issue.',
   );
+  if (issue.status === 'resolved') return <p className="text-sm text-ink-muted">Resolved: nothing to do.</p>;
   const problem = error ?? toggle.error;
   return (
     <div className="space-y-2">
@@ -345,7 +388,7 @@ function Actions({
         <Button
           variant="ghost"
           className={TOUCH}
-          disabled={toggle.isPending}
+          disabled={busy}
           onClick={() => {
             toggle.mutate();
           }}
@@ -371,13 +414,13 @@ const FIXES: Readonly<Record<string, (props: FixProps) => ReactNode>> = {
   fifo_mismatch: Lots,
 };
 
-export interface IssueCardProps {
+export interface IssueCardProps extends Outcome {
   readonly issue: Issue;
   readonly instruments: Readonly<Record<string, string>>;
-  readonly onDone: (message: string) => void;
 }
 
-export function IssueCard({ issue, instruments, onDone }: IssueCardProps) {
+export function IssueCard({ issue, instruments, ...outcome }: IssueCardProps) {
+  const busy = useIsMutating({ mutationKey: ['issue', issue.id] }) > 0;
   const name = (key: string | null): string => (key === null ? 'This scrip' : (instruments[key] ?? key));
   const Fix = FIXES[issue.kind] ?? Generic;
   const headingId = `issue-${issue.id}`;
@@ -386,17 +429,21 @@ export function IssueCard({ issue, instruments, onDone }: IssueCardProps) {
   const alias = unresolvedInstrument(issue.subject)?.alias ?? null;
   const about = instrument === null ? (alias === null ? null : `“${alias}”`) : name(instrument);
   return (
-    <article aria-labelledby={headingId} className="space-y-3 border-b border-rule py-4">
+    <article aria-labelledby={headingId} aria-busy={busy} className="space-y-3 border-b border-rule py-4">
       <header className="flex flex-wrap items-baseline justify-between gap-x-4">
-        <h3 id={headingId} tabIndex={-1} className="font-semibold focus-visible:outline-none">
+        <h2
+          id={headingId}
+          tabIndex={-1}
+          className="rounded-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
           {kindLabel(issue.kind)}
           {about === null ? '' : `: ${about}`}
-        </h3>
+        </h2>
         <p className="text-sm text-ink-muted">
-          {issue.accountNickname ?? 'All accounts'} · since {formatIstDate(issue.createdAt.slice(0, 10))}
+          {issue.accountNickname ?? 'All accounts'} · since {formatIstDate(istDateOf(issue.createdAt))}
         </p>
       </header>
-      <Fix issue={issue} name={name} done={onDone} />
+      <Fix issue={issue} name={name} busy={busy} {...outcome} />
     </article>
   );
 }

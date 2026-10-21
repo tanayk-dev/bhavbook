@@ -41,7 +41,8 @@ const INCOMPLETE = {
     instrumentKey: BAJAJ,
     bucket: 'DELIVERY',
     orphanQty: '200',
-    openedAtUtc: '2024-09-18T04:00:00Z',
+    // 00:30 IST on 18 Sep: the UTC date is the 17th.
+    openedAtUtc: '2024-09-17T19:00:00Z',
     anchorKey: 'anchor#DELIVERY',
   },
 };
@@ -184,6 +185,9 @@ describe('reading issues', () => {
     });
     expect(rupeesToMicro('35200')).toBe('35200000000');
     expect(rupeesToMicro('0.5')).toBe('500000');
+    expect(rupeesToMicro('20,00,000')).toBe('2000000000000');
+    expect(rupeesToMicro('0')).toBeNull();
+    expect(rupeesToMicro('1.234')).toBeNull();
   });
 });
 
@@ -223,16 +227,23 @@ describe('the inbox', () => {
     renderInbox(routes);
     const incomplete = await card(/Incomplete position/);
     await userEvent.click(within(incomplete).getByRole('button', { name: 'Add opening lot…' }));
-    await userEvent.type(within(incomplete).getByLabelText('Total cost (₹)'), '35,200');
+    expect(incomplete).toHaveTextContent('in a position from 18 Sep 2024');
+    await userEvent.type(within(incomplete).getByLabelText('Total cost (₹)'), '20,00,000');
     await userEvent.click(within(incomplete).getByRole('button', { name: 'Add opening lot' }));
     expect(within(incomplete).getByRole('alert')).toHaveTextContent('Enter when they were bought');
-    await userEvent.type(within(incomplete).getByLabelText('Bought on'), '2024-09-17');
+    await userEvent.type(within(incomplete).getByLabelText('Bought on'), '2024-09-19');
+    await userEvent.click(within(incomplete).getByRole('button', { name: 'Add opening lot' }));
+    expect(within(incomplete).getByRole('alert')).toHaveTextContent(
+      "on or before the position's first trade",
+    );
+    await userEvent.clear(within(incomplete).getByLabelText('Bought on'));
+    await userEvent.type(within(incomplete).getByLabelText('Bought on'), '2024-09-18');
     await userEvent.click(within(incomplete).getByRole('button', { name: 'Add opening lot' }));
     expect(
       await screen.findByText('Added the opening lot; the position was recomputed.'),
     ).toBeInTheDocument();
     expect(state.calls).toEqual([
-      `adjust ${JSON.stringify({ kind: 'opening_lot', instrumentKey: BAJAJ, bucket: 'DELIVERY', quantity: '200', totalCostMicro: '35200000000', entryDateIst: '2024-09-17' })}`,
+      `adjust ${JSON.stringify({ kind: 'opening_lot', instrumentKey: BAJAJ, bucket: 'DELIVERY', quantity: '200', totalCostMicro: '2000000000000', entryDateIst: '2024-09-18' })}`,
     ]);
   });
 
@@ -280,6 +291,45 @@ describe('the inbox', () => {
       expect(screen.queryByRole('article', { name: /Possible corporate action/ })).toBeNull();
     });
     expect(state.calls).toEqual(['dismiss']);
+    // The focused card left: the keyboard user lands on the issue now in its place.
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Charges differ/ })).toHaveFocus();
+    });
+  });
+
+  it('shows resolved issues read-only', async () => {
+    const { state, routes } = server();
+    state.open = [
+      { ...INCOMPLETE, status: 'resolved' },
+      { ...UNKNOWN, status: 'resolved' },
+    ];
+    renderInbox(routes);
+    const incomplete = await card(/Incomplete position/);
+    expect(within(incomplete).queryByRole('button')).toBeNull();
+    expect(incomplete).toHaveTextContent('Resolved: nothing to do.');
+    expect(within(await card(/Unknown instrument/)).queryByRole('radio')).toBeNull();
+  });
+
+  it('offers no opening lot for an intraday position, nor an exclusion without its anchor', async () => {
+    const { state, routes } = server();
+    state.open = [
+      { ...INCOMPLETE, subject: { ...INCOMPLETE.subject, bucket: 'INTRADAY', anchorKey: undefined } },
+    ];
+    renderInbox(routes);
+    const incomplete = await card(/Incomplete position/);
+    expect(within(incomplete).queryByRole('button', { name: 'Add opening lot…' })).toBeNull();
+    expect(within(incomplete).queryByRole('button', { name: 'Exclude…' })).toBeNull();
+    expect(within(incomplete).getByRole('button', { name: 'Dismiss' })).toBeEnabled();
+  });
+
+  it('says when the statement has no row instead of showing a zero bill', async () => {
+    const { state, routes } = server();
+    const missing = { ...FEES.subject.discrepancies[0], scope: 'missing', reportedMicro: '0' };
+    state.open = [{ ...FEES, subject: { ...FEES.subject, discrepancies: [missing] } }];
+    renderInbox(routes);
+    const fees = await card(/Charges differ/);
+    expect(fees).toHaveTextContent('Not on the statement');
+    expect(fees).toHaveTextContent("BhavBook's estimate is kept");
   });
 
   it('j and k move between issues', async () => {
@@ -290,6 +340,8 @@ describe('the inbox', () => {
     await userEvent.keyboard('j');
     expect(screen.getByRole('heading', { name: /Incomplete position/ })).toHaveFocus();
     await userEvent.keyboard('k');
+    expect(screen.getByRole('heading', { name: /Fill from broker statement/ })).toHaveFocus();
+    await userEvent.keyboard('{Control>}j{/Control}');
     expect(screen.getByRole('heading', { name: /Fill from broker statement/ })).toHaveFocus();
   });
 

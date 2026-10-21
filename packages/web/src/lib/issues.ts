@@ -148,6 +148,8 @@ export interface IncompletePosition {
   readonly bucket: string;
   readonly orphanQty: bigint;
   readonly openedAtUtc: string;
+  /** The position's anchor, which an exclusion names; null on issues raised before it was recorded. */
+  readonly anchorKey: string | null;
 }
 
 export function incompletePosition(subject: unknown): IncompletePosition | null {
@@ -157,7 +159,7 @@ export function incompletePosition(subject: unknown): IncompletePosition | null 
   const orphanQty = digits(subject.orphanQty);
   const openedAtUtc = text(subject.openedAtUtc);
   if (instrumentKey === null || bucket === null || orphanQty === null || openedAtUtc === null) return null;
-  return { instrumentKey, bucket, orphanQty, openedAtUtc };
+  return { instrumentKey, bucket, orphanQty, openedAtUtc, anchorKey: text(subject.anchorKey) };
 }
 
 export interface UnresolvedInstrument {
