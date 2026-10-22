@@ -1,10 +1,12 @@
 // S10c (ADR-0018, PRD §10.1): journal entries anchor to a position's opening fill and are re-attached after every
 // recompute to whichever position now contains that fill. A recompute never deletes an entry: a lost anchor parks
 // it as unattached (with an issue), and two entries on one position raise a collision issue.
+import type { Position } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { applyAdjustment } from '../../src/recompute/actions.js';
 import { recompute } from '../../src/recompute/index.js';
+import { choosePosition } from '../../src/recompute/journal.js';
 import { importFiles, withVault, ZERODHA, type TestVault } from '../import/helpers.js';
 
 const now = (): Date => new Date('2026-10-21T12:00:00Z');
@@ -204,5 +206,23 @@ describe('journal anchors', () => {
       ]);
       expect(issues(db, 'journal_collision').map((issue) => issue.status)).toEqual(['dismissed']);
     });
+  });
+});
+
+describe('which position an entry follows when two share its anchor', () => {
+  // A conversion leaves the sold part on the old ISIN (closed) and moves the held lots to the new ISIN (open), both
+  // containing the same opening fill; candidates come in live-last order.
+  const sold = { id: 'old', instrumentKey: 'INE_OLD', state: 'CLOSED' } as unknown as Position;
+  const live = { id: 'new', instrumentKey: 'INE_NEW', state: 'OPEN' } as unknown as Position;
+
+  it('a draft follows the live position', () => {
+    expect(choosePosition([sold, live], 'INE_OLD')?.id).toBe('new');
+  });
+
+  it('a reviewed entry stays on the position of its own instrument it reviewed', () => {
+    expect(choosePosition([sold, live], 'INE_OLD', true)?.id).toBe('old');
+    expect(choosePosition([sold, live], 'INE_NEW', true)?.id).toBe('new');
+    expect(choosePosition([live], 'INE_OLD', true)?.id).toBe('new');
+    expect(choosePosition([], 'INE_OLD', true)).toBeNull();
   });
 });

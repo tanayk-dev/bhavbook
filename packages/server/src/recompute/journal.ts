@@ -45,15 +45,24 @@ interface EntryRow {
   readonly anchor_instrument_key: string;
   readonly anchor_bucket: string;
   readonly anchor_key: string;
+  readonly reviewed_at: string | null;
 }
 
 /**
  * Of the positions containing the anchor, an open one on the entry's own instrument keeps it (a demerger child
- * shares its parent's anchor); otherwise the live one takes it. Null: the anchor is gone.
+ * shares its parent's anchor); otherwise the live one takes it. A reviewed entry is about the position it reviewed:
+ * it stays on its own instrument (the latest such position, open or closed) before following the live one, so a
+ * review of a converted lot's sold part never moves to the new ISIN. Null: the anchor is gone.
  */
-export function choosePosition(candidates: readonly Position[], instrumentKey: string): Position | null {
+export function choosePosition(
+  candidates: readonly Position[],
+  instrumentKey: string,
+  reviewed = false,
+): Position | null {
+  const own = candidates.filter((candidate) => candidate.instrumentKey === instrumentKey);
   return (
-    candidates.find((candidate) => candidate.instrumentKey === instrumentKey && candidate.state === 'OPEN') ??
+    own.find((candidate) => candidate.state === 'OPEN') ??
+    (reviewed ? own.at(-1) : undefined) ??
     candidates.at(-1) ??
     null
   );
@@ -85,7 +94,7 @@ export function attachJournal(
   const byAnchor = positionsByAnchor(allocations, positions);
   const entries = db
     .prepare(
-      `SELECT id, anchor_instrument_key, anchor_bucket, anchor_key FROM journal_entry
+      `SELECT id, anchor_instrument_key, anchor_bucket, anchor_key, reviewed_at FROM journal_entry
        WHERE anchor_account_id = ? ORDER BY id`,
     )
     .all(accountId) as EntryRow[];
@@ -100,7 +109,11 @@ export function attachJournal(
   const unattached = new Map<string, string>();
   const byPosition = new Map<string, string[]>();
   for (const entry of entries) {
-    const position = choosePosition(byAnchor.get(entry.anchor_key) ?? [], entry.anchor_instrument_key);
+    const position = choosePosition(
+      byAnchor.get(entry.anchor_key) ?? [],
+      entry.anchor_instrument_key,
+      entry.reviewed_at !== null,
+    );
     if (position === null) {
       parked.run(entry.id);
       const subject = {
