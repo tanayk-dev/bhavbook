@@ -8,6 +8,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { recompute, type RecomputeOptions } from '../recompute/index.js';
 import { JOURNAL_COLLISION } from '../recompute/types.js';
+import { MAX_ATTACHMENTS_PER_ENTRY } from './attachments.js';
 import { write } from './profiles.js';
 import { ActionError } from './errors.js';
 import { journalOf, positionById, positionIdOf } from './positions.js';
@@ -232,6 +233,15 @@ export function mergeCollision(
     if (rows[0]?.id !== intoId || others.length === 0) {
       throw new ActionError('the collision has changed', { code: 'conflict' });
     }
+    const screenshots: unknown = db
+      .prepare(
+        `SELECT count(*) FROM attachment WHERE journal_entry_id IN (${rows.map(() => '?').join(', ')})`,
+      )
+      .pluck()
+      .get(...rows.map((row) => row.id));
+    if (Number(screenshots) > MAX_ATTACHMENTS_PER_ENTRY) {
+      throw new ActionError('together the entries hold too many screenshots', { code: 'conflict' });
+    }
     const reviews = rows.map((row) => row.reviewed_at);
     const reviewedAt = reviews.every((review) => review !== null)
       ? ([...reviews].sort().at(-1) ?? null)
@@ -254,7 +264,9 @@ export function mergeCollision(
     );
     for (const other of others) {
       db.prepare(
-        'INSERT OR IGNORE INTO journal_tag (journal_entry_id, tag_id) SELECT ?, tag_id FROM journal_tag WHERE journal_entry_id = ?',
+        `INSERT OR IGNORE INTO journal_tag (journal_entry_id, tag_id)
+         SELECT ?, l.tag_id FROM journal_tag l JOIN tag t ON t.id = l.tag_id
+         WHERE l.journal_entry_id = ? AND t.kind = 'mistake'`,
       ).run(intoId, other);
       db.prepare('UPDATE attachment SET journal_entry_id = ? WHERE journal_entry_id = ?').run(intoId, other);
       db.prepare('DELETE FROM journal_entry WHERE id = ?').run(other);

@@ -100,6 +100,81 @@ describe('what counts as a screenshot', () => {
     lying[16] = 0x40; // a chunk claiming more bytes than the file has
     expect(webpProblem(lying)).toBe('not_webp');
     expect(webpProblem(new Uint8Array(MAX_ATTACHMENT_BYTES + 1))).toBe('too_large');
+    const pixels = image.subarray(0, 13);
+    // Exactly 1 MB is allowed.
+    const full = webp([['VP8L', new Uint8Array(MAX_ATTACHMENT_BYTES - 20)]]);
+    expect(full.length).toBe(MAX_ATTACHMENT_BYTES);
+    expect(webpProblem(full)).toBeNull();
+    // Only a still image of the chunks a canvas writes.
+    expect(webpProblem(webp([['VP8X', new Uint8Array(10)]]))).toBe('not_webp');
+    expect(
+      webpProblem(
+        webp([
+          ['VP8L', pixels],
+          ['VP8L', pixels],
+        ]),
+      ),
+    ).toBe('not_webp');
+    expect(
+      webpProblem(
+        webp([
+          ['VP8L', pixels],
+          ['JUNK', Buffer.from('lat=12.97')],
+        ]),
+      ),
+    ).toBe('not_webp');
+    expect(
+      webpProblem(
+        webp([
+          ['VP8X', new Uint8Array(10)],
+          ['ANIM', new Uint8Array(6)],
+          ['VP8L', pixels],
+        ]),
+      ),
+    ).toBe('not_webp');
+    expect(
+      webpProblem(
+        webp([
+          ['VP8L', pixels],
+          ['VP8X', new Uint8Array(10)],
+        ]),
+      ),
+    ).toBe('not_webp');
+    expect(
+      webpProblem(
+        webp([
+          ['VP8X', new Uint8Array(10)],
+          ['ICCP', new Uint8Array(8)],
+          ['ALPH', new Uint8Array(3)],
+          ['VP8 ', new Uint8Array(10)],
+        ]),
+      ),
+    ).toBeNull();
+    // A VP8X header that declares metadata or animation.
+    expect(
+      webpProblem(
+        webp([
+          ['VP8X', Uint8Array.from([0x08, ...new Uint8Array(9)])],
+          ['VP8L', pixels],
+        ]),
+      ),
+    ).toBe('has_metadata');
+    expect(
+      webpProblem(
+        webp([
+          ['VP8X', Uint8Array.from([0x04, ...new Uint8Array(9)])],
+          ['VP8L', pixels],
+        ]),
+      ),
+    ).toBe('has_metadata');
+    expect(
+      webpProblem(
+        webp([
+          ['VP8X', Uint8Array.from([0x02, ...new Uint8Array(9)])],
+          ['VP8L', pixels],
+        ]),
+      ),
+    ).toBe('not_webp');
   });
 });
 
@@ -128,6 +203,8 @@ describe('uploading screenshots', () => {
       expect(served.status).toBe(200);
       expect(served.headers.get('content-type')).toBe('image/webp');
       expect(served.headers.get('x-content-type-options')).toBe('nosniff');
+      // A deleted screenshot is never shown from a cache.
+      expect(served.headers.get('cache-control')).toBe('no-store');
       expect(new Uint8Array(await served.arrayBuffer())).toEqual(PIXEL);
       expect((await send(test, `/api/attachments/${id}`, { method: 'DELETE' })).status).toBe(200);
       expect((await send(test, `/api/attachments/${id}`)).status).toBe(404);
@@ -214,6 +291,58 @@ describe('merging colliding entries', () => {
       expect((await send(test, `/api/issues/${issue}/merge`, json('POST', { intoId: firstId }))).status).toBe(
         404,
       );
+    });
+  });
+});
+
+describe('merging, the other cases', () => {
+  function collide(firstId: string, db: Database.Database, second: { reviewedAt: string | null }): string {
+    db.prepare(
+      `INSERT INTO journal_entry (id, anchor_account_id, anchor_instrument_key, anchor_bucket, anchor_key, status,
+         thesis, reviewed_at, created_at, updated_at)
+       SELECT 'jnl_second', anchor_account_id, anchor_instrument_key, anchor_bucket, anchor_key, 'unattached',
+         'Second', ?, 'x', 'x' FROM journal_entry WHERE id = ?`,
+    ).run(second.reviewedAt, firstId);
+    recompute(db, ZERODHA);
+    return db
+      .prepare("SELECT id FROM issue WHERE kind = 'journal_collision' AND status = 'open'")
+      .pluck()
+      .get() as string;
+  }
+
+  it('merges into the second entry, keeps the latest review when both were reviewed, and one copy of a shared tag', async () => {
+    await withEntry(async (test, firstId, db) => {
+      db.prepare("INSERT INTO tag (id, kind, name) VALUES ('tag_fomo', 'mistake', 'FOMO')").run();
+      db.prepare(
+        "UPDATE journal_entry SET thesis = 'First', reviewed_at = '2026-10-01T00:00:00Z' WHERE id = ?",
+      ).run(firstId);
+      const issue = collide(firstId, db, { reviewedAt: '2026-10-05T00:00:00Z' });
+      db.prepare(
+        "INSERT INTO journal_tag (journal_entry_id, tag_id) VALUES (?, 'tag_fomo'), ('jnl_second', 'tag_fomo')",
+      ).run(firstId);
+      expect(
+        (await send(test, `/api/issues/${issue}/merge`, json('POST', { intoId: 'jnl_second' }))).status,
+      ).toBe(200);
+      expect(db.prepare('SELECT id, thesis, reviewed_at FROM journal_entry').all()).toEqual([
+        { id: 'jnl_second', thesis: 'Second\n\nFirst', reviewed_at: '2026-10-05T00:00:00Z' },
+      ]);
+      expect(db.prepare('SELECT journal_entry_id, tag_id FROM journal_tag').all()).toEqual([
+        { journal_entry_id: 'jnl_second', tag_id: 'tag_fomo' },
+      ]);
+    });
+  });
+
+  it(`refuses a merge that would hold more than ${String(MAX_ATTACHMENTS_PER_ENTRY)} screenshots`, async () => {
+    await withEntry(async (test, firstId, db) => {
+      const issue = collide(firstId, db, { reviewedAt: null });
+      for (let n = 0; n < MAX_ATTACHMENTS_PER_ENTRY; n += 1) {
+        expect((await send(test, `/api/journal/${firstId}/attachments`, upload(PIXEL))).status).toBe(201);
+      }
+      expect((await send(test, '/api/journal/jnl_second/attachments', upload(PIXEL))).status).toBe(201);
+      expect((await send(test, `/api/issues/${issue}/merge`, json('POST', { intoId: firstId }))).status).toBe(
+        409,
+      );
+      expect(db.prepare('SELECT count(*) FROM journal_entry').pluck().get()).toBe(2n);
     });
   });
 });

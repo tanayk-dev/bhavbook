@@ -540,7 +540,7 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
           live,
           (db) =>
             new Response(readAttachment(db, c.req.valid('param').id), {
-              headers: { 'Content-Type': 'image/webp', 'Cache-Control': 'private, max-age=3600' },
+              headers: { 'Content-Type': 'image/webp' },
             }),
         ),
       )
