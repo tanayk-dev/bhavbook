@@ -37,7 +37,7 @@ const MIN_NODE: readonly [number, number] = [24, 11];
  * Installed, this code runs from the bundle (`dist/index.mjs`, built by tsdown) with the web build in `dist/web`; in
  * the workspace it runs from source and the web build is `packages/web/dist`.
  */
-const BUNDLED = !import.meta.url.endsWith('.ts');
+const BUNDLED = !/\.[cm]?tsx?$/.test(import.meta.url);
 
 /** The web build; without it the server shows a placeholder page. */
 const WEB_BUILD = fileURLToPath(new URL(BUNDLED ? './web/' : '../../web/dist/', import.meta.url));

@@ -31,8 +31,17 @@ Every release needs the project author's go-ahead (CLAUDE.md, plan invariant 10)
    git push origin v1.0.0
    ```
 
-3. The `release` workflow checks that the tag matches the version, runs `pnpm verify`, packs, installs and runs
-   `bhavbook doctor`, then runs `npm publish --provenance` on that tarball.
+3. The `release` workflow runs in two jobs. `check` has no secret and no publish rights: it refuses a tag whose
+   commit is not on `main` or does not match the version, runs `pnpm verify`, packs, installs and runs
+   `bhavbook doctor`, and keeps the tarball. `publish` runs in the `npm-publish` environment and only publishes that
+   tarball with `npm publish --provenance`. Pull requests have already run the browser suite on the installed
+   package on all three OSes.
+
+## Repository settings (once, by the project author)
+
+- **The `npm-publish` environment:** required reviewer (the project author), deployment tags `v*` only. A release
+  then waits for an approval in the Actions tab before anything is published.
+- **A tag ruleset for `v*`:** only the project author may create, update or delete release tags.
 
 ## Authentication: trusted publishing
 
@@ -41,9 +50,12 @@ publishing, so no long-lived token is stored, and every version carries a proven
 
 npm can only trust a workflow for a package that exists, so the **first** publish uses a token:
 
-1. On npmjs.com, create a granular access token that can publish (expiry: 1 day). Add it to the repository as the
-   `NPM_TOKEN` Actions secret.
+1. On npmjs.com (with two-factor authentication on the account), create a granular access token with read and
+   write access to packages, expiring in 1 day. Add it as the `NPM_TOKEN` secret **of the `npm-publish`
+   environment**, so only the publish job can read it.
 2. Push the first tag; the workflow publishes with the token (still with provenance).
 3. On the package's npm settings, add a trusted publisher: GitHub Actions, repository `tanayk-dev/bhavbook`, workflow
-   `release.yml`. Then set "Require two-factor authentication and disallow tokens".
-4. Delete the `NPM_TOKEN` secret and revoke the token. Later releases authenticate by OIDC alone.
+   `release.yml`, environment `npm-publish`. Then set "Require two-factor authentication and disallow tokens".
+4. Revoke the token, delete the secret, and remove the `NODE_AUTH_TOKEN` line from the publish step in a pull
+   request (left in, an empty token could be offered instead of the OIDC exchange). Later releases authenticate by
+   OIDC alone.

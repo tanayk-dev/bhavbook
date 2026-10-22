@@ -33,14 +33,46 @@ if (shipped.join() !== source.join()) {
   );
 }
 
+// Only these may ship: anything else (a file dropped into packages/web/public, a stray export) fails the pack.
+const TOP_LEVEL = ['THIRD-PARTY-NOTICES.md', 'index.mjs', 'migrations', 'spreadsheet-worker.mjs', 'web'];
+const WEB_TOP_LEVEL = ['THIRD-PARTY-NOTICES.md', 'assets', 'index.html', 'theme-init.js'];
+const WEB_ASSET = /^[\w.-]+\.(js|css|woff2?)$/;
+const SHIPPED_TYPE = /\.(mjs|js|css|woff2?|html|sql|md)$/;
+// Personal data travels in these (broker exports, vaults, backups, secrets): never in the package.
+const DATA = /(\.(csv|xlsx?|pdf|db|bhav|env|json)|fixtures|broker-exports)/i;
+
 const walk = (dir) =>
   readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
     entry.isDirectory() ? walk(path.join(dir, entry.name)) : [path.join(dir, entry.name)],
   );
+const unexpected = (dir, allowed) =>
+  existsSync(dir) ? readdirSync(dir).filter((name) => !allowed.includes(name)) : [];
+for (const name of unexpected('dist', TOP_LEVEL))
+  problems.push(`dist/${name} is not expected in the package`);
+for (const name of unexpected('dist/web', WEB_TOP_LEVEL)) problems.push(`dist/web/${name} is not expected`);
+if (existsSync('dist/web/assets')) {
+  for (const name of readdirSync('dist/web/assets').filter((file) => !WEB_ASSET.test(file))) {
+    problems.push(`dist/web/assets/${name} is not a script, stylesheet or font`);
+  }
+}
 if (existsSync('dist')) {
   for (const file of walk('dist')) {
-    if (/\.(map|ts|tsx)$/.test(file)) problems.push(`${file} should not ship (source or source map)`);
+    if (DATA.test(file)) problems.push(`${file} looks like data and must not ship`);
+    else if (!SHIPPED_TYPE.test(file)) problems.push(`${file} is not a type the package ships`);
   }
+}
+
+// Every package the bundle may hold has its licence in the notices.
+const notices = existsSync('dist/THIRD-PARTY-NOTICES.md')
+  ? readFileSync('dist/THIRD-PARTY-NOTICES.md', 'utf8')
+  : '';
+const config = readFileSync('tsdown.config.ts', 'utf8');
+const onlyBundle = /onlyBundle:\s*\[([^\]]*)\]/.exec(config)?.[1] ?? '';
+const bundled = [...onlyBundle.matchAll(/'([^']+)'/g)].map((match) => match[1]);
+if (bundled.length === 0)
+  problems.push('tsdown.config.ts has no deps.onlyBundle list to check the notices against');
+for (const name of bundled) {
+  if (!notices.includes(`### ${name} `)) problems.push(`THIRD-PARTY-NOTICES.md has no licence for ${name}`);
 }
 
 if (problems.length > 0) {

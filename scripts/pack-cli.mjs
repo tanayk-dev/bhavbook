@@ -1,20 +1,25 @@
 // Builds and packs the published `bhavbook` package (S16): the web build, the CLI bundle (tsdown), the licences of
 // everything bundled, the README and the licence, then `pnpm pack`, whose prepack guard checks the result.
 //   node scripts/pack-cli.mjs [out-dir]   (default: .pack/) — prints the tarball's path last.
-import { execSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { run } from './shell.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CLI = path.join(ROOT, 'packages', 'cli');
 const PNPM_STORE = path.join(ROOT, 'node_modules', '.pnpm');
+const REPOSITORY = 'https://github.com/tanayk-dev/bhavbook/blob/main/';
 
-/** Runs pnpm through the shell (a .cmd shim on Windows); every argument is quoted, as paths may hold spaces. */
-function pnpm(args, cwd = ROOT) {
-  const command = ['pnpm', ...args.map((arg) => JSON.stringify(arg))].join(' ');
-  return execSync(command, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
-}
+const pnpm = (args, cwd = ROOT) => run('pnpm', args, { cwd });
 
 const read = (file) => readFileSync(file, 'utf8').trim();
 const licenceFiles = (dir) =>
@@ -55,7 +60,9 @@ function webNotices(viteNotices) {
 
 function writeNotices() {
   const dist = path.join(CLI, 'dist');
-  const server = bundledDirs(['index.mjs', 'spreadsheet-worker.mjs'].map((name) => path.join(dist, name)));
+  // Every chunk, should rolldown ever split shared code out of the two entries.
+  const chunks = readdirSync(dist).filter((name) => name.endsWith('.mjs'));
+  const server = bundledDirs(chunks.map((name) => path.join(dist, name)));
   const viteNotices = read(path.join(dist, 'web', 'THIRD-PARTY-NOTICES.md'));
   const sections = [
     '# Third-party notices',
@@ -74,12 +81,17 @@ mkdirSync(out, { recursive: true });
 pnpm(['--filter', '@bhavbook/web', 'build']);
 pnpm(['--filter', 'bhavbook', 'build']);
 writeNotices();
-for (const file of ['README.md', 'LICENSE']) copyFileSync(path.join(ROOT, file), path.join(CLI, file));
-const before = new Set(readdirSync(out));
+copyFileSync(path.join(ROOT, 'LICENSE'), path.join(CLI, 'LICENSE'));
+// The npm page shows the README away from the repository: its relative links point at GitHub instead.
+const readme = read(path.join(ROOT, 'README.md')).replace(
+  /\]\((?!https?:|#|mailto:)([^)]+)\)/g,
+  (_, target) => `](${REPOSITORY}${target.replace(/^\.\//, '')})`,
+);
+writeFileSync(path.join(CLI, 'README.md'), `${readme}\n`);
+const { version } = JSON.parse(readFileSync(path.join(CLI, 'package.json'), 'utf8'));
+const tarball = path.join(out, `bhavbook-${version}.tgz`);
+// A tarball left by an earlier run must never be mistaken for this one.
+rmSync(tarball, { force: true });
 pnpm(['pack', '--pack-destination', out], CLI);
-const tarball =
-  readdirSync(out).find((name) => name.endsWith('.tgz') && !before.has(name)) ??
-  readdirSync(out).find((name) => name.startsWith('bhavbook-') && name.endsWith('.tgz'));
-if (tarball === undefined || !existsSync(path.join(out, tarball)))
-  throw new Error('pnpm pack wrote no tarball');
-process.stdout.write(`${path.join(out, tarball)}\n`);
+if (!existsSync(tarball)) throw new Error(`pnpm pack did not write ${tarball}`);
+process.stdout.write(`${tarball}\n`);
