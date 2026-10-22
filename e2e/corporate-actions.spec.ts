@@ -35,8 +35,8 @@ test('the Tata demerger: preview, save, the position splits, revert', async ({ p
   await page.getByLabel('Parent ISIN').fill(PARENT);
   await page.getByLabel('Child ISIN').fill(CHILD);
   await page.getByLabel('Ex-date').fill('2025-10-14');
-  await page.getByLabel('Child shares').fill('1');
-  await page.getByLabel('for every parent shares').fill('1');
+  await page.getByLabel('Child shares', { exact: true }).fill('1');
+  await page.getByLabel('Parent shares', { exact: true }).fill('1');
   await page.getByLabel("Child's share of the cost (%)").fill('31.15');
   await page.getByRole('button', { name: 'Preview' }).click();
 

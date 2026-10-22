@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { ApiError } from '@/lib/api';
 import {
   ACTION_TYPES,
+  ISIN,
   actionError,
   corporateActionsQuery,
   setActionStatus,
@@ -34,8 +35,8 @@ export const Route = createFileRoute('/corporate-actions')({
   // What an issue links with: a suggestion to start from, never applied without the preview.
   validateSearch: (search: Record<string, unknown>): CorporateActionsSearch => {
     const type = ACTION_TYPES.find((entry) => entry === search.type);
-    const isin = text(search.isin, /^[A-Z]{2}[A-Z0-9]{9}\d$/);
-    const newIsin = text(search.newIsin, /^[A-Z]{2}[A-Z0-9]{9}\d$/);
+    const isin = text(search.isin, ISIN);
+    const newIsin = text(search.newIsin, ISIN);
     const exDate = text(search.exDate, /^\d{4}-\d{2}-\d{2}$/);
     const num = text(typeof search.num === 'number' ? String(search.num) : search.num, /^[1-9]\d{0,5}$/);
     return {
@@ -83,6 +84,7 @@ function describe(
 
 function CorporateActionsPage() {
   const search = Route.useSearch();
+  const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
   const actions = useQuery(corporateActionsQuery);
   const [notice, setNotice] = useState('');
@@ -142,7 +144,15 @@ function CorporateActionsPage() {
           </p>
         )}
         {/* Keyed by the suggestion: following another issue's link starts from its details. */}
-        <ActionForm key={JSON.stringify(search)} initial={initial} onSaved={announce} />
+        <ActionForm
+          key={JSON.stringify(search)}
+          initial={initial}
+          onSaved={(message) => {
+            announce(message);
+            // The suggestion is used up: a reload must not offer it again.
+            void navigate({ search: {} });
+          }}
+        />
       </section>
       <section aria-labelledby="entered" className="space-y-3">
         <h2 id="entered" className="font-semibold">

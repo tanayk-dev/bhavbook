@@ -2,7 +2,7 @@
 // open lots (before and after, and any fractions the broker pays in cash), then saving exactly what was previewed.
 // Nothing is applied without the preview: changing a field clears it.
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useId, useState, type SyntheticEvent } from 'react';
+import { useId, useRef, useState, type SyntheticEvent } from 'react';
 import { Money } from '@/components/money';
 import { TableRegion, TOUCH } from '@/components/settings';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,7 @@ import {
   actionError,
   applyAction,
   percentToBp,
+  ISIN,
   previewAction,
   type ActionPreview,
   type ActionType,
@@ -20,7 +21,6 @@ import {
   type PreviewLot,
 } from '@/lib/corporate-actions';
 
-const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const RATIO = /^[1-9]\d{0,5}$/;
 
@@ -40,17 +40,17 @@ const TYPES: Readonly<
 > = {
   SPLIT: {
     label: 'Split',
-    help: 'Each share becomes several; the total cost and the buy dates stay the same.',
+    help: 'Each share becomes several (or, in a reverse split, several become one); the total cost and the buy dates stay the same.',
     isin: 'ISIN',
     num: 'Shares after',
-    den: 'for every shares before',
+    den: 'Shares before',
   },
   BONUS: {
     label: 'Bonus',
-    help: 'Free shares are added at zero cost, dated on the allotment date (for tax).',
+    help: 'Free shares are added at zero cost, dated on the allotment date (for tax). The ratio counts the extra shares: a 1:1 bonus is 1 bonus share for every 1 held.',
     isin: 'ISIN',
     num: 'Bonus shares',
-    den: 'for every shares held',
+    den: 'Shares held',
   },
   CONVERSION: {
     label: 'ISIN change',
@@ -58,7 +58,7 @@ const TYPES: Readonly<
     isin: 'Old ISIN',
     newIsin: 'New ISIN',
     num: 'New shares',
-    den: 'for every old shares',
+    den: 'Old shares',
   },
   DEMERGER: {
     label: 'Demerger',
@@ -66,7 +66,7 @@ const TYPES: Readonly<
     isin: 'Parent ISIN',
     newIsin: 'Child ISIN',
     num: 'Child shares',
-    den: 'for every parent shares',
+    den: 'Parent shares',
   },
 };
 
@@ -106,8 +106,8 @@ export function inputOf(draft: ActionDraft): CorporateActionInput | { readonly p
     return { problem: 'Ratio: two whole numbers, like 5 for every 1.' };
   }
   const childBp = draft.type === 'DEMERGER' ? percentToBp(draft.childPercent) : null;
-  if (draft.type === 'DEMERGER' && childBp === null) {
-    return { problem: "Child's share of the cost: a percentage up to 100, like 31.15." };
+  if (draft.type === 'DEMERGER' && (childBp === null || childBp === '0')) {
+    return { problem: "Child's share of the cost: a percentage above 0 and up to 100, like 31.15." };
   }
   if (draft.type === 'BONUS' && draft.allotment !== '' && !DATE.test(draft.allotment)) {
     return { problem: 'Allotment date: a date, or leave it empty to use the ex-date.' };
@@ -192,9 +192,9 @@ function Preview({ preview }: { readonly preview: ActionPreview }) {
   }
   return (
     <div className="space-y-3">
-      <h3 className="font-semibold">Open lots before</h3>
+      <h4 className="font-semibold">Open lots before</h4>
       <LotTable caption="Open lots before the action" lots={preview.before} preview={preview} />
-      <h3 className="font-semibold">Open lots after</h3>
+      <h4 className="font-semibold">Open lots after</h4>
       <LotTable caption="Open lots after the action" lots={preview.after} preview={preview} />
       {preview.fractions.length === 0 ? null : (
         <ul className="space-y-1 text-sm">
@@ -224,7 +224,11 @@ export function ActionForm({ initial, onSaved }: ActionFormProps) {
     null,
   );
   const [problem, setProblem] = useState<string | null>(null);
+  const [status, setStatus] = useState('');
+  // The fields as they are now: a preview answered for fields since changed is dropped, never offered to save.
+  const current = useRef(initial);
   const ids = {
+    preview: useId(),
     isin: useId(),
     newIsin: useId(),
     exDate: useId(),
@@ -239,7 +243,14 @@ export function ActionForm({ initial, onSaved }: ActionFormProps) {
   const preview = useMutation({
     mutationFn: (input: CorporateActionInput) => previewAction(input),
     onSuccess: (result, input) => {
+      const now = inputOf(current.current);
+      if (JSON.stringify(now) !== JSON.stringify(input)) return;
       setPreviewed({ input, preview: result });
+      setStatus(
+        result.before.length === 0
+          ? 'Preview ready: no open lots are affected.'
+          : `Preview ready: ${String(result.before.length)} open ${result.before.length === 1 ? 'lot' : 'lots'} before, ${String(result.after.length)} after.`,
+      );
     },
     onError: (error) => {
       setProblem(actionError(error));
@@ -250,6 +261,7 @@ export function ActionForm({ initial, onSaved }: ActionFormProps) {
     onSuccess: async () => {
       await queryClient.invalidateQueries();
       setPreviewed(null);
+      current.current = EMPTY_DRAFT;
       setDraft(EMPTY_DRAFT);
       onSaved('Saved the corporate action; every account was rebuilt.');
     },
@@ -258,10 +270,13 @@ export function ActionForm({ initial, onSaved }: ActionFormProps) {
     },
   });
   const set = <K extends keyof ActionDraft>(key: K, value: ActionDraft[K]) => {
-    setDraft((current) => ({ ...current, [key]: value }));
-    // What was previewed no longer matches: preview again before saving.
+    const next = { ...current.current, [key]: value };
+    current.current = next;
+    setDraft(next);
+    // What was previewed no longer matches: preview again before saving (a late answer is dropped too).
     setPreviewed(null);
     setProblem(null);
+    setStatus('');
   };
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
@@ -284,7 +299,8 @@ export function ActionForm({ initial, onSaved }: ActionFormProps) {
           id={ids[key]}
           className={key === 'isin' || key === 'newIsin' ? 'font-mono' : undefined}
           type={key === 'exDate' || key === 'allotment' ? 'date' : 'text'}
-          inputMode={key === 'num' || key === 'den' || key === 'child' ? 'decimal' : undefined}
+          inputMode={key === 'child' ? 'decimal' : key === 'num' || key === 'den' ? 'numeric' : undefined}
+          aria-describedby={problem === null ? ids.help : `${ids.help} ${ids.error}`}
           maxLength={key === 'isin' || key === 'newIsin' ? 12 : undefined}
           value={draft[draftKey]}
           onChange={(event) => {
@@ -324,12 +340,20 @@ export function ActionForm({ initial, onSaved }: ActionFormProps) {
         {draft.type === 'BONUS' ? field('allotment', 'Allotment date (optional)') : null}
       </div>
       <div className="grid gap-4 sm:grid-cols-3">
-        {field('num', meta.num)}
-        {field('den', meta.den)}
+        <fieldset className="contents">
+          <legend className="sr-only">
+            Ratio: {meta.num.toLowerCase()} for every {meta.den.toLowerCase()}
+          </legend>
+          {field('num', meta.num)}
+          {field('den', meta.den)}
+        </fieldset>
         {draft.type === 'DEMERGER' ? field('child', "Child's share of the cost (%)") : null}
       </div>
       <p id={ids.error} role="alert" className="text-sm text-loss">
         {problem ?? ''}
+      </p>
+      <p role="status" className="sr-only">
+        {status}
       </p>
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" variant="outline" className={TOUCH} disabled={preview.isPending}>
@@ -349,8 +373,10 @@ export function ActionForm({ initial, onSaved }: ActionFormProps) {
         )}
       </div>
       {previewed === null ? null : (
-        <section aria-label="Preview" className="space-y-2">
-          <h2 className="font-semibold">Preview</h2>
+        <section aria-labelledby={ids.preview} className="space-y-2">
+          <h3 id={ids.preview} className="font-semibold">
+            Preview
+          </h3>
           <Preview preview={previewed.preview} />
         </section>
       )}

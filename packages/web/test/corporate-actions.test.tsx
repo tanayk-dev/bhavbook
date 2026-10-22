@@ -175,6 +175,59 @@ describe('the corporate actions page', () => {
     ]);
   });
 
+  it('drops a preview that answers after the fields changed', async () => {
+    const { routes } = server();
+    let release: () => void = () => undefined;
+    // Hold the preview's answer until released: the fields change meanwhile.
+    const fetch = stubServer(routes);
+    const real = fetch.getMockImplementation();
+    if (real === undefined) throw new Error('no stub');
+    fetch.mockImplementation((input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!url.includes('/preview')) return real(input, init);
+      return new Promise<Response>((resolve) => {
+        release = () => {
+          void real(input, init).then(resolve);
+        };
+      });
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createRouter({
+      routeTree,
+      context: { queryClient },
+      history: createMemoryHistory({ initialEntries: ['/corporate-actions'] }),
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await userEvent.type(await screen.findByLabelText('ISIN'), TATA);
+    await userEvent.type(screen.getByLabelText('Ex-date'), '2025-10-14');
+    await userEvent.type(screen.getByLabelText('Shares after'), '5');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    // Changed while the preview is on its way: its answer belongs to other fields.
+    await userEvent.type(screen.getByLabelText('Shares after'), '0');
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole('button', { name: 'Save this action' })).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Open lots before the action' })).toBeNull();
+  });
+
+  it('says why a save failed', async () => {
+    const { routes } = server();
+    renderAt('/corporate-actions', {
+      ...routes,
+      'POST /api/corporate-actions': { status: 409, body: { error: 'conflict' } },
+    });
+    await userEvent.type(await screen.findByLabelText('ISIN'), TATA);
+    await userEvent.type(screen.getByLabelText('Ex-date'), '2025-10-14');
+    await userEvent.type(screen.getByLabelText('Shares after'), '5');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Save this action' }));
+    expect(await screen.findByText(/This conflicts with what is stored/)).toBeInTheDocument();
+  });
+
   it('clears the preview when a field changes, so nothing unpreviewed is saved', async () => {
     const { routes } = server();
     renderAt('/corporate-actions', routes);
@@ -210,33 +263,91 @@ describe('the corporate actions page', () => {
     expect(screen.getByLabelText('Parent ISIN')).toHaveValue(TATA);
     expect(screen.getByLabelText('Child ISIN')).toHaveValue(CHILD);
     expect(screen.getByLabelText('Ex-date')).toHaveValue('2025-10-14');
+    expect(screen.getByLabelText('Child shares')).toHaveValue('1');
+  });
+
+  it('forgets the suggestion once it is saved', async () => {
+    const { routes } = server();
+    renderAt(`/corporate-actions?type=SPLIT&isin=${TATA}&exDate=2025-10-14&num=5`, routes);
+    expect(await screen.findByText(/Filled in from what BhavBook noticed/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(await screen.findByText('Preview ready: 1 open lot before, 1 after.')).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Save this action' }));
+    expect(
+      await screen.findByText('Saved the corporate action; every account was rebuilt.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Filled in from what BhavBook noticed/)).toBeNull();
+    expect(screen.getByLabelText('ISIN')).toHaveValue('');
   });
 });
 
 describe('the inbox link and the diagnostics download', () => {
-  it('links a suspected split to the form, filled in', async () => {
+  const SUSPECTED = {
+    id: 'i-ca',
+    kind: 'corporate_action_suspected',
+    status: 'open',
+    accountId: 'a1',
+    accountNickname: 'Z main',
+    broker: 'zerodha',
+    createdAt: '2026-10-21T06:00:00.000Z',
+  };
+
+  it('links a suspected split or bonus to the form, filled in either way', async () => {
     const { state, routes } = server();
     state.issues = [
       {
-        id: 'i-ca',
-        kind: 'corporate_action_suspected',
-        status: 'open',
-        accountId: 'a1',
-        accountNickname: 'Z main',
-        broker: 'zerodha',
-        createdAt: '2026-10-21T06:00:00.000Z',
+        ...SUSPECTED,
         subject: { kind: 'split_or_bonus', instrumentKey: TATA, dateIst: '2025-10-14', multiple: '5' },
       },
     ];
     renderAt('/issues', routes);
     const card = await screen.findByRole('article', { name: /Possible corporate action/ });
-    expect(card).toHaveTextContent('sales ran to 5 times the shares held');
-    // Following it fills the form in (the router encodes the search its own way, so the href is not pinned).
-    await userEvent.click(within(card).getByRole('link', { name: 'Enter it…' }));
-    expect(await screen.findByRole('radio', { name: 'Split' })).toBeChecked();
+    expect(card).toHaveTextContent('sales on 14 Oct 2025 ran to 5 times the shares held');
+    expect(card).toHaveTextContent('ex-date on or before then');
+    expect(within(card).getByRole('link', { name: 'Enter as a split (5 for 1)…' })).toBeInTheDocument();
+    // Followed through the router: its search encoding is its own, so the href is not pinned.
+    await userEvent.click(within(card).getByRole('link', { name: 'Enter as a bonus (4 for 1)…' }));
+    expect(await screen.findByRole('radio', { name: 'Bonus' })).toBeChecked();
     expect(screen.getByLabelText('ISIN')).toHaveValue(TATA);
     expect(screen.getByLabelText('Ex-date')).toHaveValue('2025-10-14');
-    expect(screen.getByLabelText('Shares after')).toHaveValue('5');
+    expect(screen.getByLabelText('Bonus shares')).toHaveValue('4');
+    expect(screen.getByLabelText('Shares held')).toHaveValue('1');
+  });
+
+  it('links an ISIN change 1 for 1, and asks for a mapping when a scrip has no ISIN', async () => {
+    const { state, routes } = server();
+    state.issues = [
+      {
+        ...SUSPECTED,
+        subject: {
+          kind: 'conversion_or_demerger',
+          fromInstrument: TATA,
+          toInstrument: CHILD,
+          dateIst: '2025-10-14',
+        },
+      },
+      {
+        ...SUSPECTED,
+        id: 'i-local',
+        subject: {
+          kind: 'split_or_bonus',
+          instrumentKey: 'local:dhan:Some Scrip',
+          dateIst: '2025-10-14',
+          multiple: '2',
+        },
+      },
+    ];
+    renderAt('/issues', routes);
+    const cards = await screen.findAllByRole('article', { name: /Possible corporate action/ });
+    const local = cards.find((card) => card.textContent.includes('without an ISIN'));
+    expect(local).toBeDefined();
+    if (local !== undefined) expect(within(local).queryByRole('link', { name: /Enter/ })).toBeNull();
+    const conversion = cards.find((card) => card.textContent.includes('stopped trading'));
+    if (conversion === undefined) throw new Error('no conversion card');
+    await userEvent.click(within(conversion).getByRole('link', { name: 'Enter it…' }));
+    expect(await screen.findByRole('radio', { name: 'ISIN change' })).toBeChecked();
+    expect(screen.getByLabelText('New ISIN')).toHaveValue(CHILD);
+    expect(screen.getByLabelText('New shares')).toHaveValue('1');
   });
 
   it('offers the diagnostics download in Settings', async () => {

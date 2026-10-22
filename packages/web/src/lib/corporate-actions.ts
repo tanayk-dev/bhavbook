@@ -17,6 +17,9 @@ const big = (value: unknown): bigint =>
 const record = (value: unknown): Record<string, unknown> => (isRecord(value) ? value : unexpected());
 const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : unexpected());
 
+/** An ISIN as the server takes it. */
+export const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;
+
 export const ACTION_TYPES = ['SPLIT', 'BONUS', 'CONVERSION', 'DEMERGER'] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 const actionType = (value: unknown): ActionType =>
@@ -75,7 +78,7 @@ function storedAction(value: unknown): StoredAction {
     allotmentDateIst: strOrNull(row.allotmentDateIst),
     ratioNum: big(row.ratioNum),
     ratioDen: big(row.ratioDen),
-    costSplitBp: row.costSplitBp === null ? null : big(row.costSplitBp),
+    costSplitBp: row.costSplitBp === null || row.costSplitBp === undefined ? null : big(row.costSplitBp),
     status: status(row.status),
     createdAt: str(row.createdAt),
   };
@@ -205,4 +208,6 @@ const ERRORS: Readonly<Record<string, string>> = {
 };
 
 export const actionError = (error: unknown): string =>
-  (error instanceof ApiError ? ERRORS[error.code] : undefined) ?? 'That did not work. Try again.';
+  error instanceof ApiError && Object.hasOwn(ERRORS, error.code)
+    ? (ERRORS[error.code] ?? 'That did not work. Try again.')
+    : 'That did not work. Try again.';
