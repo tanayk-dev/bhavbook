@@ -31,6 +31,14 @@ import {
 import { breakevenSchema, readSettings, setBreakeven } from '../services/settings.js';
 import { adjustmentInputSchema } from '../services/adjustments.js';
 import { ActionError, type ActionErrorCode } from '../services/errors.js';
+import { corporateActionInputSchema, listCorporateActions } from '../services/corporate-actions.js';
+import { diagnostics } from '../services/diagnostics.js';
+import {
+  applyCorporateActionAndRecompute,
+  previewCorporateActionInVault,
+  restoreCorporateActionAndRecompute,
+  revertCorporateActionAndRecompute,
+} from '../recompute/corporate-actions.js';
 import {
   addAttachment,
   deleteAttachment,
@@ -267,6 +275,21 @@ function withAction<R extends Response>(live: LiveVault, action: (db: Database.D
       throw cause;
     }
   });
+}
+
+/**
+ * Accounts by id with their profile, for a preview that spans every account (a corporate action is a fact about a
+ * security); the client groups by profile.
+ */
+function accountNames(db: Database.Database): Record<string, { nickname: string; profileId: string }> {
+  const rows = db.prepare('SELECT id, nickname, profile_id FROM broker_account').all() as {
+    id: string;
+    nickname: string;
+    profile_id: string;
+  }[];
+  return Object.fromEntries(
+    rows.map((row) => [row.id, { nickname: row.nickname, profileId: row.profile_id }]),
+  );
 }
 
 /** Every instrument key an issue subject names (`instrumentKey`, `isin`), for display names. */
@@ -585,6 +608,68 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
         withVault(live, (db) =>
           c.json({ merged: mergeTag(db, c.req.valid('param').id, c.req.valid('json')) }),
         ),
+      )
+      .get('/corporate-actions', () =>
+        withVault(live, (db) => {
+          const stored = listCorporateActions(db);
+          return jsonResponse({
+            actions: stored.map(({ id, action, status, createdAt }) =>
+              action === null
+                ? { id, unreadable: true, status, createdAt }
+                : { ...action, status, createdAt },
+            ),
+            instruments: instrumentNames(
+              db,
+              stored.flatMap(({ action }) =>
+                action === null ? [] : [action.isin, ...(action.newIsin === null ? [] : [action.newIsin])],
+              ),
+            ),
+          });
+        }),
+      )
+      // What an action would do to every account's open lots; stores nothing.
+      .post('/corporate-actions/preview', ...json(corporateActionInputSchema, SMALL_JSON_BYTES), (c) =>
+        withAction(live, (db) => {
+          const input = c.req.valid('json');
+          const preview = previewCorporateActionInVault(db, input);
+          const lots = [...preview.before, ...preview.after];
+          return jsonResponse({
+            ...preview,
+            instruments: instrumentNames(db, [
+              input.isin,
+              ...(input.newIsin === undefined ? [] : [input.newIsin]),
+              ...lots.map((lot) => lot.instrumentKey),
+            ]),
+            accounts: accountNames(db),
+          });
+        }),
+      )
+      .post('/corporate-actions', ...json(corporateActionInputSchema, SMALL_JSON_BYTES), (c) =>
+        withAction(live, (db) =>
+          c.json({ id: applyCorporateActionAndRecompute(db, c.req.valid('json')) }, 201),
+        ),
+      )
+      .post('/corporate-actions/:id/revert', params(idParam), (c) =>
+        withAction(live, (db) => {
+          revertCorporateActionAndRecompute(db, c.req.valid('param').id);
+          return c.json({ ok: true });
+        }),
+      )
+      .post('/corporate-actions/:id/restore', params(idParam), (c) =>
+        withAction(live, (db) => {
+          restoreCorporateActionAndRecompute(db, c.req.valid('param').id);
+          return c.json({ ok: true });
+        }),
+      )
+      // A bug report's facts: counts, adapter versions and row shapes, never values or names (PRD §3.3).
+      .get('/diagnostics', () =>
+        withVault(live, (db) => {
+          const response = jsonResponse(
+            diagnostics(db, { appVersion: options.backups?.appVersion ?? 'unknown' }),
+          );
+          response.headers.set('Content-Disposition', 'attachment; filename="bhavbook-diagnostics.json"');
+          return response;
+        }),
       )
       .get('/analytics/summary', notImplemented)
   );
