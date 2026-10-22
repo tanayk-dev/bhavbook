@@ -37,6 +37,7 @@ import {
   positionDetail,
   positionRefSchema,
   positionsFilterSchema,
+  reviewCountSchema,
   reviewQueueCount,
 } from '../services/positions.js';
 import {
@@ -248,6 +249,9 @@ function subjectKeys(subjects: readonly unknown[]): string[] {
     return [record.instrumentKey, record.isin].filter((key): key is string => typeof key === 'string');
   });
 }
+
+/** A journal entry: two texts of at most 10,000 characters and a few ids. */
+const JOURNAL_JSON_BYTES = 64 * 1024;
 
 /** Profile and account bodies are a few short labels. */
 const SMALL_JSON_BYTES = 4 * 1024;
@@ -471,14 +475,20 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
       .get('/positions', query(positionsFilterSchema), (c) =>
         withVault(live, (db) => jsonResponse(listPositions(db, c.req.valid('query')))),
       )
-      .get('/positions/review-count', (c) => withVault(live, (db) => c.json({ count: reviewQueueCount(db) })))
+      .get('/positions/review-count', query(reviewCountSchema), (c) =>
+        withVault(live, (db) => c.json({ count: reviewQueueCount(db, c.req.valid('query')) })),
+      )
       .get('/positions/:ref', params(refParam), (c) =>
         withAction(live, (db) => jsonResponse(positionDetail(db, c.req.valid('param').ref))),
       )
-      .put('/positions/:ref/journal', params(refParam), ...json(journalInputSchema), (c) =>
-        withAction(live, (db) =>
-          c.json({ id: saveJournal(db, c.req.valid('param').ref, c.req.valid('json')) }),
-        ),
+      .put(
+        '/positions/:ref/journal',
+        params(refParam),
+        ...json(journalInputSchema, JOURNAL_JSON_BYTES),
+        (c) =>
+          withAction(live, (db) =>
+            c.json({ id: saveJournal(db, c.req.valid('param').ref, c.req.valid('json')) }),
+          ),
       )
       .post('/positions/:ref/review', params(refParam), (c) =>
         withAction(live, (db) => {

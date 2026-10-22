@@ -16,8 +16,10 @@ export const positionRef = (id: string): string => Buffer.from(id, 'utf8').toStr
 
 export const positionRefSchema = z.string().regex(/^[A-Za-z0-9_-]{1,1024}$/);
 
+/** The position id a reference names; '' (no position) unless the reference is the canonical one for that id. */
 export function positionIdOf(ref: string): string {
-  return Buffer.from(ref, 'base64url').toString('utf8');
+  const id = Buffer.from(ref, 'base64url').toString('utf8');
+  return positionRef(id) === ref ? id : '';
 }
 
 export const positionsFilterSchema = z
@@ -84,11 +86,20 @@ interface SummaryRow {
   readonly entries: bigint | null;
 }
 
-// Each allocation belongs to one position (a run never splits a fill), so its charges count once, there.
-const SUMMARY_SQL = `
-  WITH members AS (
-    SELECT position_id, entry_allocation_id AS allocation_id FROM lot
-    UNION SELECT position_id, exit_allocation_id FROM lot WHERE exit_allocation_id IS NOT NULL),
+/**
+ * Summary rows of the positions `scope` selects (a condition on `p` and `b` with `?` parameters). The aggregates
+ * read only those positions' lots, charges and journal rows, so one position's detail never scans the vault. Each
+ * allocation belongs to one position (a run never splits a fill), so its charges count once, there. A position is
+ * reviewed only when every entry on it is (two colliding entries need both).
+ */
+function summarySql(scope: string): string {
+  return `
+  WITH scoped AS (
+    SELECT p.id FROM position p JOIN broker_account b ON b.id = p.account_id WHERE ${scope}),
+  members AS (
+    SELECT position_id, entry_allocation_id AS allocation_id FROM lot WHERE position_id IN (SELECT id FROM scoped)
+    UNION SELECT position_id, exit_allocation_id FROM lot
+    WHERE exit_allocation_id IS NOT NULL AND position_id IN (SELECT id FROM scoped)),
   charges AS (
     SELECT m.position_id, sum(c.amount_micro) AS charges FROM members m
     JOIN (${EFFECTIVE_CHARGES_SQL}) c ON c.fill_allocation_id = m.allocation_id GROUP BY m.position_id),
@@ -99,19 +110,26 @@ const SUMMARY_SQL = `
       sum(entry_value_micro) AS bought_value,
       sum(coalesce(exit_value_micro, 0)) AS sold_value,
       sum(CASE WHEN exit_value_micro IS NULL THEN 0 ELSE exit_value_micro - entry_value_micro END) AS realised
-    FROM lot GROUP BY position_id),
+    FROM lot WHERE position_id IN (SELECT id FROM scoped) GROUP BY position_id),
   journal AS (
-    SELECT a.position_id, max(e.reviewed_at) AS reviewed_at, count(*) AS entries
-    FROM journal_attachment a JOIN journal_entry e ON e.id = a.journal_entry_id GROUP BY a.position_id)
+    SELECT a.position_id, count(*) AS entries,
+      CASE WHEN count(e.reviewed_at) = count(*) THEN max(e.reviewed_at) END AS reviewed_at
+    FROM journal_attachment a JOIN journal_entry e ON e.id = a.journal_entry_id
+    WHERE a.position_id IN (SELECT id FROM scoped) GROUP BY a.position_id)
   SELECT p.id, p.account_id, b.nickname, b.broker, p.instrument_key, p.bucket, p.state, p.incomplete, p.excluded,
     p.orphan_qty, p.opened_at_utc, p.closed_at_utc, l.open_qty, l.bought_qty, l.bought_value, l.sold_value,
     l.realised, c.charges, r.status AS fee_status, j.reviewed_at, j.entries
-  FROM position p
+  FROM scoped s
+  JOIN position p ON p.id = s.id
   JOIN broker_account b ON b.id = p.account_id
   LEFT JOIN lots l ON l.position_id = p.id
   LEFT JOIN charges c ON c.position_id = p.id
   LEFT JOIN charge_reconciliation r ON r.position_id = p.id
   LEFT JOIN journal j ON j.position_id = p.id`;
+}
+
+const FILTER_SCOPE =
+  '(? IS NULL OR b.profile_id = ?) AND (? IS NULL OR p.account_id = ?) AND (? IS NULL OR p.state = ?)';
 
 function summaryOf(row: SummaryRow): PositionSummary {
   return {
@@ -149,31 +167,36 @@ export interface PositionList {
 const REVIEW_QUEUE = "p.state = 'CLOSED' AND p.incomplete = 0 AND p.excluded = 0 AND j.reviewed_at IS NULL";
 const REVIEWED = "p.state = 'CLOSED' AND j.reviewed_at IS NOT NULL";
 
+const filterArgs = (filter: {
+  readonly profileId?: string | undefined;
+  readonly accountId?: string | undefined;
+  readonly state?: string | undefined;
+}) => [
+  filter.profileId ?? null,
+  filter.profileId ?? null,
+  filter.accountId ?? null,
+  filter.accountId ?? null,
+  filter.state ?? null,
+  filter.state ?? null,
+];
+
 /** Positions, newest first (by when they closed, else opened): the review queue when `review` is `unreviewed`. */
 export function listPositions(db: Database.Database, filter: PositionsFilter = {}): PositionList {
   const parsed = positionsFilterSchema.parse(filter);
-  const conditions = [
-    '(? IS NULL OR b.profile_id = ?)',
-    '(? IS NULL OR p.account_id = ?)',
-    '(? IS NULL OR p.state = ?)',
-    ...(parsed.review === 'unreviewed' ? [REVIEW_QUEUE] : parsed.review === 'reviewed' ? [REVIEWED] : []),
-  ];
-  const args = [
-    parsed.profileId ?? null,
-    parsed.profileId ?? null,
-    parsed.accountId ?? null,
-    parsed.accountId ?? null,
-    parsed.state ?? null,
-    parsed.state ?? null,
-  ];
-  const where = `WHERE ${conditions.join(' AND ')}`;
-  const total: unknown = db
-    .prepare(`SELECT count(*) FROM (${SUMMARY_SQL} ${where})`)
-    .pluck()
-    .get(...args);
-  const rows = db
-    .prepare(`${SUMMARY_SQL} ${where} ORDER BY coalesce(p.closed_at_utc, p.opened_at_utc) DESC, p.id LIMIT ?`)
-    .all(...args, parsed.limit) as SummaryRow[];
+  const review =
+    parsed.review === 'unreviewed' ? REVIEW_QUEUE : parsed.review === 'reviewed' ? REVIEWED : '1';
+  const sql = `${summarySql(FILTER_SCOPE)} WHERE ${review}`;
+  const args = filterArgs(parsed);
+  // One snapshot: a recompute between the two reads could otherwise make the total disagree with the rows.
+  const { total, rows } = db.transaction(() => ({
+    total: db
+      .prepare(`SELECT count(*) FROM (${sql})`)
+      .pluck()
+      .get(...args),
+    rows: db
+      .prepare(`${sql} ORDER BY coalesce(p.closed_at_utc, p.opened_at_utc) DESC, p.id LIMIT ?`)
+      .all(...args, parsed.limit) as SummaryRow[],
+  }))();
   const positions = rows.map(summaryOf);
   return {
     positions,
@@ -185,12 +208,17 @@ export function listPositions(db: Database.Database, filter: PositionsFilter = {
   };
 }
 
-/** Closed positions waiting for review, for the navigation counter. */
-export function reviewQueueCount(db: Database.Database): number {
+export const reviewCountSchema = positionsFilterSchema.pick({ profileId: true, accountId: true });
+
+/** Closed positions waiting for review in a profile or account (all of them without one): the navigation counter. */
+export function reviewQueueCount(
+  db: Database.Database,
+  filter: z.infer<typeof reviewCountSchema> = {},
+): number {
   const count: unknown = db
-    .prepare(`SELECT count(*) FROM (${SUMMARY_SQL} WHERE ${REVIEW_QUEUE})`)
+    .prepare(`SELECT count(*) FROM (${summarySql(FILTER_SCOPE)} WHERE ${REVIEW_QUEUE})`)
     .pluck()
-    .get();
+    .get(...filterArgs(filter));
   return Number(count);
 }
 
@@ -267,7 +295,7 @@ export interface PositionDetail {
 
 /** One position by its reference; ActionError not_found when no position has it (now). */
 export function positionById(db: Database.Database, id: string): PositionSummary {
-  const row = db.prepare(`${SUMMARY_SQL} WHERE p.id = ?`).get(id) as SummaryRow | undefined;
+  const row = db.prepare(summarySql('p.id = ?')).get(id) as SummaryRow | undefined;
   if (row === undefined) throw new ActionError('no such position', { code: 'not_found' });
   return summaryOf(row);
 }
@@ -358,27 +386,28 @@ function lotsOf(db: Database.Database, id: string): PositionLot[] {
   }));
 }
 
-function chargesOf(db: Database.Database, fills: readonly PositionFill[]): PositionCharge[] {
-  const read = db.prepare(
-    `SELECT component, source, amount_micro, rule_version FROM fill_charge
-     WHERE fill_allocation_id = ? ORDER BY component, source`,
-  );
-  return fills.flatMap((fill) =>
-    (
-      read.all(BigInt(fill.allocationId)) as {
-        component: string;
-        source: 'estimated' | 'reported';
-        amount_micro: bigint;
-        rule_version: string | null;
-      }[]
-    ).map((row) => ({
-      allocationId: fill.allocationId,
-      component: row.component,
-      source: row.source,
-      amountMicro: row.amount_micro,
-      ruleVersion: row.rule_version,
-    })),
-  );
+function chargesOf(db: Database.Database, id: string): PositionCharge[] {
+  const rows = db
+    .prepare(
+      `SELECT fill_allocation_id, component, source, amount_micro, rule_version FROM fill_charge
+       WHERE fill_allocation_id IN (SELECT entry_allocation_id FROM lot WHERE position_id = ?
+                                    UNION SELECT exit_allocation_id FROM lot WHERE position_id = ?)
+       ORDER BY fill_allocation_id, component, source`,
+    )
+    .all(id, id) as {
+    fill_allocation_id: bigint;
+    component: string;
+    source: 'estimated' | 'reported';
+    amount_micro: bigint;
+    rule_version: string | null;
+  }[];
+  return rows.map((row) => ({
+    allocationId: row.fill_allocation_id.toString(),
+    component: row.component,
+    source: row.source,
+    amountMicro: row.amount_micro,
+    ruleVersion: row.rule_version,
+  }));
 }
 
 function discrepanciesOf(db: Database.Database, id: string): unknown[] {
@@ -455,18 +484,19 @@ export function journalOf(db: Database.Database, positionId: string): JournalEnt
   }));
 }
 
-/** Everything the position detail shows. */
+/** Everything the position detail shows, read in one snapshot. */
 export function positionDetail(db: Database.Database, ref: string): PositionDetail {
   const id = positionIdOf(ref);
-  const position = positionById(db, id);
-  const fills = fillsOf(db, id);
-  return {
-    position,
-    instruments: instrumentNames(db, [position.instrumentKey]),
-    fills,
-    lots: lotsOf(db, id),
-    charges: chargesOf(db, fills),
-    feeDiscrepancies: discrepanciesOf(db, id),
-    journal: journalOf(db, id),
-  };
+  return db.transaction(() => {
+    const position = positionById(db, id);
+    return {
+      position,
+      instruments: instrumentNames(db, [position.instrumentKey]),
+      fills: fillsOf(db, id),
+      lots: lotsOf(db, id),
+      charges: chargesOf(db, id),
+      feeDiscrepancies: discrepanciesOf(db, id),
+      journal: journalOf(db, id),
+    };
+  })();
 }

@@ -282,3 +282,131 @@ describe('the journal', () => {
     });
   });
 });
+
+describe('review fixes (S14a-1 review)', () => {
+  it('keeps incomplete and excluded positions out of the queue', async () => {
+    await withPositions([SELL, INFY_BUY, INFY_SELL], async (test, vault) => {
+      // TCS: a sell with no buy, so INCOMPLETE.
+      expect((await list(test, '?review=unreviewed')).positions.map((p) => p.instrumentKey)).toEqual([
+        'INE009A01021',
+      ]);
+      const anchor = vault.db
+        .prepare("SELECT anchor_key FROM position WHERE instrument_key = 'INE009A01021'")
+        .pluck()
+        .get() as string;
+      const excluded = await send(
+        test,
+        `/api/accounts/${ZERODHA}/adjustments`,
+        json('POST', { kind: 'exclude', anchorKey: anchor }),
+      );
+      expect(excluded.status).toBe(201);
+      expect((await list(test, '?review=unreviewed')).total).toBe(0);
+      expect(await (await send(test, '/api/positions/review-count')).json()).toEqual({ count: 0 });
+    });
+  });
+
+  it('scopes the list and the counter by profile, and limits the rows but not the total', async () => {
+    await withPositions([BUY, SELL, INFY_BUY, INFY_SELL], async (test) => {
+      expect((await list(test, '?profileId=prof1')).total).toBe(2);
+      expect((await list(test, '?profileId=prof_other')).total).toBe(0);
+      expect(await (await send(test, '/api/positions/review-count?profileId=prof1')).json()).toEqual({
+        count: 2,
+      });
+      expect(await (await send(test, '/api/positions/review-count?profileId=prof_other')).json()).toEqual({
+        count: 0,
+      });
+      expect((await send(test, '/api/positions/review-count?state=OPEN')).status).toBe(400);
+      const limited = await list(test, '?limit=1');
+      expect(limited.positions).toHaveLength(1);
+      expect(limited.total).toBe(2);
+    });
+  });
+
+  it('keeps the first review time; reopen is accepted whatever the state', async () => {
+    await withPositions([BUY, SELL, INFY_BUY], async (test) => {
+      const { positions } = await list(test);
+      const closed = positions.find((position) => position.state === 'CLOSED');
+      const open = positions.find((position) => position.state === 'OPEN');
+      if (closed === undefined || open === undefined) throw new Error('positions missing');
+      expect((await send(test, `/api/positions/${closed.ref}/review`, { method: 'POST' })).status).toBe(200);
+      const first = (await list(test, '?review=reviewed')).positions[0]?.reviewedAt;
+      expect(first).not.toBeNull();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect((await send(test, `/api/positions/${closed.ref}/review`, { method: 'POST' })).status).toBe(200);
+      expect((await list(test, '?review=reviewed')).positions[0]?.reviewedAt).toBe(first);
+      expect((await send(test, `/api/positions/${open.ref}/review`, { method: 'POST' })).status).toBe(400);
+      expect((await send(test, `/api/positions/${open.ref}/reopen`, { method: 'POST' })).status).toBe(200);
+    });
+  });
+
+  it('keeps every planned value, trimmed, and allows re-saving the same initial stop after the close', async () => {
+    await withVault(async (vault) => {
+      await importFiles(vault.service, ZERODHA, [tradebook(BUY)]);
+      recompute(vault.db, ZERODHA);
+      const test = testApp({}, vault.db);
+      const [position] = (await list(test)).positions;
+      if (position === undefined) throw new Error('no position');
+      const path = `/api/positions/${position.ref}/journal`;
+      const entry = {
+        ...ENTRY,
+        thesis: ' Café setup ',
+        initialStopMicro: '95000000',
+        plannedStopMicro: '96000000',
+        plannedTargetMicro: '130000000',
+        plannedRiskMicro: '50000000',
+        reviewNote: '   ',
+      };
+      expect((await send(test, path, json('PUT', entry))).status).toBe(200);
+      await importFiles(vault.service, ZERODHA, [tradebook(SELL)]);
+      recompute(vault.db, ZERODHA);
+      expect(
+        (await send(test, path, json('PUT', { ...entry, plannedTargetMicro: '125000000' }))).status,
+      ).toBe(200);
+      expect((await detail(test, position.ref)).journal[0]).toMatchObject({
+        thesis: 'Café setup',
+        initialStopMicro: '95000000',
+        plannedStopMicro: '96000000',
+        plannedTargetMicro: '125000000',
+        plannedRiskMicro: '50000000',
+        reviewNote: null,
+      });
+    });
+  });
+
+  it('answers 404 for a reference that is not the canonical one, and refuses a foreign origin', async () => {
+    await withPositions([BUY, SELL], async (test) => {
+      const [position] = (await list(test)).positions;
+      if (position === undefined) throw new Error('no position');
+      expect((await send(test, '/api/positions/_w')).status).toBe(404);
+      const foreign = await send(test, `/api/positions/${position.ref}/review`, {
+        method: 'POST',
+        headers: { origin: 'http://evil.example' },
+      });
+      expect(foreign.status).toBe(403);
+    });
+  });
+
+  it('leaves a position in the queue while any of its entries is unreviewed', async () => {
+    await withPositions([BUY, SELL], async (test, vault) => {
+      const [position] = (await list(test)).positions;
+      if (position === undefined) throw new Error('no position');
+      expect((await send(test, `/api/positions/${position.ref}/review`, { method: 'POST' })).status).toBe(
+        200,
+      );
+      vault.db
+        .prepare(
+          `INSERT INTO journal_entry (id, anchor_account_id, anchor_instrument_key, anchor_bucket, anchor_key, status,
+             created_at, updated_at)
+           SELECT 'jnl_late', anchor_account_id, anchor_instrument_key, anchor_bucket, anchor_key, 'attached', 'x', 'x'
+           FROM journal_entry LIMIT 1`,
+        )
+        .run();
+      vault.db
+        .prepare(
+          "INSERT INTO journal_attachment (journal_entry_id, position_id) SELECT 'jnl_late', position_id FROM journal_attachment LIMIT 1",
+        )
+        .run();
+      expect((await list(test, '?review=unreviewed')).total).toBe(1);
+    });
+  });
+});

@@ -73,7 +73,9 @@ function checkTags(db: Database.Database, input: JournalInput): void {
 function createEntry(db: Database.Database, positionId: string, at: string): string {
   const position = db
     .prepare('SELECT account_id, instrument_key, bucket, anchor_key FROM position WHERE id = ?')
-    .get(positionId) as { account_id: string; instrument_key: string; bucket: string; anchor_key: string };
+    .get(positionId) as
+    { account_id: string; instrument_key: string; bucket: string; anchor_key: string } | undefined;
+  if (position === undefined) throw new ActionError('no such position', { code: 'not_found' });
   const id = `jnl_${randomUUID()}`;
   db.prepare(
     `INSERT INTO journal_entry (id, anchor_account_id, anchor_instrument_key, anchor_bucket, anchor_key, status,
@@ -145,8 +147,9 @@ export function saveJournal(
 }
 
 /**
- * Marks a closed position reviewed (every entry on it; an empty entry when it has none) or reopens it. Only closed
- * positions are reviewed: an open one is still being traded.
+ * Marks a closed position reviewed (every entry on it not yet reviewed; an empty entry when it has none) or reopens
+ * it. Only closed positions are reviewed: an open one is still being traded. Reopening works in any state, so a
+ * review from before the position reopened (a later buy) can be cleared.
  */
 export function setReviewed(
   db: Database.Database,
@@ -158,13 +161,15 @@ export function setReviewed(
   const positionId = positionIdOf(ref);
   write(db, () => {
     const position = positionById(db, positionId);
-    if (position.state !== 'CLOSED') {
+    if (reviewed && position.state !== 'CLOSED') {
       throw new ActionError('only a closed position is reviewed', { code: 'invalid' });
     }
     if (reviewed && journalOf(db, positionId).length === 0) createEntry(db, positionId, at);
+    // Only entries whose state changes are touched: reviewing twice keeps the first review's time.
     db.prepare(
       `UPDATE journal_entry SET reviewed_at = ?, updated_at = ?
-       WHERE id IN (SELECT journal_entry_id FROM journal_attachment WHERE position_id = ?)`,
-    ).run(reviewed ? at : null, at, positionId);
+       WHERE id IN (SELECT journal_entry_id FROM journal_attachment WHERE position_id = ?)
+         AND (reviewed_at IS NULL) = ?`,
+    ).run(reviewed ? at : null, at, positionId, reviewed ? 1n : 0n);
   });
 }
