@@ -1,5 +1,5 @@
 // Review follow-ups for S4: hostile backups, safe swaps, schema integrity, migration safety.
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
@@ -34,6 +34,32 @@ function backupWith(dir: string, tamper: (db: Database.Database) => void): strin
   writeFileSync(file, encodeBhav(readFileSync(raw), { schemaVersion, appVersion: APP, createdAt: 'x' }));
   return file;
 }
+
+// POSIX mode bits; Windows protects the file with the user profile's ACLs instead.
+describe.skipIf(process.platform === 'win32')("vault files are the owner's alone", () => {
+  const mode = (file: string): number => statSync(file).mode & 0o777;
+
+  it('creates the vault readable and writable by its owner only, and tightens an existing one', () => {
+    withTempDir((dir) => {
+      const vaultPath = path.join(dir, 'vault.db');
+      openVault(vaultPath, { appVersion: APP }).close();
+      expect(mode(vaultPath)).toBe(0o600);
+      chmodSync(vaultPath, 0o644);
+      openVault(vaultPath, { appVersion: APP }).close();
+      expect(mode(vaultPath)).toBe(0o600);
+    });
+  });
+
+  it("keeps a restored vault the owner's alone", () => {
+    withTempDir((dir) => {
+      const backup = backupWith(dir, () => undefined);
+      const vaultPath = path.join(dir, 'vault.db');
+      openVault(vaultPath, { appVersion: APP }).close();
+      restoreBackup(backup, vaultPath, { appVersion: APP });
+      expect(mode(vaultPath)).toBe(0o600);
+    });
+  });
+});
 
 describe('restore rejects hostile or foreign databases', () => {
   it.each([

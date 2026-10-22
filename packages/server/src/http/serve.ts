@@ -5,11 +5,11 @@ import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { serve } from '@hono/node-server';
 import { createApp, type AppOptions } from './app.js';
-import { checkRequest } from './security.js';
+import { checkRequest, launchGate } from './security.js';
 
 export const HOSTNAME = '127.0.0.1';
 
-export interface StartOptions extends Omit<AppOptions, 'port'> {
+export interface StartOptions extends Omit<AppOptions, 'port' | 'launch'> {
   /** 0 (the default) picks a free port. */
   readonly port?: number;
 }
@@ -17,8 +17,10 @@ export interface StartOptions extends Omit<AppOptions, 'port'> {
 export interface RunningServer {
   readonly server: Server;
   readonly port: number;
-  /** The launch URL: opening it exchanges the token for the session cookie. */
+  /** The launch URL: opening it once sets the session cookie, then it is spent. */
   readonly url: string;
+  /** A fresh launch URL (for a browser that was closed); it replaces one not yet used. */
+  newLaunchUrl(): string;
   close(): Promise<void>;
 }
 
@@ -50,9 +52,13 @@ function handleUpgrade(request: IncomingMessage, socket: Duplex, port: number, t
   refuseUpgrade(socket, result.ok ? 501 : result.status);
 }
 
+const launchUrl = (port: number, token: string): string => `http://${HOSTNAME}:${String(port)}/?t=${token}`;
+
 export async function startServer(options: StartOptions): Promise<RunningServer> {
   let port = 0;
-  const app = createApp({ ...options, port: () => port });
+  const launch = launchGate();
+  const first = launch.issue();
+  const app = createApp({ ...options, launch, port: () => port });
   const server = await new Promise<Server>((resolve, reject) => {
     const created = serve({ fetch: app.fetch, port: options.port ?? 0, hostname: HOSTNAME }, () => {
       resolve(created);
@@ -67,7 +73,8 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
   return {
     server,
     port,
-    url: `http://${HOSTNAME}:${String(port)}/?t=${options.token}`,
+    url: launchUrl(port, first),
+    newLaunchUrl: () => launchUrl(port, launch.issue()),
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((cause) => {

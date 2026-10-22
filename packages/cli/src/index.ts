@@ -51,6 +51,19 @@ function processIo(shutdown: Shutdown): CliIo {
       await open(url);
     },
     waitForShutdown: () => shutdown.requested,
+    onNewLinkRequest: (listener) => {
+      // Only someone at an interactive terminal can ask; piped or detached, nothing listens.
+      if (!process.stdin.isTTY) return null;
+      const onData = (): void => {
+        listener();
+      };
+      process.stdin.on('data', onData);
+      return () => {
+        process.stdin.off('data', onData);
+        // Let the process exit: stdin no longer holds the event loop open.
+        process.stdin.pause();
+      };
+    },
   };
 }
 

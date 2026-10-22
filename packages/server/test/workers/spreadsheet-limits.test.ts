@@ -1,4 +1,5 @@
 // S5a security-review follow-ups: zip-bomb pre-checks, cell/sheet caps, hostile sheet names.
+import { deflateRawSync } from 'node:zlib';
 import * as XLSX from 'xlsx';
 import { describe, expect, it } from 'vitest';
 import { parseWorkbook } from '../../src/workers/spreadsheet-core.mjs';
@@ -37,6 +38,33 @@ function fakeZip(entries: number, declaredSize: number, compressedSize = 1): Buf
   return Buffer.concat([...locals, directory, end]);
 }
 
+/** A one-entry deflated zip whose directory declares `declaredSize` for `content` (a liar unless they agree). */
+function deflatedZip(content: Buffer, declaredSize: number): Buffer {
+  const name = Buffer.from('xl/sheet1.xml', 'latin1');
+  const data = deflateRawSync(content);
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(8, 8);
+  local.writeUInt32LE(data.length, 18);
+  local.writeUInt32LE(declaredSize, 22);
+  local.writeUInt16LE(name.length, 26);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(8, 10);
+  central.writeUInt32LE(data.length, 20);
+  central.writeUInt32LE(declaredSize, 24);
+  central.writeUInt16LE(name.length, 28);
+  central.writeUInt32LE(0, 42);
+  const directory = Buffer.concat([central, name]);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(directory.length, 12);
+  end.writeUInt32LE(local.length + name.length + data.length, 16);
+  return Buffer.concat([local, name, data, directory, end]);
+}
+
 function xlsx(build: (book: XLSX.WorkBook) => void): Buffer {
   const book = XLSX.utils.book_new();
   build(book);
@@ -57,6 +85,22 @@ describe('inspectZip (before any decompression)', () => {
 
   it('rejects an extreme compression ratio even under the size cap', () => {
     expect(() => inspectZip(fakeZip(1, 50_000_000, 10))).toThrow(/too large when unpacked/);
+  });
+
+  it('rejects a part that inflates to more than it declares (a lying zip bomb)', () => {
+    // Declares 1,000 bytes; holds 5 MB of zeros (about 5 KB deflated, so the ratio check alone passes it).
+    const bomb = deflatedZip(Buffer.alloc(5 * 1024 * 1024), 1_000);
+    expect(() => inspectZip(bomb)).toThrow(/does not match its declared size/);
+  });
+
+  it('rejects a part that inflates to less than it declares', () => {
+    expect(() => inspectZip(deflatedZip(Buffer.alloc(100), 5_000))).toThrow(
+      /does not match its declared size/,
+    );
+  });
+
+  it('accepts a part whose size is declared truthfully', () => {
+    expect(inspectZip(deflatedZip(Buffer.from('<sheet/>'), 8))).toEqual({ entries: 1, unpackedBytes: 8 });
   });
 
   it('rejects too many entries', () => {

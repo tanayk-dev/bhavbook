@@ -59,7 +59,11 @@ describe('startServer', () => {
     expect(address.address).toBe('127.0.0.1');
     expect(address.port).toBe(server.port);
     expect(server.port).toBeGreaterThan(0);
-    expect(server.url).toBe(`http://127.0.0.1:${server.port}/?t=${TOKEN}`);
+    // The link carries a one-time launch token, never the session key.
+    expect(server.url).toMatch(
+      new RegExp(`^http://127\\.0\\.0\\.1:${String(server.port)}/\\?t=[A-Za-z0-9_-]{43}$`),
+    );
+    expect(server.url).not.toContain(TOKEN);
   });
 
   it('runs the launch flow over a real socket', async () => {
@@ -68,6 +72,9 @@ describe('startServer', () => {
     expect(launch.status).toBe(302);
     const cookie = (launch.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
     expect(cookie).toBe(`${sessionCookieName(server.port)}=${TOKEN}`);
+    // Used: the same link no longer opens a session; a new one does.
+    expect((await fetch(server.url, { redirect: 'manual' })).status).toBe(401);
+    expect((await fetch(server.newLaunchUrl(), { redirect: 'manual' })).status).toBe(302);
     const health = await fetch(`http://127.0.0.1:${server.port}/api/health`, { headers: { cookie } });
     expect(health.status).toBe(200);
     expect((await fetch(`http://127.0.0.1:${server.port}/api/health`)).status).toBe(401);

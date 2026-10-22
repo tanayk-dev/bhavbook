@@ -1,7 +1,7 @@
 // ADR-0002: every route needs the session token and passes the Host/Origin allowlist; there is no CORS.
 import { describe, expect, it } from 'vitest';
-import { sessionCookieName } from '../../src/http/index.js';
-import { ORIGIN, PORT, send, testApp, TOKEN } from './helpers.js';
+import { launchGate, sessionCookieName } from '../../src/http/index.js';
+import { LAUNCH, ORIGIN, PORT, send, testApp, TOKEN } from './helpers.js';
 
 describe('session token', () => {
   it('rejects a request without the session cookie with 401', async () => {
@@ -26,7 +26,7 @@ describe('session token', () => {
   });
 
   it('turns the launch URL token into an HttpOnly SameSite=Strict cookie and strips it from the URL', async () => {
-    const response = await send(testApp(), `/?t=${TOKEN}`, { headers: { cookie: null } });
+    const response = await send(testApp(), `/?t=${LAUNCH}`, { headers: { cookie: null } });
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe('/');
     const cookie = response.headers.get('set-cookie') ?? '';
@@ -34,6 +34,35 @@ describe('session token', () => {
     expect(cookie).toMatch(/HttpOnly/i);
     expect(cookie).toMatch(/SameSite=Strict/i);
     expect(cookie).toMatch(/Path=\//);
+  });
+
+  it('redeems a launch link once: replaying it gets nothing, and the session key is not a link', async () => {
+    const test = testApp();
+    expect((await send(test, `/?t=${LAUNCH}`, { headers: { cookie: null } })).status).toBe(302);
+    const replay = await send(test, `/?t=${LAUNCH}`, { headers: { cookie: null } });
+    expect(replay.status).toBe(401);
+    expect(replay.headers.get('set-cookie')).toBeNull();
+    // The cookie's key never works in a link: it is not printed, and a leaked cookie is not a way to mint one.
+    expect((await send(testApp(), `/?t=${TOKEN}`, { headers: { cookie: null } })).status).toBe(401);
+  });
+
+  it('lets a browser that already has the session follow a used link in', async () => {
+    const test = testApp();
+    await send(test, `/?t=${LAUNCH}`, { headers: { cookie: null } });
+    const again = await send(test, `/?t=${LAUNCH}`);
+    expect(again.status).toBe(302);
+    expect(again.headers.get('location')).toBe('/');
+    expect(again.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('issues a new link that replaces an unused one', async () => {
+    const gate = launchGate(LAUNCH);
+    const test = testApp({ launch: gate });
+    const fresh = gate.issue();
+    expect(fresh).not.toBe(LAUNCH);
+    expect(fresh).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect((await send(test, `/?t=${LAUNCH}`, { headers: { cookie: null } })).status).toBe(401);
+    expect((await send(test, `/?t=${fresh}`, { headers: { cookie: null } })).status).toBe(302);
   });
 
   it('rejects a wrong launch token', async () => {
@@ -112,6 +141,7 @@ describe('response headers', () => {
       expect(response.headers.get('x-frame-options')).toBe('DENY');
       expect(response.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
       expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.get('permissions-policy')).toContain('camera=()');
       expect(response.headers.get('access-control-allow-origin')).toBeNull();
     }
   });

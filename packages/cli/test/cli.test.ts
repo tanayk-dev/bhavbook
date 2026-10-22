@@ -21,6 +21,8 @@ interface FakeIo extends CliIo {
   readonly stdout: string[];
   readonly stderr: string[];
   readonly opened: string[];
+  /** Asks for a new launch link, as Enter does in the terminal. */
+  requestLink(): void;
 }
 
 function fakeIo(
@@ -29,10 +31,18 @@ function fakeIo(
   const stdout: string[] = [];
   const stderr: string[] = [];
   const opened: string[] = [];
+  let onRequest: (() => void) | null = null;
   return {
     stdout,
     stderr,
     opened,
+    requestLink: () => onRequest?.(),
+    onNewLinkRequest: (listener) => {
+      onRequest = listener;
+      return () => {
+        onRequest = null;
+      };
+    },
     out: (line) => stdout.push(line),
     err: (line) => stderr.push(line),
     homedir: () => dir,
@@ -103,6 +113,24 @@ describe('bhavbook (serve)', () => {
     expect(io.opened).toHaveLength(1);
     expect(io.opened[0]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?t=[A-Za-z0-9_-]{43}$/);
     expect(io.stdout.join('\n')).toContain(io.opened[0]);
+  });
+
+  it('hands out a new one-time link on request; the spent one stays spent', async () => {
+    let fresh = '';
+    const io: FakeIo = fakeIo({
+      onRunning: async (server) => {
+        expect((await fetch(server.url, { redirect: 'manual' })).status).toBe(302);
+        io.requestLink();
+        fresh = io.opened.at(-1) ?? '';
+        expect(fresh).not.toBe(server.url);
+        expect((await fetch(server.url, { redirect: 'manual' })).status).toBe(401);
+        expect((await fetch(fresh, { redirect: 'manual' })).status).toBe(302);
+      },
+    });
+    expect(await main(['--vault', vault, '--port', '0'], io)).toBe(0);
+    expect(io.opened).toHaveLength(2);
+    expect(io.stdout.join('\n')).toContain(`New link: ${fresh}`);
+    expect(io.stdout.join('\n')).toMatch(/press Enter here for a new one/);
   });
 
   it('uses the default vault under the home directory', async () => {

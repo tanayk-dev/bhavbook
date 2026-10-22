@@ -5,7 +5,9 @@ export {
   allowedHosts,
   allowedOrigins,
   checkRequest,
+  launchGate,
   sessionCookieName,
+  type LaunchGate,
   type RequestFacts,
 } from './security.js';
 export { HOSTNAME, startServer, type RunningServer, type StartOptions } from './serve.js';

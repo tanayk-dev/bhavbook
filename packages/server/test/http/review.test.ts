@@ -6,7 +6,7 @@ import { HTTPException } from 'hono/http-exception';
 import { describe, expect, it } from 'vitest';
 import { sessionCookieName } from '../../src/http/index.js';
 import { withTempDir } from '../vault/helpers.js';
-import { ORIGIN, PORT, send, testApp, TOKEN } from './helpers.js';
+import { LAUNCH, ORIGIN, PORT, send, testApp, TOKEN } from './helpers.js';
 
 describe('fetch metadata and unsafe methods', () => {
   it.each(['cross-site', 'same-site'])(
@@ -36,7 +36,7 @@ describe('fetch metadata and unsafe methods', () => {
 
   it('names the session cookie per port, so two instances and other localhost apps do not collide', async () => {
     expect(sessionCookieName(PORT)).toBe(`bhavbook_session_${PORT}`);
-    const launch = await send(testApp(), `/?t=${TOKEN}`, { headers: { cookie: null } });
+    const launch = await send(testApp(), `/?t=${LAUNCH}`, { headers: { cookie: null } });
     expect(launch.headers.get('set-cookie')).toContain(`bhavbook_session_${PORT}=`);
     const other = await send(testApp(), '/api/health', {
       headers: { cookie: `bhavbook_session_${PORT + 1}=${TOKEN}` },

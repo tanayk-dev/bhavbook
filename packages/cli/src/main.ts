@@ -29,6 +29,11 @@ export interface CliIo {
   openBrowser(url: string): Promise<void>;
   /** Resolves when the server should stop (Ctrl+C in the real CLI). */
   waitForShutdown(server: RunningServer): Promise<void>;
+  /**
+   * Calls `listener` whenever the person asks for a new launch link (Enter in an interactive terminal). Returns a
+   * way to stop listening, or null when there is no one to ask (output piped, as in the browser tests).
+   */
+  onNewLinkRequest(listener: () => void): (() => void) | null;
 }
 
 const MIN_NODE: readonly [number, number] = [24, 11];
@@ -157,13 +162,27 @@ async function serveCommand(args: Parsed, io: CliIo): Promise<number> {
       });
       try {
         io.out(`BhavBook is running at ${server.url}`);
-        io.out('Press Ctrl+C to stop.');
-        if (args.open) {
-          await io.openBrowser(server.url).catch(() => {
-            io.err(`Could not open a browser. Open ${server.url} in your browser.`);
+        // The link opens a session once (ADR-0002); a closed browser needs a new one.
+        const openLink = async (url: string): Promise<void> => {
+          await io.openBrowser(url).catch(() => {
+            io.err(`Could not open a browser. Open ${url} in your browser.`);
           });
+        };
+        const stopListening = io.onNewLinkRequest(() => {
+          const url = server.newLaunchUrl();
+          io.out(`New link: ${url}`);
+          void openLink(url);
+        });
+        if (stopListening !== null) {
+          io.out('The link works once. If you close the browser, press Enter here for a new one.');
         }
-        await io.waitForShutdown(server);
+        io.out('Press Ctrl+C to stop.');
+        try {
+          if (args.open) await openLink(server.url);
+          await io.waitForShutdown(server);
+        } finally {
+          stopListening?.();
+        }
       } finally {
         await server.close();
       }

@@ -5,8 +5,9 @@
 //   3. Sec-Fetch-Site, when sent, must be same-origin or none. Cookies ignore ports, so SameSite=Strict alone
 //      would let a page on another localhost port make blind requests with our cookie;
 //   4. the per-launch session token, from a cookie named per port.
-// There is no CORS.
-import { createHash, timingSafeEqual } from 'node:crypto';
+// There is no CORS. The link printed at start carries a different, one-time token: opening it sets the session
+// cookie and spends it, so a link read from the terminal, a process list or browser history cannot be replayed.
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const SESSION_COOKIE_PREFIX = 'bhavbook_session';
 
@@ -35,6 +36,34 @@ export function allowedHosts(port: number): readonly string[] {
 
 export function allowedOrigins(port: number): readonly string[] {
   return allowedHosts(port).map((host) => `http://${host}`);
+}
+
+/** The one-time tokens of launch links: at most one is open, and redeeming it spends it. */
+export interface LaunchGate {
+  /** A new link token; it replaces one not yet used. */
+  issue(): string;
+  /** True once for the open token, then never again. */
+  redeem(candidate: string): boolean;
+}
+
+const LAUNCH_TOKEN_BYTES = 32;
+
+/** `first` is the token of the link printed at start (tests pass a known one); later links come from `issue()`. */
+export function launchGate(
+  first: string = randomBytes(LAUNCH_TOKEN_BYTES).toString('base64url'),
+): LaunchGate {
+  let open: string | null = first;
+  return {
+    issue: () => {
+      open = randomBytes(LAUNCH_TOKEN_BYTES).toString('base64url');
+      return open;
+    },
+    redeem: (candidate) => {
+      if (open === null || !sameSecret(candidate, open)) return false;
+      open = null;
+      return true;
+    },
+  };
 }
 
 /** Constant-time comparison of two secrets of any length (both are hashed first). */
@@ -78,6 +107,8 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   'Content-Security-Policy':
     "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   'Cache-Control': 'no-store',
+  'Permissions-Policy':
+    'camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
 };

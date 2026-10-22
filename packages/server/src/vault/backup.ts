@@ -30,7 +30,13 @@ import {
   migrate,
   type Migration,
 } from './migrations.js';
-import { APPLICATION_ID, hardenConnection, referenceFingerprint, schemaFingerprint } from './schema.js';
+import {
+  APPLICATION_ID,
+  hardenConnection,
+  referenceFingerprint,
+  restrictToOwner,
+  schemaFingerprint,
+} from './schema.js';
 
 export type BackupReason = 'manual' | 'pre-import' | 'pre-undo' | 'pre-migration' | 'pre-restore';
 /** Routine auto-backups kept per vault; pre-migration backups are never rotated away. */
@@ -256,6 +262,7 @@ function rebuildFromBackup(
 ): void {
   const db = new Database(target);
   try {
+    restrictToOwner(target);
     hardenConnection(db);
     const now = options.now ? { now: options.now } : {};
     migrate(

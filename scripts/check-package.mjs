@@ -71,6 +71,8 @@ const onlyBundle = /onlyBundle:\s*\[([^\]]*)\]/.exec(config)?.[1] ?? '';
 const bundled = [...onlyBundle.matchAll(/'([^']+)'/g)].map((match) => match[1]);
 if (bundled.length === 0)
   problems.push('tsdown.config.ts has no deps.onlyBundle list to check the notices against');
+if (!notices.includes('### EvilCharts'))
+  problems.push('THIRD-PARTY-NOTICES.md has no licence for EvilCharts');
 for (const name of bundled) {
   if (!notices.includes(`### ${name} `)) problems.push(`THIRD-PARTY-NOTICES.md has no licence for ${name}`);
 }

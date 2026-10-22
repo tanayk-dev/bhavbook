@@ -3,6 +3,7 @@
 // inflated), sheets, rows, columns, cells, wall-clock time and worker heap. Only real spreadsheet containers are
 // accepted (SheetJS would otherwise parse arbitrary text as CSV). Errors are SpreadsheetErrors with fixed messages.
 import { Worker } from 'node:worker_threads';
+import { inflateRawSync } from 'node:zlib';
 import { sheetDataSchema, type SheetData } from '@bhavbook/adapters';
 import { z } from 'zod';
 
@@ -40,6 +41,10 @@ const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const OLE2_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
 const EOCD_SIGNATURE = 0x06054b50;
 const CENTRAL_SIGNATURE = 0x02014b50;
+const LOCAL_SIGNATURE = 0x04034b50;
+const LOCAL_HEADER = 30;
+const STORED = 0;
+const DEFLATED = 8;
 const EOCD_MIN = 22;
 const EOCD_SEARCH = EOCD_MIN + 0xffff;
 // Beside this module from source; the installed CLI bundles the worker as `dist/spreadsheet-worker.mjs` (S16).
@@ -65,9 +70,37 @@ export function isSpreadsheetContainer(bytes: Buffer): boolean {
 }
 
 /**
- * Reads the zip central directory (without inflating anything) and rejects zip bombs: too many parts, too much
- * declared unpacked data, or an implausible compression ratio. Declared sizes can lie; the worker's limits and
- * timeout remain the second line of defence.
+ * Inflates one part, never past the size it declares, and requires exactly that size: a part that lies about its
+ * size is refused before the parser (which trusts the data, not the declaration) can inflate it unbounded.
+ */
+function checkPart(bytes: Buffer, central: number, compressed: number, unpacked: number): void {
+  const mismatch = new SpreadsheetError('spreadsheet part does not match its declared size');
+  const method = bytes.readUInt16LE(central + 10);
+  const local = bytes.readUInt32LE(central + 42);
+  if (local + LOCAL_HEADER > bytes.length || bytes.readUInt32LE(local) !== LOCAL_SIGNATURE) {
+    throw new SpreadsheetError('spreadsheet is not a valid zip file');
+  }
+  const start = local + LOCAL_HEADER + bytes.readUInt16LE(local + 26) + bytes.readUInt16LE(local + 28);
+  if (start + compressed > bytes.length) throw new SpreadsheetError('spreadsheet is not a valid zip file');
+  if (method === STORED) {
+    if (compressed !== unpacked) throw mismatch;
+    return;
+  }
+  if (method !== DEFLATED) throw new SpreadsheetError('spreadsheet uses an unsupported compression');
+  let inflated: Buffer;
+  try {
+    // One byte of headroom: more than declared overflows the cap and throws.
+    inflated = inflateRawSync(bytes.subarray(start, start + compressed), { maxOutputLength: unpacked + 1 });
+  } catch {
+    throw mismatch;
+  }
+  if (inflated.length !== unpacked) throw mismatch;
+}
+
+/**
+ * Reads the zip central directory and rejects zip bombs: too many parts, too much declared unpacked data, or an
+ * implausible compression ratio. Declared sizes can lie, so each part is then inflated up to its declared size and
+ * must match it exactly. The worker's limits and timeout remain the second line of defence.
  */
 export function inspectZip(
   bytes: Buffer,
@@ -106,6 +139,7 @@ export function inspectZip(
     if (unpackedBytes > limits.maxUnpackedBytes || tooDense) {
       throw new SpreadsheetError('spreadsheet is too large when unpacked');
     }
+    checkPart(bytes, cursor, compressed, unpacked);
     cursor +=
       46 +
       bytes.readUInt16LE(cursor + 28) +

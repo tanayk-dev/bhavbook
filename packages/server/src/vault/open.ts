@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 import { autoBackup } from './backup.js';
 import { VaultError } from './errors.js';
 import { currentVersion, latestVersion, loadMigrations, migrate, type Migration } from './migrations.js';
-import { APPLICATION_ID, hardenConnection } from './schema.js';
+import { APPLICATION_ID, hardenConnection, restrictToOwner } from './schema.js';
 
 export interface OpenVaultOptions {
   readonly appVersion: string;
@@ -17,6 +17,7 @@ export function openVault(vaultPath: string, options: OpenVaultOptions): Databas
   const existed = existsSync(vaultPath);
   const db = new Database(vaultPath);
   try {
+    restrictToOwner(vaultPath);
     hardenConnection(db);
     const applicationId = Number(db.pragma('application_id', { simple: true }));
     if (existed && applicationId !== 0 && applicationId !== APPLICATION_ID) {

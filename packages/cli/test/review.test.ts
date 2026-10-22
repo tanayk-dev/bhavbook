@@ -35,6 +35,7 @@ function io(): CliIo & { stdout: string[]; stderr: string[] } {
     homedir: () => dir,
     openBrowser: () => Promise.resolve(),
     waitForShutdown: () => Promise.resolve(),
+    onNewLinkRequest: () => null,
   };
 }
 
