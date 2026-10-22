@@ -1,4 +1,4 @@
-// Shared steps for E2E tests on the anonymised Dhan fixtures: onboarding a Dhan account and importing files.
+// Shared steps for E2E tests: onboarding an account (Dhan for the anonymised fixtures) and importing files.
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,13 +32,23 @@ export function tradesWithoutAllotment(outputPath: string): string {
   return outputPath;
 }
 
-export async function onboardDhan(page: Page, launch: string): Promise<void> {
+/** A first run: one profile with one account of the broker. */
+export async function onboard(
+  page: Page,
+  launch: string,
+  broker: 'Dhan' | 'Zerodha',
+  nickname: string,
+): Promise<void> {
   await page.goto(launch);
   await page.getByLabel('Profile name').fill('Swing');
   await page.getByRole('button', { name: 'Create profile' }).click();
-  await page.locator('label', { hasText: 'Dhan' }).click();
-  await page.getByLabel('Nickname').fill('D main');
+  await page.locator('label', { hasText: broker }).click();
+  await page.getByLabel('Nickname').fill(nickname);
   await page.getByRole('button', { name: 'Add account' }).click();
+}
+
+export async function onboardDhan(page: Page, launch: string): Promise<void> {
+  await onboard(page, launch, 'Dhan', 'D main');
 }
 
 export async function importFiles(page: Page, files: string[]): Promise<void> {

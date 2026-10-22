@@ -20,6 +20,7 @@ import {
   incompletePosition,
   issueAction,
   journalCollision,
+  suspectedAction,
   kindLabel,
   lotSuggestion,
   subjectInstrument,
@@ -42,7 +43,7 @@ const COMPONENTS: Readonly<Record<string, string>> = {
 
 const GENERIC: Readonly<Record<string, string>> = {
   corporate_action_suspected:
-    'The trades look like a split, bonus or other corporate action that has not been entered. Entering corporate actions arrives in a later version; dismiss this if it is wrong.',
+    'The trades look like a split, bonus or other corporate action that has not been entered. Enter it, or dismiss this if it is wrong.',
   cash_in_lieu: 'A corporate action left a fraction of a share, which the broker pays out as cash.',
   journal_unattached:
     'The trade a journal entry was written for is no longer imported. The entry is kept; re-import the trade to bring it back.',
@@ -412,6 +413,48 @@ function Actions({
   );
 }
 
+const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;
+
+/** What BhavBook noticed, and a link to enter it with the form filled in (never applied without its preview). */
+function Suspected({ issue, name, busy, ...outcome }: FixProps) {
+  const suspicion = suspectedAction(issue.subject);
+  // Details it cannot read: the plain text, and it can still be dismissed.
+  if (suspicion === null) return <Generic issue={issue} name={name} busy={busy} {...outcome} />;
+  const split = suspicion.kind === 'split_or_bonus';
+  const isin = split ? suspicion.instrumentKey : suspicion.fromInstrument;
+  const search = split
+    ? { type: 'SPLIT' as const, isin, exDate: suspicion.dateIst, num: suspicion.multiple.toString() }
+    : {
+        type: 'CONVERSION' as const,
+        isin,
+        newIsin: suspicion.toInstrument,
+        exDate: suspicion.dateIst,
+      };
+  // Only ISINs can be entered: a scrip without one is mapped in this inbox first.
+  const enterable = ISIN.test(isin) && (split || ISIN.test(suspicion.toInstrument));
+  return (
+    <>
+      <p>
+        {split
+          ? `${name(suspicion.instrumentKey)}: around ${formatIstDate(suspicion.dateIst)}, sales ran to ${suspicion.multiple.toString()} times the shares held, as after a split or bonus.`
+          : `${name(suspicion.fromInstrument)} stopped trading around ${formatIstDate(suspicion.dateIst)} while still held, and ${name(suspicion.toInstrument)} appeared: an ISIN change or demerger.`}{' '}
+        {GENERIC.corporate_action_suspected}
+      </p>
+      <Actions issue={issue} busy={busy} error={null} {...outcome}>
+        {enterable ? (
+          <Link
+            to="/corporate-actions"
+            search={search}
+            className="inline-flex h-11 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground md:h-9"
+          >
+            Enter it…
+          </Link>
+        ) : null}
+      </Actions>
+    </>
+  );
+}
+
 /** The start of an entry's thesis, to tell two apart. */
 const preview = (text: string | null): string => {
   if (text === null) return 'no thesis';
@@ -502,6 +545,7 @@ function Collision({ issue, busy, ...outcome }: FixProps) {
 }
 
 const FIXES: Readonly<Record<string, (props: FixProps) => ReactNode>> = {
+  corporate_action_suspected: Suspected,
   journal_collision: Collision,
   fill_from_statement: FillFromStatement,
   incomplete_position: Incomplete,

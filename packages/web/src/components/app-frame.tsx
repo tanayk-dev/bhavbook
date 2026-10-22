@@ -3,7 +3,17 @@
 // Touch targets grow to 44 px on the phone layout (direction §7).
 import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { BookOpen, ClipboardCheck, FileUp, Inbox, Moon, Settings, Sun, type LucideIcon } from 'lucide-react';
+import {
+  BookOpen,
+  ClipboardCheck,
+  FileUp,
+  GitFork,
+  Inbox,
+  Moon,
+  Settings,
+  Sun,
+  type LucideIcon,
+} from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { issueSummaryQuery } from '@/lib/issues';
@@ -11,7 +21,7 @@ import { reviewCountQuery } from '@/lib/positions';
 import { applyTheme, currentTheme, safeStorage, type Theme } from '@/lib/theme';
 
 export interface NavItem {
-  readonly to: '/' | '/review' | '/issues' | '/import' | '/settings';
+  readonly to: '/' | '/review' | '/issues' | '/corporate-actions' | '/import' | '/settings';
   readonly label: string;
   readonly icon: LucideIcon;
 }
@@ -21,6 +31,7 @@ export const NAV: readonly NavItem[] = [
   { to: '/', label: 'Overview', icon: BookOpen },
   { to: '/review', label: 'Review', icon: ClipboardCheck },
   { to: '/issues', label: 'Issues', icon: Inbox },
+  { to: '/corporate-actions', label: 'Corporate actions', icon: GitFork },
   { to: '/import', label: 'Import', icon: FileUp },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];

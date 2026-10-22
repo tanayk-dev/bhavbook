@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CorporateActionsRouteImport } from './routes/corporate-actions'
 import { Route as ImportRouteImport } from './routes/import'
 import { Route as IssuesRouteImport } from './routes/issues'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
@@ -20,6 +21,11 @@ import { Route as PositionsRefRouteImport } from './routes/positions.$ref'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CorporateActionsRoute = CorporateActionsRouteImport.update({
+  id: '/corporate-actions',
+  path: '/corporate-actions',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ImportRoute = ImportRouteImport.update({
@@ -55,6 +61,7 @@ const PositionsRefRoute = PositionsRefRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/corporate-actions': typeof CorporateActionsRoute
   '/import': typeof ImportRoute
   '/issues': typeof IssuesRoute
   '/onboarding': typeof OnboardingRoute
@@ -64,6 +71,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/corporate-actions': typeof CorporateActionsRoute
   '/import': typeof ImportRoute
   '/issues': typeof IssuesRoute
   '/onboarding': typeof OnboardingRoute
@@ -74,6 +82,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/corporate-actions': typeof CorporateActionsRoute
   '/import': typeof ImportRoute
   '/issues': typeof IssuesRoute
   '/onboarding': typeof OnboardingRoute
@@ -85,6 +94,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/corporate-actions'
     | '/import'
     | '/issues'
     | '/onboarding'
@@ -94,6 +104,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/corporate-actions'
     | '/import'
     | '/issues'
     | '/onboarding'
@@ -103,6 +114,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/corporate-actions'
     | '/import'
     | '/issues'
     | '/onboarding'
@@ -113,6 +125,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CorporateActionsRoute: typeof CorporateActionsRoute
   ImportRoute: typeof ImportRoute
   IssuesRoute: typeof IssuesRoute
   OnboardingRoute: typeof OnboardingRoute
@@ -128,6 +141,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/corporate-actions': {
+      id: '/corporate-actions'
+      path: '/corporate-actions'
+      fullPath: '/corporate-actions'
+      preLoaderRoute: typeof CorporateActionsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/import': {
@@ -177,6 +197,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CorporateActionsRoute: CorporateActionsRoute,
   ImportRoute: ImportRoute,
   IssuesRoute: IssuesRoute,
   OnboardingRoute: OnboardingRoute,
