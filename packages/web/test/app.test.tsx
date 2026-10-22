@@ -10,6 +10,7 @@ import { stubServer, type Routes } from './server';
 const NO_TRADES = {
   breakevenMicro: '0',
   includeIncomplete: false,
+  includedIncomplete: 0,
   summary: {
     trades: 0,
     wins: 0,

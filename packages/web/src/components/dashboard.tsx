@@ -2,7 +2,7 @@
 // provenance marks, and what was left out), the equity curve, monthly P&L and the calendar heatmap (each with a
 // table of the same numbers), and the setup and mistake tables. Amounts go through Money; ratios stay exact until
 // formatted; dates are IST.
-import { lazy, Suspense, useId, type ReactNode } from 'react';
+import { Component, lazy, Suspense, useId, type ReactNode } from 'react';
 import { monthLabel } from '@/components/charts/labels';
 import { Money } from '@/components/money';
 import { TableRegion } from '@/components/settings';
@@ -31,6 +31,26 @@ const CalendarChart = lazy(async () => ({
   default: (await import('@/components/charts/pnl-charts')).CalendarChart,
 }));
 
+/** A chart that fails (its chunk does not load, ECharts throws) leaves the page and its table standing. */
+class ChartBoundary extends Component<{ readonly children: ReactNode }, { readonly failed: boolean }> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  override render() {
+    if (this.state.failed) {
+      return (
+        <p className="text-sm text-ink-muted">
+          The chart could not be drawn; its table below has the numbers.
+        </p>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const SELECT =
   'h-11 rounded-md border border-input bg-surface px-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden md:h-9';
 
@@ -54,11 +74,21 @@ export function FilterBar({ filter, profiles, onChange }: FilterBarProps) {
   const set = (key: keyof DashboardFilter, value: string | boolean) => {
     onChange(dashboardFilterOf({ ...filter, [key]: value }));
   };
+  const brokerOf = (accountId: string | undefined) =>
+    profiles.flatMap((profile) => profile.accounts).find((account) => account.id === accountId)?.broker;
   const accounts = profiles
     .filter((profile) => filter.profileId === undefined || profile.id === filter.profileId)
     .flatMap((profile) => profile.accounts);
   return (
-    <form role="search" aria-label="Filter the dashboard" className="flex flex-wrap items-end gap-3">
+    <form
+      role="search"
+      aria-label="Filter the dashboard"
+      className="flex flex-wrap items-end gap-3"
+      onSubmit={(event) => {
+        // Every change applies at once; there is nothing to submit.
+        event.preventDefault();
+      }}
+    >
       <div className="space-y-1">
         <Label htmlFor={ids.profile}>Profile</Label>
         <select
@@ -102,7 +132,10 @@ export function FilterBar({ filter, profiles, onChange }: FilterBarProps) {
           className={SELECT}
           value={filter.broker ?? ''}
           onChange={(event) => {
-            set('broker', event.target.value);
+            const broker = event.target.value;
+            // An account of another broker would leave nothing to show.
+            const keepAccount = broker === '' || brokerOf(filter.accountId) === broker;
+            onChange(dashboardFilterOf({ ...filter, broker, ...(keepAccount ? {} : { accountId: '' }) }));
           }}
         >
           <option value="">All brokers</option>
@@ -133,6 +166,7 @@ export function FilterBar({ filter, profiles, onChange }: FilterBarProps) {
           type="date"
           className={SELECT}
           value={filter.from ?? ''}
+          {...(filter.to === undefined ? {} : { max: filter.to })}
           onChange={(event) => {
             set('from', event.target.value);
           }}
@@ -145,6 +179,7 @@ export function FilterBar({ filter, profiles, onChange }: FilterBarProps) {
           type="date"
           className={SELECT}
           value={filter.to ?? ''}
+          {...(filter.from === undefined ? {} : { min: filter.from })}
           onChange={(event) => {
             set('to', event.target.value);
           }}
@@ -165,8 +200,12 @@ export function FilterBar({ filter, profiles, onChange }: FilterBarProps) {
   );
 }
 
-const provenance = (metrics: Metrics) =>
-  metrics.estimated ? ('estimated' as const) : ('reconciled' as const);
+/** Where the net comes from: incomplete history first, then estimated charges; nothing to vouch for without trades. */
+function provenance(metrics: Metrics, includedIncomplete: number) {
+  if (metrics.trades === 0) return {};
+  if (includedIncomplete > 0) return { provenance: 'incomplete' as const };
+  return { provenance: metrics.estimated ? ('estimated' as const) : ('reconciled' as const) };
+}
 
 function Figure({ label, children }: { readonly label: string; readonly children: ReactNode }) {
   return (
@@ -178,7 +217,13 @@ function Figure({ label, children }: { readonly label: string; readonly children
 }
 
 /** The metrics strip: plain figures, not cards (direction §5.5). */
-export function MetricsStrip({ metrics }: { readonly metrics: Metrics }) {
+export function MetricsStrip({
+  metrics,
+  includedIncomplete,
+}: {
+  readonly metrics: Metrics;
+  readonly includedIncomplete: number;
+}) {
   const { excluded } = metrics;
   const leftOut = [
     excluded.incomplete === 0
@@ -195,7 +240,7 @@ export function MetricsStrip({ metrics }: { readonly metrics: Metrics }) {
       </h2>
       <dl className="grid grid-cols-2 gap-x-8 gap-y-3 border-y border-rule py-3 sm:grid-cols-4 lg:grid-cols-7">
         <Figure label="Net P&L">
-          <Money valueMicro={metrics.netMicro} signed provenance={provenance(metrics)} />
+          <Money valueMicro={metrics.netMicro} signed {...provenance(metrics, includedIncomplete)} />
         </Figure>
         <Figure label="Win rate">{metrics.winRate === null ? '—' : percent(metrics.winRate)}</Figure>
         <Figure label="Expectancy">
@@ -216,6 +261,11 @@ export function MetricsStrip({ metrics }: { readonly metrics: Metrics }) {
         {metrics.wins.toLocaleString('en-IN')} won, {metrics.losses.toLocaleString('en-IN')} lost
         {metrics.breakevens === 0 ? '' : `, ${metrics.breakevens.toLocaleString('en-IN')} breakeven`}.{' '}
         {leftOut.length === 0 ? '' : `Left out: ${leftOut.join(' and ')}. `}
+        {includedIncomplete === 0
+          ? ''
+          : `Included: ${String(includedIncomplete)} incomplete ${
+              includedIncomplete === 1 ? 'position' : 'positions'
+            } (◐), whose history is missing trades. `}
         {metrics.estimated ? 'Some charges are estimates (≈) until a broker statement covers them.' : ''}
       </p>
     </section>
@@ -238,7 +288,11 @@ function ChartSection({
       <h2 id={id} className="font-semibold">
         {title}
       </h2>
-      <Suspense fallback={<div className="h-60 rounded-sm bg-muted" aria-hidden="true" />}>{chart}</Suspense>
+      <ChartBoundary>
+        <Suspense fallback={<div className="h-60 rounded-sm bg-muted" aria-hidden="true" />}>
+          {chart}
+        </Suspense>
+      </ChartBoundary>
       <details>
         <summary className="cursor-pointer text-sm text-ink-muted">Show as a table</summary>
         <div className="mt-2">{table}</div>
@@ -247,11 +301,11 @@ function ChartSection({
   );
 }
 
-function DayTable({ analytics }: { readonly analytics: Analytics }) {
+function DayTable({ analytics, label }: { readonly analytics: Analytics; readonly label: string }) {
   return (
-    <TableRegion label="Realised net by day">
+    <TableRegion label={label}>
       <table className="w-full min-w-md border-y border-rule bg-surface text-left text-sm">
-        <caption className="sr-only">Realised net P&L by day, with the running total</caption>
+        <caption className="sr-only">{label}</caption>
         <thead className="text-ink-muted">
           <tr className="h-8 border-b border-rule">
             <th scope="col" className="px-3 font-medium">
@@ -371,7 +425,7 @@ function SliceTable({
           {slices.map(({ tag, metrics }) => (
             <tr key={tag ?? ''} className="h-8">
               <th scope="row" className="px-3 text-left font-normal">
-                {tag ?? <span className="text-ink-muted">No setup</span>}
+                {tag ?? <span className="text-ink-muted">None</span>}
               </th>
               <td className="figure px-3 text-right">{metrics.trades.toLocaleString('en-IN')}</td>
               <td className="figure px-3 text-right">
@@ -402,16 +456,21 @@ function SliceTable({
 export function Dashboard({ analytics }: { readonly analytics: Analytics }) {
   return (
     <div className="space-y-8">
-      <MetricsStrip metrics={analytics.summary} />
+      <MetricsStrip metrics={analytics.summary} includedIncomplete={analytics.includedIncomplete} />
       {analytics.days.length === 0 ? (
         <p className="text-sm text-ink-muted">No realised P&L in this range.</p>
       ) : (
         <>
+          <p className="text-sm text-ink-muted">
+            The charts count realised P&amp;L on the day it happened, partial exits of positions still open
+            included; the figures above count closed trades.
+            {analytics.summary.estimated ? ' Some charges in them are estimates.' : ''}
+          </p>
           <ChartSection
             id="equity"
             title="Equity curve"
             chart={<EquityChart days={analytics.days} />}
-            table={<DayTable analytics={analytics} />}
+            table={<DayTable analytics={analytics} label="Running realised net by day" />}
           />
           <ChartSection
             id="monthly"
@@ -423,7 +482,7 @@ export function Dashboard({ analytics }: { readonly analytics: Analytics }) {
             id="calendar"
             title="Daily net P&L"
             chart={<CalendarChart days={analytics.days} />}
-            table={<DayTable analytics={analytics} />}
+            table={<DayTable analytics={analytics} label="Realised net by calendar day" />}
           />
         </>
       )}

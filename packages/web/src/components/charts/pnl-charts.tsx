@@ -2,7 +2,6 @@
 // (bars above and below zero, so the sign is in position as well as colour), and the calendar heatmap of daily net
 // (a diverging scale with a neutral midpoint, its two arms validated for colour vision deficiencies). Marks follow
 // the dataviz rules: thin, a 2 px line, rounded data ends, a recessive grid, a hover tooltip on every chart.
-import { formatINR } from '@bhavbook/core/money';
 import { BarChart, HeatmapChart, LineChart } from 'echarts/charts';
 import {
   CalendarComponent,
@@ -14,7 +13,7 @@ import {
 import { useCallback, useMemo } from 'react';
 import { EChart } from '@/components/charts/echart';
 import { echarts, token, withAlpha } from '@/components/charts/evilcharts-base';
-import { monthLabel } from '@/components/charts/labels';
+import { axisRupees, calendarWindows, monthLabel, signed } from '@/components/charts/labels';
 import { chartRupees, type Day, type Month } from '@/lib/analytics';
 import { formatIstDate } from '@/lib/format';
 
@@ -28,15 +27,6 @@ echarts.use([
   VisualMapComponent,
   MarkLineComponent,
 ]);
-
-const MINUS = '−';
-
-/** A signed amount in words-and-glyphs, as Money shows it. */
-export const signed = (micro: bigint): string =>
-  micro > 0n ? `▲ +${formatINR(micro)}` : micro < 0n ? `▼ ${MINUS}${formatINR(-micro)}` : formatINR(0n);
-
-/** Axis labels in ₹ (lakh grouping), compact. */
-const axisRupees = (value: number): string => `₹${Math.round(value).toLocaleString('en-IN')}`;
 
 function base() {
   const ink = token('--ink');
@@ -174,30 +164,7 @@ export function MonthlyChart({ months }: { readonly months: readonly Month[] }) 
   );
 }
 
-const DAY_MS = 86_400_000;
 const ROW_HEIGHT = 120;
-const isoDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
-
-/**
- * The calendar rows for a span of days: from the first to the last, at most a year per row (an April-to-March
- * financial year is one row, not two half-empty calendar years).
- */
-export function calendarWindows(days: readonly Day[]): [string, string][] {
-  const [first] = days;
-  const last = days.at(-1);
-  if (first === undefined || last === undefined) return [];
-  const windows: [string, string][] = [];
-  let start = Date.parse(`${first.date}T00:00:00Z`);
-  const end = Date.parse(`${last.date}T00:00:00Z`);
-  while (start <= end) {
-    const next = new Date(start);
-    next.setUTCFullYear(next.getUTCFullYear() + 1);
-    const stop = Math.min(end, next.getTime() - DAY_MS);
-    windows.push([isoDay(start), isoDay(stop)]);
-    start = stop + DAY_MS;
-  }
-  return windows;
-}
 
 export function CalendarChart({ days }: { readonly days: readonly Day[] }) {
   // Memoised: a new array each render would rebuild the chart each render.

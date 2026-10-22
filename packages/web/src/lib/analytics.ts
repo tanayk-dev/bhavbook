@@ -17,6 +17,11 @@ const num = (value: unknown): number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : unexpected();
 const big = (value: unknown): bigint =>
   typeof value === 'string' && /^-?\d{1,30}$/.test(value) ? BigInt(value) : unexpected();
+/** An IST date or month as the server writes it; anything else is unexpected (it would reach a tooltip). */
+const day = (value: unknown): string =>
+  typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : unexpected();
+const month = (value: unknown): string =>
+  typeof value === 'string' && /^\d{4}-\d{2}$/.test(value) ? value : unexpected();
 const bool = (value: unknown): boolean => (typeof value === 'boolean' ? value : unexpected());
 
 function ratioOf(value: unknown): Ratio | null {
@@ -98,6 +103,8 @@ export interface Analytics {
   readonly breakevenMicro: bigint;
   readonly includeIncomplete: boolean;
   readonly summary: Metrics;
+  /** Incomplete positions counted in the summary (the toggle is on): their history is missing trades. */
+  readonly includedIncomplete: number;
   readonly days: readonly Day[];
   readonly months: readonly Month[];
   readonly bySetup: readonly Slice[];
@@ -119,10 +126,11 @@ export function analyticsOf(body: unknown): Analytics {
     breakevenMicro: big(value.breakevenMicro),
     includeIncomplete: bool(value.includeIncomplete),
     summary: metrics(value.summary),
+    includedIncomplete: num(value.includedIncomplete),
     days: list(value.days).map((entry) => {
       const row = record(entry);
       return {
-        date: str(row.date),
+        date: day(row.date),
         lots: num(row.lots),
         netMicro: big(row.netMicro),
         cumulativeMicro: big(row.cumulativeMicro),
@@ -131,7 +139,7 @@ export function analyticsOf(body: unknown): Analytics {
     months: list(value.months).map((entry) => {
       const row = record(entry);
       return {
-        month: str(row.month),
+        month: month(row.month),
         lots: num(row.lots),
         grossMicro: big(row.grossMicro),
         chargesMicro: big(row.chargesMicro),

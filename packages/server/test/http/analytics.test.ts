@@ -194,6 +194,8 @@ describe('metrics on made-up trades', () => {
 
       const withIncomplete = await get(test, '?includeIncomplete=true');
       expect(withIncomplete.summary.trades).toBe(1);
+      expect((withIncomplete as unknown as { includedIncomplete: number }).includedIncomplete).toBe(1);
+      expect((plain as unknown as { includedIncomplete: number }).includedIncomplete).toBe(0);
       expect(withIncomplete.days.map((day) => day.date)).toEqual(['2025-09-10']);
 
       const anchor = db

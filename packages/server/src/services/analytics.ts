@@ -278,6 +278,8 @@ export interface Analytics {
   readonly breakevenMicro: bigint;
   readonly includeIncomplete: boolean;
   readonly summary: Metrics;
+  /** Incomplete positions counted in the summary (only with the toggle on): their history is missing trades. */
+  readonly includedIncomplete: number;
   readonly days: DayPoint[];
   readonly months: MonthPoint[];
   readonly bySetup: Slice[];
@@ -361,6 +363,9 @@ export function analytics(db: Database.Database, filter: AnalyticsFilter = {}): 
     breakevenMicro: options.breakevenMicro,
     includeIncomplete,
     summary: computeMetrics(trades, options),
+    includedIncomplete: includeIncomplete
+      ? trades.filter((trade) => trade.closedDateIst !== null && !trade.excluded && trade.incomplete).length
+      : 0,
     days,
     months,
     bySetup: slices('setup'),

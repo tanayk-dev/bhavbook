@@ -7,6 +7,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/lib/api';
+import { axisRupees, calendarWindows, signed } from '@/components/charts/labels';
 import { analyticsOf, dashboardFilterOf, percent } from '@/lib/analytics';
 import { routeTree } from '@/routeTree.gen';
 import { stubServer, type Routes } from './server';
@@ -41,6 +42,7 @@ const metrics = (overrides: Record<string, unknown> = {}) => ({
 const BODY = {
   breakevenMicro: '0',
   includeIncomplete: false,
+  includedIncomplete: 0,
   summary: metrics(),
   days: [
     { date: '2025-09-04', lots: 1, netMicro: '18250000000', cumulativeMicro: '18250000000' },
@@ -130,6 +132,29 @@ describe('reading the dashboard', () => {
       }),
     ).toEqual({ broker: 'dhan', from: '2025-01-01', includeIncomplete: true });
     expect(dashboardFilterOf({ profileId: '', includeIncomplete: false })).toEqual({});
+    // Dates and months reach chart tooltips: anything else is refused.
+    expect(() => analyticsOf({ ...BODY, days: [{ ...BODY.days[0], date: '<img src=x>' }] })).toThrow(
+      ApiError,
+    );
+    expect(() => analyticsOf({ ...BODY, months: [{ ...BODY.months[0], month: '2025-9' }] })).toThrow(
+      ApiError,
+    );
+  });
+
+  it('labels amounts and spans the calendar over the data, a year per row at most', () => {
+    expect(signed(1_240_500_000n)).toBe('▲ +₹1,240.50');
+    expect(signed(-312_400_000n)).toBe('▼ −₹312.40');
+    expect(signed(0n)).toBe('₹0.00');
+    expect(axisRupees(-5000)).toBe('−₹5,000');
+    expect(axisRupees(1200000)).toBe('₹12,00,000');
+    const day = (date: string) => ({ date, lots: 1, netMicro: 0n, cumulativeMicro: 0n });
+    expect(calendarWindows([])).toEqual([]);
+    expect(calendarWindows([day('2024-04-23'), day('2025-01-06')])).toEqual([['2024-04-23', '2025-01-06']]);
+    expect(calendarWindows([day('2024-02-29'), day('2026-03-01')])).toEqual([
+      ['2024-02-29', '2025-02-28'],
+      ['2025-03-01', '2026-02-28'],
+      ['2026-03-01', '2026-03-01'],
+    ]);
   });
 });
 
@@ -155,7 +180,7 @@ describe('the dashboard', () => {
     );
     const setups = screen.getByRole('table', { name: 'Trades by setup' });
     expect(within(setups).getByRole('row', { name: /Breakout/ })).toHaveTextContent('4');
-    expect(within(setups).getByRole('row', { name: /No setup/ })).toHaveTextContent('—');
+    expect(within(setups).getByRole('row', { name: /None/ })).toHaveTextContent('—');
     expect(screen.getByRole('table', { name: 'Trades by mistake' })).toHaveTextContent('Late exit');
   });
 
@@ -182,6 +207,29 @@ describe('the dashboard', () => {
     // Choosing a profile narrows the accounts offered.
     await userEvent.selectOptions(screen.getByLabelText('Profile'), 'p2');
     expect(within(screen.getByLabelText('Account')).queryByRole('option', { name: 'Z main' })).toBeNull();
+  });
+
+  it('marks the net ◐ when incomplete positions are included, and says how many', async () => {
+    const { routes } = server({
+      ...BODY,
+      includeIncomplete: true,
+      includedIncomplete: 2,
+      summary: metrics({ excluded: { incomplete: 0, excluded: 0, noStop: 2 } }),
+    });
+    renderAt('/?includeIncomplete=true', routes);
+    const strip = await screen.findByRole('region', { name: 'Metrics' });
+    expect(within(strip).getByRole('img', { name: 'Incomplete history' })).toBeInTheDocument();
+    expect(strip).toHaveTextContent('Included: 2 incomplete positions (◐), whose history is missing trades.');
+    expect(screen.getByText(/The charts count realised P&L on the day it happened/)).toBeInTheDocument();
+  });
+
+  it('drops an account of another broker when the broker changes', async () => {
+    const { routes } = server();
+    const router = renderAt('/?accountId=a1', routes);
+    await userEvent.selectOptions(await screen.findByLabelText('Broker'), 'dhan');
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({ broker: 'dhan' });
+    });
   });
 
   it('says there are no trades yet', async () => {

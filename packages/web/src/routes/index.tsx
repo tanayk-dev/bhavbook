@@ -1,6 +1,6 @@
 // The Overview (PRD §4; plan S15b): the dashboard for the filters in the URL (so a view can be bookmarked), then the
 // accounts. Before any trade is imported it says so and links to the import.
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, Navigate } from '@tanstack/react-router';
 import { Dashboard, FilterBar } from '@/components/dashboard';
 import { Disconnected, EmptyState, ErrorState, LoadingRows } from '@/components/states';
@@ -65,7 +65,8 @@ function Overview() {
   const navigate = Route.useNavigate();
   const vault = useQuery(vaultQuery);
   const profiles = useQuery(profilesQuery);
-  const analytics = useQuery(analyticsQuery(filter));
+  // The last view stays (dimmed) while a new filter loads, so the page does not blank on every change.
+  const analytics = useQuery({ ...analyticsQuery(filter), placeholderData: keepPreviousData });
   const failure = vault.error ?? profiles.error;
   const disconnection = failure instanceof ApiError ? failure.disconnection : null;
   if (disconnection !== null) return <Disconnected reason={disconnection} />;
@@ -122,7 +123,14 @@ function Overview() {
           to rebuild your positions.
         </EmptyState>
       ) : null}
-      {analytics.isSuccess && !nothingYet ? <Dashboard analytics={analytics.data} /> : null}
+      {analytics.isSuccess && !nothingYet ? (
+        <div
+          aria-busy={analytics.isPlaceholderData}
+          className={analytics.isPlaceholderData ? 'opacity-60' : undefined}
+        >
+          <Dashboard analytics={analytics.data} />
+        </div>
+      ) : null}
       {vault.isSuccess && profiles.isSuccess ? <Accounts profiles={profiles.data} /> : null}
     </div>
   );
