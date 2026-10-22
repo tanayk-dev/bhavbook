@@ -1,13 +1,14 @@
 // Identity and allow-listing of vault schemas. A restored database is trusted only if its schema objects are exactly
 // what the bundled migrations produce at that version: no extra triggers, views or tables (security review, S4).
-import { chmodSync } from 'node:fs';
+import { chmodSync, closeSync, openSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { migrate, type Migration } from './migrations.js';
 
 /** `PRAGMA application_id` of every BhavBook vault: the ASCII bytes 'BHAV'. Set by migration 0001. */
 export const APPLICATION_ID = 0x42484156;
 
-/** Settings applied to every connection we open, including staged restores. */
+const OWNER_ONLY = 0o600;
+
 /**
  * Makes a vault file readable and writable by its owner only (SQLite gives its -wal and -shm files the same mode).
  * Windows has no such mode bits: the user profile's ACLs protect the file there.
@@ -16,8 +17,15 @@ export function restrictToOwner(file: string): void {
   if (process.platform !== 'win32') chmodSync(file, OWNER_ONLY);
 }
 
-const OWNER_ONLY = 0o600;
+/**
+ * Creates an empty file only its owner can read, for SQLite to fill (a new vault, a rebuilt one, a `VACUUM INTO`
+ * snapshot): it never exists, even for a moment, with the default permissions. Refuses an existing file.
+ */
+export function createOwnerOnly(file: string): void {
+  closeSync(openSync(file, 'wx', OWNER_ONLY));
+}
 
+/** Settings applied to every connection we open, including staged restores. */
 export function hardenConnection(db: Database.Database): void {
   db.defaultSafeIntegers(true);
   // Schema-defined objects (views, triggers, defaults) may not call functions with side effects.

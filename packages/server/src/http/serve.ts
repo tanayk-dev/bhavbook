@@ -1,5 +1,6 @@
 // The listener: always 127.0.0.1 (ADR-0001), a free port by default, and WebSocket upgrades held to the same
 // Host/Origin/token check as HTTP (ADR-0002). No WebSocket route exists yet, so a valid upgrade gets 501.
+import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
@@ -19,8 +20,6 @@ export interface RunningServer {
   readonly port: number;
   /** The launch URL: opening it once sets the session cookie, then it is spent. */
   readonly url: string;
-  /** A fresh launch URL (for a browser that was closed); it replaces one not yet used. */
-  newLaunchUrl(): string;
   close(): Promise<void>;
 }
 
@@ -52,13 +51,12 @@ function handleUpgrade(request: IncomingMessage, socket: Duplex, port: number, t
   refuseUpgrade(socket, result.ok ? 501 : result.status);
 }
 
-const launchUrl = (port: number, token: string): string => `http://${HOSTNAME}:${String(port)}/?t=${token}`;
+const LAUNCH_TOKEN_BYTES = 32;
 
 export async function startServer(options: StartOptions): Promise<RunningServer> {
   let port = 0;
-  const launch = launchGate();
-  const first = launch.issue();
-  const app = createApp({ ...options, launch, port: () => port });
+  const launchToken = randomBytes(LAUNCH_TOKEN_BYTES).toString('base64url');
+  const app = createApp({ ...options, launch: launchGate(launchToken), port: () => port });
   const server = await new Promise<Server>((resolve, reject) => {
     const created = serve({ fetch: app.fetch, port: options.port ?? 0, hostname: HOSTNAME }, () => {
       resolve(created);
@@ -73,8 +71,7 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
   return {
     server,
     port,
-    url: launchUrl(port, first),
-    newLaunchUrl: () => launchUrl(port, launch.issue()),
+    url: `http://${HOSTNAME}:${String(port)}/?t=${launchToken}`,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((cause) => {

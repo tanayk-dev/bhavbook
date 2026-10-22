@@ -1,6 +1,6 @@
 // ADR-0002: every route needs the session token and passes the Host/Origin allowlist; there is no CORS.
 import { describe, expect, it } from 'vitest';
-import { launchGate, sessionCookieName } from '../../src/http/index.js';
+import { sessionCookieName } from '../../src/http/index.js';
 import { LAUNCH, ORIGIN, PORT, send, testApp, TOKEN } from './helpers.js';
 
 describe('session token', () => {
@@ -55,14 +55,13 @@ describe('session token', () => {
     expect(again.headers.get('set-cookie')).toBeNull();
   });
 
-  it('issues a new link that replaces an unused one', async () => {
-    const gate = launchGate(LAUNCH);
-    const test = testApp({ launch: gate });
-    const fresh = gate.issue();
-    expect(fresh).not.toBe(LAUNCH);
-    expect(fresh).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect((await send(test, `/?t=${LAUNCH}`, { headers: { cookie: null } })).status).toBe(401);
-    expect((await send(test, `/?t=${fresh}`, { headers: { cookie: null } })).status).toBe(302);
+  it('keeps the session past a closed browser, and says what to do with a used link', async () => {
+    const test = testApp();
+    const launch = await send(test, `/?t=${LAUNCH}`, { headers: { cookie: null } });
+    expect(launch.headers.get('set-cookie')).toMatch(/Max-Age=\d+/);
+    const spent = await send(test, `/?t=${LAUNCH}`, { headers: { cookie: null } });
+    expect(spent.status).toBe(401);
+    expect(await spent.text()).toMatch(/already been used.*start it again for a new link/);
   });
 
   it('rejects a wrong launch token', async () => {

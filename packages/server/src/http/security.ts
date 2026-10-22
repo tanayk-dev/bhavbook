@@ -6,8 +6,9 @@
 //      would let a page on another localhost port make blind requests with our cookie;
 //   4. the per-launch session token, from a cookie named per port.
 // There is no CORS. The link printed at start carries a different, one-time token: opening it sets the session
-// cookie and spends it, so a link read from the terminal, a process list or browser history cannot be replayed.
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+// cookie and spends it, so a link read from the terminal, a process list or browser history cannot be replayed
+// (ADR-0029). The cookie survives a closed browser; its key dies when BhavBook stops.
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 export const SESSION_COOKIE_PREFIX = 'bhavbook_session';
 
@@ -38,26 +39,15 @@ export function allowedOrigins(port: number): readonly string[] {
   return allowedHosts(port).map((host) => `http://${host}`);
 }
 
-/** The one-time tokens of launch links: at most one is open, and redeeming it spends it. */
+/** The launch link's one-time token: redeeming it spends it. */
 export interface LaunchGate {
-  /** A new link token; it replaces one not yet used. */
-  issue(): string;
-  /** True once for the open token, then never again. */
+  /** True once for the link's token, then never again. */
   redeem(candidate: string): boolean;
 }
 
-const LAUNCH_TOKEN_BYTES = 32;
-
-/** `first` is the token of the link printed at start (tests pass a known one); later links come from `issue()`. */
-export function launchGate(
-  first: string = randomBytes(LAUNCH_TOKEN_BYTES).toString('base64url'),
-): LaunchGate {
-  let open: string | null = first;
+export function launchGate(token: string): LaunchGate {
+  let open: string | null = token;
   return {
-    issue: () => {
-      open = randomBytes(LAUNCH_TOKEN_BYTES).toString('base64url');
-      return open;
-    },
     redeem: (candidate) => {
       if (open === null || !sameSecret(candidate, open)) return false;
       open = null;
@@ -65,6 +55,9 @@ export function launchGate(
     },
   };
 }
+
+/** How long the session cookie outlives a closed browser; the key itself dies when BhavBook stops. */
+export const SESSION_COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
 
 /** Constant-time comparison of two secrets of any length (both are hashed first). */
 export function sameSecret(a: string, b: string): boolean {

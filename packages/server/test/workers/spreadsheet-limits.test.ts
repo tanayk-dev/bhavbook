@@ -38,32 +38,63 @@ function fakeZip(entries: number, declaredSize: number, compressedSize = 1): Buf
   return Buffer.concat([...locals, directory, end]);
 }
 
-/** A one-entry deflated zip whose directory declares `declaredSize` for `content` (a liar unless they agree). */
-function deflatedZip(content: Buffer, declaredSize: number): Buffer {
-  const name = Buffer.from('xl/sheet1.xml', 'latin1');
-  const data = deflateRawSync(content);
-  const local = Buffer.alloc(30);
-  local.writeUInt32LE(0x04034b50, 0);
-  local.writeUInt16LE(8, 8);
-  local.writeUInt32LE(data.length, 18);
-  local.writeUInt32LE(declaredSize, 22);
-  local.writeUInt16LE(name.length, 26);
-  const central = Buffer.alloc(46);
-  central.writeUInt32LE(0x02014b50, 0);
-  central.writeUInt16LE(8, 10);
-  central.writeUInt32LE(data.length, 20);
-  central.writeUInt32LE(declaredSize, 24);
-  central.writeUInt16LE(name.length, 28);
-  central.writeUInt32LE(0, 42);
-  const directory = Buffer.concat([central, name]);
+interface Part {
+  readonly name: string;
+  readonly content: Buffer;
+  /** What the directory declares, when it lies. */
+  readonly declared?: number;
+}
+
+interface Tamper {
+  /** The entry count the end record declares, when it lies. */
+  readonly entries?: number;
+  /** The local header's method / name / flags, when they disagree with the central directory. */
+  readonly localMethod?: number;
+  readonly localName?: string;
+  readonly encrypted?: boolean;
+}
+
+/** A deflated zip of `parts`, truthful unless a part or `tamper` says otherwise. */
+function zipOf(parts: readonly Part[], tamper: Tamper = {}): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const part of parts) {
+    const name = Buffer.from(part.name, 'latin1');
+    const localName = Buffer.from(tamper.localName ?? part.name, 'latin1');
+    const data = deflateRawSync(part.content);
+    const declared = part.declared ?? part.content.length;
+    const flags = tamper.encrypted === true ? 1 : 0;
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(flags, 6);
+    local.writeUInt16LE(tamper.localMethod ?? 8, 8);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(declared, 22);
+    local.writeUInt16LE(localName.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(flags, 8);
+    central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(declared, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(offset, 42);
+    locals.push(local, localName, data);
+    centrals.push(central, name);
+    offset += local.length + localName.length + data.length;
+  }
+  const directory = Buffer.concat(centrals);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(1, 8);
-  end.writeUInt16LE(1, 10);
+  end.writeUInt16LE(tamper.entries ?? parts.length, 8);
+  end.writeUInt16LE(tamper.entries ?? parts.length, 10);
   end.writeUInt32LE(directory.length, 12);
-  end.writeUInt32LE(local.length + name.length + data.length, 16);
-  return Buffer.concat([local, name, data, directory, end]);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, directory, end]);
 }
+
+const SHEET = { name: 'xl/sheet1.xml', content: Buffer.from('<sheet/>') };
 
 function xlsx(build: (book: XLSX.WorkBook) => void): Buffer {
   const book = XLSX.utils.book_new();
@@ -71,44 +102,63 @@ function xlsx(build: (book: XLSX.WorkBook) => void): Buffer {
   return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
 
-describe('inspectZip (before any decompression)', () => {
-  it('accepts a real workbook', () => {
+describe('inspectZip (before the parser sees the file)', () => {
+  it('accepts a real workbook', async () => {
     const file = xlsx((book) => {
       XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['a']]), 'S');
     });
-    expect(inspectZip(file).entries).toBeGreaterThan(0);
+    expect((await inspectZip(file)).entries).toBeGreaterThan(0);
   });
 
-  it('rejects a declared uncompressed size above the cap (zip bomb)', () => {
-    expect(() => inspectZip(fakeZip(1, 1_000_000_000))).toThrow(/too large when unpacked/);
+  it('rejects a declared uncompressed size above the cap (zip bomb)', async () => {
+    await expect(inspectZip(fakeZip(1, 1_000_000_000))).rejects.toThrow(/too large when unpacked/);
   });
 
-  it('rejects an extreme compression ratio even under the size cap', () => {
-    expect(() => inspectZip(fakeZip(1, 50_000_000, 10))).toThrow(/too large when unpacked/);
+  it('rejects an extreme compression ratio even under the size cap', async () => {
+    await expect(inspectZip(fakeZip(1, 50_000_000, 10))).rejects.toThrow(/too large when unpacked/);
   });
 
-  it('rejects a part that inflates to more than it declares (a lying zip bomb)', () => {
+  it('rejects a part that inflates to more than it declares (a lying zip bomb)', async () => {
     // Declares 1,000 bytes; holds 5 MB of zeros (about 5 KB deflated, so the ratio check alone passes it).
-    const bomb = deflatedZip(Buffer.alloc(5 * 1024 * 1024), 1_000);
-    expect(() => inspectZip(bomb)).toThrow(/does not match its declared size/);
+    const bomb = zipOf([{ ...SHEET, content: Buffer.alloc(5 * 1024 * 1024), declared: 1_000 }]);
+    await expect(inspectZip(bomb)).rejects.toThrow(/does not match its declared size/);
   });
 
-  it('rejects a part that inflates to less than it declares', () => {
-    expect(() => inspectZip(deflatedZip(Buffer.alloc(100), 5_000))).toThrow(
-      /does not match its declared size/,
+  it('rejects a part that inflates to less than it declares', async () => {
+    const short = zipOf([{ ...SHEET, content: Buffer.alloc(100), declared: 5_000 }]);
+    await expect(inspectZip(short)).rejects.toThrow(/does not match its declared size/);
+  });
+
+  it('accepts parts whose sizes are declared truthfully', async () => {
+    const file = zipOf([SHEET, { name: 'xl/workbook.xml', content: Buffer.from('<workbook/>') }]);
+    expect(await inspectZip(file)).toEqual({ entries: 2, unpackedBytes: 19 });
+  });
+
+  it('rejects a directory holding more entries than the end record declares', async () => {
+    // A parser walking the directory itself would read the second, unchecked part.
+    const file = zipOf([SHEET, { name: 'xl/hidden.xml', content: Buffer.alloc(1_000_000) }], { entries: 1 });
+    await expect(inspectZip(file)).rejects.toThrow(/not a valid zip file/);
+  });
+
+  it('rejects a local header that disagrees with the directory', async () => {
+    await expect(inspectZip(zipOf([SHEET], { localMethod: 0 }))).rejects.toThrow(/headers disagree/);
+    await expect(inspectZip(zipOf([SHEET], { localName: 'xl/other.xml' }))).rejects.toThrow(
+      /headers disagree/,
     );
   });
 
-  it('accepts a part whose size is declared truthfully', () => {
-    expect(inspectZip(deflatedZip(Buffer.from('<sheet/>'), 8))).toEqual({ entries: 1, unpackedBytes: 8 });
+  it('rejects an encrypted part', async () => {
+    await expect(inspectZip(zipOf([SHEET], { encrypted: true }))).rejects.toThrow(/encrypted/);
   });
 
-  it('rejects too many entries', () => {
-    expect(() => inspectZip(fakeZip(600, 10, 10))).toThrow(/too many parts/);
+  it('rejects too many entries', async () => {
+    await expect(inspectZip(fakeZip(600, 10, 10))).rejects.toThrow(/too many parts/);
   });
 
-  it('rejects a zip without a valid central directory', () => {
-    expect(() => inspectZip(Buffer.from('PK\u0003\u0004 truncated', 'latin1'))).toThrow(SpreadsheetError);
+  it('rejects a zip without a valid central directory', async () => {
+    await expect(inspectZip(Buffer.from('PK\u0003\u0004 truncated', 'latin1'))).rejects.toThrow(
+      SpreadsheetError,
+    );
   });
 
   it('is applied by readSpreadsheet before the worker starts', async () => {

@@ -32,6 +32,7 @@ import {
 } from './migrations.js';
 import {
   APPLICATION_ID,
+  createOwnerOnly,
   hardenConnection,
   referenceFingerprint,
   restrictToOwner,
@@ -105,7 +106,9 @@ export function createBackup(
     throw new BackupError('refusing to write a backup over the vault or its files');
   const snapshot = tempPath(outPath, 'snapshot');
   try {
-    // VACUUM INTO gives a transactionally consistent copy; the path is bound, never interpolated.
+    // VACUUM INTO gives a transactionally consistent copy; the path is bound, never interpolated. It fills the
+    // empty, owner-only file made first, so the snapshot is never readable by others.
+    createOwnerOnly(snapshot);
     db.prepare('VACUUM INTO ?').run(snapshot);
     const bytes = readFileSync(snapshot);
     const file = encodeBhav(bytes, {
@@ -260,6 +263,7 @@ function rebuildFromBackup(
   migrations: readonly Migration[],
   options: BackupOptions,
 ): void {
+  if (!existsSync(target)) createOwnerOnly(target);
   const db = new Database(target);
   try {
     restrictToOwner(target);

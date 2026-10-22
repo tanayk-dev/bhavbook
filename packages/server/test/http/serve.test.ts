@@ -72,9 +72,8 @@ describe('startServer', () => {
     expect(launch.status).toBe(302);
     const cookie = (launch.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
     expect(cookie).toBe(`${sessionCookieName(server.port)}=${TOKEN}`);
-    // Used: the same link no longer opens a session; a new one does.
+    // Used: the same link no longer opens a session.
     expect((await fetch(server.url, { redirect: 'manual' })).status).toBe(401);
-    expect((await fetch(server.newLaunchUrl(), { redirect: 'manual' })).status).toBe(302);
     const health = await fetch(`http://127.0.0.1:${server.port}/api/health`, { headers: { cookie } });
     expect(health.status).toBe(200);
     expect((await fetch(`http://127.0.0.1:${server.port}/api/health`)).status).toBe(401);

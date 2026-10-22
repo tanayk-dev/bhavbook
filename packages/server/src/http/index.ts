@@ -6,6 +6,7 @@ export {
   allowedOrigins,
   checkRequest,
   launchGate,
+  SESSION_COOKIE_MAX_AGE_S,
   sessionCookieName,
   type LaunchGate,
   type RequestFacts,

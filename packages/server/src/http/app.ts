@@ -109,6 +109,7 @@ import {
   checkOrigin,
   checkRequest,
   SECURITY_HEADERS,
+  SESSION_COOKIE_MAX_AGE_S,
   sessionCookieName,
   type LaunchGate,
   type RequestFacts,
@@ -718,6 +719,11 @@ function logAndHarden(logger: Logger): MiddlewareHandler {
   };
 }
 
+/** Shown in place of the app when a launch link was already used (it works once, ADR-0029). */
+const SPENT_LINK =
+  'This BhavBook link has already been used. In the browser that opened it, go to BhavBook again; ' +
+  'for another browser, stop BhavBook (Ctrl+C) and start it again for a new link.';
+
 function guard(options: AppOptions): MiddlewareHandler {
   return async (c, next) => {
     const facts: RequestFacts = {
@@ -737,12 +743,13 @@ function guard(options: AppOptions): MiddlewareHandler {
           httpOnly: true,
           sameSite: 'Strict',
           path: '/',
+          maxAge: SESSION_COOKIE_MAX_AGE_S,
         });
         return c.redirect('/', 302);
       }
       // A used (or wrong) link: a browser that already has the session goes in; nothing new is handed out.
       if (result.ok) return c.redirect('/', 302);
-      return error('unauthorized', 401);
+      return c.text(SPENT_LINK, 401);
     }
     if (!result.ok) return error(result.status === 403 ? 'forbidden' : 'unauthorized', result.status);
     await next();

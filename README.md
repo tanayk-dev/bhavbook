@@ -36,8 +36,8 @@ BhavBook opens in your browser at a `127.0.0.1` address (it serves only your own
 6. The **Overview** shows what works after costs: net P&L, win rate, expectancy, profit factor, R, by month and by
    setup.
 
-Your data lives in one file, `BhavBook/vault.db` in your home folder. The link BhavBook opens works once; if you
-close the browser, press Enter in the terminal for a new one. Press Ctrl+C in the terminal to stop.
+Your data lives in one file, `BhavBook/vault.db` in your home folder. The link BhavBook opens works once; your browser
+stays signed in until BhavBook stops, and another browser needs BhavBook restarted. Press Ctrl+C in the terminal to stop.
 
 ## Commands
 
