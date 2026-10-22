@@ -277,13 +277,19 @@ function withAction<R extends Response>(live: LiveVault, action: (db: Database.D
   });
 }
 
-/** Account nicknames by id, for a preview that spans every account. */
-function accountNames(db: Database.Database): Record<string, string> {
-  const rows = db.prepare('SELECT id, nickname FROM broker_account').all() as {
+/**
+ * Accounts by id with their profile, for a preview that spans every account (a corporate action is a fact about a
+ * security); the client groups by profile.
+ */
+function accountNames(db: Database.Database): Record<string, { nickname: string; profileId: string }> {
+  const rows = db.prepare('SELECT id, nickname, profile_id FROM broker_account').all() as {
     id: string;
     nickname: string;
+    profile_id: string;
   }[];
-  return Object.fromEntries(rows.map((row) => [row.id, row.nickname]));
+  return Object.fromEntries(
+    rows.map((row) => [row.id, { nickname: row.nickname, profileId: row.profile_id }]),
+  );
 }
 
 /** Every instrument key an issue subject names (`instrumentKey`, `isin`), for display names. */
@@ -607,13 +613,16 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
         withVault(live, (db) => {
           const stored = listCorporateActions(db);
           return jsonResponse({
-            actions: stored.map(({ action, status, createdAt }) => ({ ...action, status, createdAt })),
+            actions: stored.map(({ id, action, status, createdAt }) =>
+              action === null
+                ? { id, unreadable: true, status, createdAt }
+                : { ...action, status, createdAt },
+            ),
             instruments: instrumentNames(
               db,
-              stored.flatMap(({ action }) => [
-                action.isin,
-                ...(action.newIsin === null ? [] : [action.newIsin]),
-              ]),
+              stored.flatMap(({ action }) =>
+                action === null ? [] : [action.isin, ...(action.newIsin === null ? [] : [action.newIsin])],
+              ),
             ),
           });
         }),

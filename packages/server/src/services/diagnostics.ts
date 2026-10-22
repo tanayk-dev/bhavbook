@@ -60,13 +60,19 @@ const valueType = (value: unknown): string =>
         ? cellType(value)
         : typeof value;
 
-/** A statement row's shape: its field names and value types (nested objects by their own shape). */
+/**
+ * Field names adapters write are fixed snake_case words (`buy_qty`, `stt`); anything else (a name or an ISIN used as
+ * a key) is not one, and shows as `?`, never as itself.
+ */
+const FIELD = /^[a-z][a-z0-9_]{0,40}$/;
+
+/** A statement row's shape: its field names and value types (a nested object is just `object`). */
 function jsonShape(json: string): string {
   try {
     const value: unknown = JSON.parse(json);
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return valueType(value);
     return Object.entries(value)
-      .map(([key, item]) => `${key}:${valueType(item)}`)
+      .map(([key, item]) => `${FIELD.test(key) ? key : '?'}:${valueType(item)}`)
       .sort()
       .join(',');
   } catch {
@@ -81,7 +87,8 @@ export interface Shape {
   readonly rows: number;
 }
 
-function tally(keys: readonly { of: string; shape: string }[]): { shapes: Shape[]; otherRows: number } {
+/** Shapes counted as rows stream past (a batch is never held in memory). */
+function tally(keys: Iterable<{ of: string; shape: string }>): { shapes: Shape[]; otherRows: number } {
   const counts = new Map<string, Shape>();
   for (const { of, shape } of keys) {
     const key = `${of}|${shape}`;
@@ -93,23 +100,44 @@ function tally(keys: readonly { of: string; shape: string }[]): { shapes: Shape[
   return { shapes: kept, otherRows: sorted.slice(MAX_SHAPES).reduce((sum, shape) => sum + shape.rows, 0) };
 }
 
-/** Numbers and reason codes only: anything else in a batch's counts is left out. */
-function numbersOnly(json: string): Record<string, unknown> {
-  const keep = (value: unknown): unknown => {
-    if (typeof value === 'number') return value;
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-    const entries = Object.entries(value)
-      .filter(([key]) => /^[a-z][a-z0-9_]{0,40}$/i.test(key))
-      .map(([key, item]) => [key, keep(item)] as const)
-      .filter(([, item]) => item !== undefined);
-    return Object.fromEntries(entries);
-  };
+/** The skip reasons adapters report (`skipReasonSchema` in @bhavbook/adapters); any other key is dropped. */
+export const SKIP_REASONS = ['fno', 'currency', 'commodity', 'mf', 'not_traded', 'other'] as const;
+
+const count = (value: unknown): number =>
+  typeof value === 'number' && Number.isSafeInteger(value) ? value : 0;
+const pair = (value: unknown) => {
+  const record = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+  return { new: count(record.new), duplicate: count(record.duplicate) };
+};
+
+export interface BatchCounts {
+  readonly rows: { readonly new: number; readonly duplicate: number };
+  readonly statements: { readonly new: number; readonly duplicate: number };
+  readonly skipped: Readonly<Partial<Record<(typeof SKIP_REASONS)[number], number>>>;
+  readonly errors: number;
+}
+
+/** A batch's counts rebuilt from known keys only: nothing stored under another name reaches the export. */
+function batchCounts(json: string): BatchCounts {
+  let stored: Record<string, unknown> = {};
   try {
-    const kept = keep(JSON.parse(json));
-    return typeof kept === 'object' && kept !== null ? (kept as Record<string, unknown>) : {};
+    const parsed: unknown = JSON.parse(json);
+    if (typeof parsed === 'object' && parsed !== null) stored = parsed as Record<string, unknown>;
   } catch {
-    return {};
+    // An unreadable record counts as zeros.
   }
+  const skipped = typeof stored.skipped === 'object' && stored.skipped !== null ? stored.skipped : {};
+  return {
+    rows: pair(stored.rows),
+    statements: pair(stored.statements),
+    skipped: Object.fromEntries(
+      SKIP_REASONS.flatMap((reason) => {
+        const value = count((skipped as Record<string, unknown>)[reason]);
+        return value === 0 ? [] : [[reason, value]];
+      }),
+    ),
+    errors: count(stored.errors),
+  };
 }
 
 export interface BatchDiagnostics {
@@ -118,7 +146,7 @@ export interface BatchDiagnostics {
   readonly adapterVersion: string;
   readonly status: string;
   readonly importedOn: string;
-  readonly counts: Record<string, unknown>;
+  readonly counts: BatchCounts;
   readonly tradeRows: number;
   readonly statementRows: number;
   readonly tradeShapes: Shape[];
@@ -166,25 +194,32 @@ function batchDiagnostics(db: Database.Database): BatchDiagnostics[] {
   const raw = db.prepare('SELECT raw_text FROM raw_row WHERE batch_id = ?').pluck();
   const statements = db.prepare('SELECT kind, data_json FROM statement_row WHERE batch_id = ?');
   const trades = db.prepare('SELECT count(*) FROM trade_row WHERE batch_id = ?').pluck();
+  const statementCount = db.prepare('SELECT count(*) FROM statement_row WHERE batch_id = ?').pluck();
   return batches.map((batch) => {
-    const lines = raw.all(batch.id) as string[];
-    const rows = statements.all(batch.id) as { kind: string; data_json: string }[];
     const tradeTally = tally(
-      lines.map((line) => {
-        const cells = csvCells(line);
-        return { of: `${String(cells.length)} columns`, shape: cells.map(cellType).join(',') };
-      }),
+      (function* lineShapes() {
+        for (const line of raw.iterate(batch.id) as Iterable<string>) {
+          const cells = csvCells(line);
+          yield { of: `${String(cells.length)} columns`, shape: cells.map(cellType).join(',') };
+        }
+      })(),
     );
-    const statementTally = tally(rows.map((row) => ({ of: row.kind, shape: jsonShape(row.data_json) })));
+    const statementTally = tally(
+      (function* rowShapes() {
+        for (const row of statements.iterate(batch.id) as Iterable<{ kind: string; data_json: string }>) {
+          yield { of: row.kind, shape: jsonShape(row.data_json) };
+        }
+      })(),
+    );
     return {
       broker: batch.broker,
       reportKind: batch.report_kind,
       adapterVersion: batch.adapter_version,
       status: batch.status,
       importedOn: batch.created_at.slice(0, 10),
-      counts: numbersOnly(batch.counts_json),
+      counts: batchCounts(batch.counts_json),
       tradeRows: Number(trades.get(batch.id)),
-      statementRows: rows.length,
+      statementRows: Number(statementCount.get(batch.id)),
       tradeShapes: tradeTally.shapes,
       statementShapes: statementTally.shapes,
       otherShapeRows: tradeTally.otherRows + statementTally.otherRows,

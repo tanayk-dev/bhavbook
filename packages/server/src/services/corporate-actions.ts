@@ -94,9 +94,12 @@ function passesCore(action: CorporateAction): boolean {
 function fromRow(value: unknown, index: number): CorporateAction {
   const parsed = rowSchema.safeParse(value);
   const id = parsed.success ? parsed.data.id : `#${String(index)}`;
-  const unreadable = new CorporateActionError('a stored corporate action is unreadable', {
-    corporateActionId: id,
-  });
+  // A conflict, not a fault: the user can revert the row (the list shows it as unreadable).
+  const unreadable = new CorporateActionError(
+    'a stored corporate action is unreadable',
+    { corporateActionId: id },
+    'conflict',
+  );
   if (!parsed.success) throw unreadable;
   const row = parsed.data;
   const action: CorporateAction = {
@@ -218,20 +221,29 @@ export function restoreCorporateAction(db: Database.Database, id: string): void 
   })();
 }
 
-export interface StoredCorporateAction {
-  readonly action: CorporateAction;
-  readonly status: Status;
-  readonly createdAt: string;
-}
+export type StoredCorporateAction =
+  | {
+      readonly id: string;
+      readonly action: CorporateAction;
+      readonly status: Status;
+      readonly createdAt: string;
+    }
+  /** A row core no longer accepts: listed by id only, so it can still be reverted. */
+  | { readonly id: string; readonly action: null; readonly status: Status; readonly createdAt: string };
 
 /** Every stored action, active and reverted, newest ex-date first (the corporate actions page). */
 export function listCorporateActions(db: Database.Database): StoredCorporateAction[] {
   const rows = db
     .prepare(`SELECT ${COLUMNS}, status, created_at FROM corporate_action ORDER BY ex_date DESC, id DESC`)
-    .all() as (Record<string, unknown> & { status: Status; created_at: string })[];
-  return rows.map((row, index) => ({
-    action: fromRow(row, index),
-    status: row.status,
-    createdAt: row.created_at,
-  }));
+    .all() as (Record<string, unknown> & { id: string; status: Status; created_at: string })[];
+  return rows.map((row, index) => {
+    let action: CorporateAction | null;
+    try {
+      action = fromRow(row, index);
+    } catch (error) {
+      if (!(error instanceof CorporateActionError)) throw error;
+      action = null;
+    }
+    return { id: row.id, action, status: row.status, createdAt: row.created_at };
+  });
 }

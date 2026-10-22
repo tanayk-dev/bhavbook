@@ -1,6 +1,7 @@
 // User actions on corporate actions (plan S10b tasks 2 and 4). A corporate action is a fact about a security, so
 // every change recomputes every account in one transaction: if any account fails, nothing changes, and the error
 // names that account (by id only, ADR-0019). Nothing is applied without the user's confirmation.
+import { BhavbookCoreError } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
 import {
   CorporateActionError,
@@ -20,7 +21,9 @@ function recomputeAll(db: Database.Database, options: RecomputeOptions): void {
       recompute(db, accountId, options);
     } catch (error) {
       if (error instanceof CorporateActionError && error.corporateActionId !== undefined) throw error;
-      throw new CorporateActionError('an account could not be recomputed', { accountId });
+      // Core refused the replay (the actions do not fit this account's history): the user's to resolve, a 409.
+      const code = error instanceof BhavbookCoreError ? 'conflict' : 'failed';
+      throw new CorporateActionError('an account could not be recomputed', { accountId }, code);
     }
   }
 }
