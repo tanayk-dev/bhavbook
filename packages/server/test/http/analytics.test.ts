@@ -151,6 +151,11 @@ describe('metrics on made-up trades', () => {
       expect(all.mistakeCost).toEqual([expect.objectContaining({ tag: 'Late exit', trades: 1 })]);
       expect(all.months.map((month) => month.month)).toEqual(['2025-09', '2025-10']);
 
+      // The cache follows writes: retagging the trade moves it to another setup at once.
+      db.prepare("INSERT INTO tag (id, kind, name) VALUES ('t_pb', 'setup', 'Pullback')").run();
+      db.prepare("UPDATE journal_entry SET setup_tag_id = 't_pb'").run();
+      expect((await get(test)).bySetup.map((slice) => slice.tag)).toEqual([null, 'Pullback']);
+
       expect((await get(test, '?broker=dhan')).summary.trades).toBe(0);
       expect((await get(test, '?from=2025-10-01')).summary.trades).toBe(1);
       expect((await get(test, '?to=2025-09-30')).months.map((month) => month.month)).toEqual(['2025-09']);
@@ -180,6 +185,12 @@ describe('metrics on made-up trades', () => {
       // The partial exit is realised on its day: 4 × (110 − 100) before charges.
       expect(plain.days.map((day) => day.date)).toEqual(['2025-09-10']);
       expect(BigInt(plain.months[0]?.grossMicro ?? '0')).toBe(40_000_000n);
+
+      // A date range keeps the open position's partial exit in its day, and the open position out of the trades.
+      const ranged = await get(test, '?from=2025-09-05&to=2025-09-30');
+      expect(ranged.summary.trades).toBe(0);
+      expect(ranged.summary.excluded.incomplete).toBe(0);
+      expect(ranged.days.map((day) => day.date)).toEqual(['2025-09-10']);
 
       const withIncomplete = await get(test, '?includeIncomplete=true');
       expect(withIncomplete.summary.trades).toBe(1);
@@ -244,6 +255,7 @@ describe('performance', () => {
         const cold = performance.now();
         analytics(db);
         expect(performance.now() - cold).toBeLessThan(5_000);
+        analytics(db, { broker: 'zerodha' });
         const times: number[] = [];
         for (const filter of [
           '',
@@ -255,6 +267,10 @@ describe('performance', () => {
           const body = await get(testApp({}, db), filter);
           times.push(performance.now() - started);
           expect(body.summary.trades).toBeGreaterThan(0);
+          if (filter.startsWith('?from')) {
+            // The range narrows: no realised day outside it.
+            expect(body.days.every((day) => day.date >= '2024-06-01' && day.date <= '2025-03-31')).toBe(true);
+          }
         }
         times.sort((a, b) => a - b);
         expect(times[Math.floor(times.length / 2)]).toBeLessThan(300);

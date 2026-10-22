@@ -292,18 +292,30 @@ interface VaultFacts {
 }
 
 /**
- * The vault's facts, built once and kept until the vault changes: the server is the only writer, through this one
- * connection, so its `total_changes()` moves with every write (a restore opens a new connection, a new key).
+ * The vault's facts, built once and kept until the vault changes (stateOf); a restore opens a new connection, a new
+ * key, and the old entry goes with the old connection.
  */
-const built = new WeakMap<Database.Database, { readonly changes: unknown; readonly facts: VaultFacts }>();
+const built = new WeakMap<Database.Database, { readonly version: string; readonly facts: VaultFacts }>();
+
+/**
+ * What identifies the vault's state: this connection's own writes (`total_changes()`, which also counts triggers
+ * and cascades) and any other connection's commits (`data_version`, which this connection's own writes leave alone).
+ */
+function stateOf(db: Database.Database): string {
+  const changes: unknown = db.prepare('SELECT total_changes()').pluck().get();
+  // The vault's connections read integers as bigint (vault/schema.ts); anything else would break the bigint sums.
+  if (typeof changes !== 'bigint') throw new Error('analytics needs a vault connection (safe integers)');
+  const version: unknown = db.pragma('data_version', { simple: true });
+  return `${changes.toString()}:${String(version)}`;
+}
 
 function vaultFacts(db: Database.Database): VaultFacts {
-  const changes: unknown = db.prepare('SELECT total_changes()').pluck().get();
+  const version = stateOf(db);
   const cached = built.get(db);
-  if (cached !== undefined && cached.changes === changes) return cached.facts;
+  if (cached?.version === version) return cached.facts;
   const loaded = db.transaction(() => load(db))();
   const facts = { facts: tradeFacts(loaded), lots: realisedLots(loaded) };
-  built.set(db, { changes, facts });
+  built.set(db, { version, facts });
   return facts;
 }
 
