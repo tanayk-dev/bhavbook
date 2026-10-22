@@ -192,6 +192,32 @@ describe('reading previews', () => {
 });
 
 describe('the import page', () => {
+  it('keeps a preview made while the import history is still loading', async () => {
+    // Seen on a slow CI runner: the history's first answer arrived after the preview and dropped it.
+    const { routes } = server();
+    let answer: () => void = () => undefined;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    const history = routes['GET /api/imports'];
+    renderImport({
+      ...routes,
+      'GET /api/imports': async (body, url) => {
+        await answered;
+        return typeof history === 'function' ? history(body, url) : { body: { imports: [] } };
+      },
+    });
+    await userEvent.upload(await screen.findByLabelText('Broker files'), files());
+    expect(
+      await screen.findByText('3 files read, 1 ready, 1 to identify, 1 not importable.'),
+    ).toBeInTheDocument();
+    answer();
+    expect(await screen.findByText('Nothing imported into this account yet.')).toBeInTheDocument();
+    // The preview is still there (the ambiguous file must be identified before the import is enabled).
+    expect(screen.getByRole('region', { name: 'Preview' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Import 112 new trade rows/ })).toBeInTheDocument();
+  });
+
   it('previews chosen files, explaining each one, without sending their names', async () => {
     const { routes } = server();
     const fetch = renderImport(routes);
