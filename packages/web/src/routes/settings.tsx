@@ -245,6 +245,20 @@ function SettingsPage() {
           <BackupsPanel backups={backups.data} announce={announce} />
         </Section>
       ) : null}
+      <Section id="diagnostics-title" title="Diagnostics">
+        <p className="text-ink-muted">
+          For a bug report: counts, versions and the shape of each imported file&apos;s rows (how many
+          columns, and whether each holds a number, a date or text). It never contains a value, a name, a file
+          name or an id.
+        </p>
+        <a
+          href="/api/diagnostics"
+          download="bhavbook-diagnostics.json"
+          className="inline-flex h-11 items-center rounded-md border border-input px-3 text-sm font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden md:h-9"
+        >
+          Download diagnostics
+        </a>
+      </Section>
     </div>
   );
 }

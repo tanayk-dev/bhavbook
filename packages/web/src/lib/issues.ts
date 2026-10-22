@@ -327,6 +327,42 @@ export async function mapInstrument(id: string, target: InstrumentTarget): Promi
   await readJson(await send(() => post(`/api/issues/${encodeURIComponent(id)}/map`, target)));
 }
 
+export type SuspectedAction =
+  | {
+      readonly kind: 'split_or_bonus';
+      readonly instrumentKey: string;
+      readonly dateIst: string;
+      readonly multiple: bigint;
+    }
+  | {
+      readonly kind: 'conversion_or_demerger';
+      readonly fromInstrument: string;
+      readonly toInstrument: string;
+      readonly dateIst: string;
+    };
+
+/** A `corporate_action_suspected` subject: what BhavBook noticed. */
+export function suspectedAction(subject: unknown): SuspectedAction | null {
+  if (!isRecord(subject)) return null;
+  const dateIst = text(subject.dateIst);
+  if (dateIst === null) return null;
+  if (subject.kind === 'split_or_bonus') {
+    const instrumentKey = text(subject.instrumentKey);
+    const multiple = digits(subject.multiple);
+    return instrumentKey === null || multiple === null
+      ? null
+      : { kind: 'split_or_bonus', instrumentKey, dateIst, multiple };
+  }
+  if (subject.kind === 'conversion_or_demerger') {
+    const fromInstrument = text(subject.fromInstrument);
+    const toInstrument = text(subject.toInstrument);
+    return fromInstrument === null || toInstrument === null
+      ? null
+      : { kind: 'conversion_or_demerger', fromInstrument, toInstrument, dateIst };
+  }
+  return null;
+}
+
 export interface JournalCollision {
   readonly positionId: string;
   readonly journalEntryIds: readonly string[];
