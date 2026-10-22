@@ -9,11 +9,14 @@ const QUALITIES = [0.85, 0.7, 0.55, 0.4];
 const SHRINK = 0.75;
 const MIN_SIDE_PX = 320;
 const MICRO_PER_RUPEE = 1_000_000n;
-const MICRO_PER_PAISA = 10_000n;
+/** Decoding a bigger picture can exhaust the tab's memory; a screenshot never needs this many pixels. */
+const MAX_PIXELS = 100_000_000;
 
 /** The whole editable entry, as the server takes it: amounts are micro-rupees in decimal strings, null when empty. */
 export interface JournalInput {
   readonly entryId?: string;
+  /** The entry's `updatedAt` the form started from (null: none yet); the server refuses a stale save. */
+  readonly expectedUpdatedAt?: string | null;
   readonly setupTagId: string | null;
   readonly mistakeTagIds: readonly string[];
   readonly thesis: string | null;
@@ -24,12 +27,17 @@ export interface JournalInput {
   readonly reviewNote: string | null;
 }
 
-/** A stored amount as the rupees a form shows ("1234.5" → "1,234.50" is the display's job): string arithmetic. */
+/**
+ * A stored amount as the rupees a form shows, exactly: paise as two decimals, finer amounts (from older data or
+ * the API) with up to six, never rounded. String arithmetic only.
+ */
 export function microToRupees(micro: bigint | null): string {
   if (micro === null) return '';
   const whole = micro / MICRO_PER_RUPEE;
-  const paise = (micro % MICRO_PER_RUPEE) / MICRO_PER_PAISA;
-  return paise === 0n ? whole.toString() : `${whole.toString()}.${paise.toString().padStart(2, '0')}`;
+  const fraction = (micro % MICRO_PER_RUPEE).toString().padStart(6, '0');
+  if (fraction === '000000') return whole.toString();
+  const trimmed = fraction.replace(/0+$/, '');
+  return `${whole.toString()}.${trimmed.length < 2 ? trimmed.padEnd(2, '0') : trimmed}`;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -54,6 +62,15 @@ export async function saveJournal(ref: string, input: JournalInput): Promise<str
     ),
   );
   return idOf(body);
+}
+
+/** The position's journal entry, created empty if it has none; an existing one is never changed. */
+export async function ensureEntry(ref: string): Promise<string> {
+  return idOf(
+    await readJson(
+      await send(() => request('POST', `/api/positions/${encodeURIComponent(ref)}/journal/entry`)),
+    ),
+  );
 }
 
 /** Stores a WebP screenshot (already converted) on an entry; returns its id. */
@@ -98,28 +115,43 @@ export function positionRefOf(positionId: string): string {
 export class ScreenshotError extends Error {
   override readonly name = 'ScreenshotError';
 
-  constructor(readonly reason: 'not_an_image' | 'no_webp' | 'too_large') {
+  constructor(
+    readonly reason: 'not_an_image' | 'too_many_pixels' | 'encode_failed' | 'no_webp' | 'too_large',
+  ) {
     super(`screenshot not usable: ${reason}`);
   }
 }
 
 /** The pixels, without anything else the file carried; ScreenshotError when it is not an image the browser reads. */
 async function decode(file: Blob): Promise<ImageBitmap> {
+  let bitmap: ImageBitmap;
   try {
-    return await createImageBitmap(file);
+    bitmap = await createImageBitmap(file);
   } catch {
     throw new ScreenshotError('not_an_image');
   }
+  if (bitmap.width * bitmap.height > MAX_PIXELS) {
+    bitmap.close();
+    throw new ScreenshotError('too_many_pixels');
+  }
+  return bitmap;
 }
 
-function encode(bitmap: ImageBitmap, scale: number, quality: number): Promise<Blob | null> {
+async function encode(bitmap: ImageBitmap, scale: number, quality: number): Promise<Blob> {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(bitmap.width * scale));
   canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-  canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  return new Promise((resolve) => {
+  const context = canvas.getContext('2d');
+  // No context (out of memory): stop rather than store a blank picture.
+  if (context === null) throw new ScreenshotError('encode_failed');
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, 'image/webp', quality);
   });
+  if (blob === null) throw new ScreenshotError('encode_failed');
+  // A browser that cannot encode WebP falls back to PNG: refuse rather than send something else.
+  if (blob.type !== 'image/webp') throw new ScreenshotError('no_webp');
+  return blob;
 }
 
 /**
@@ -134,8 +166,6 @@ export async function toWebp(file: Blob): Promise<Blob> {
     while (Math.max(bitmap.width, bitmap.height) * scale >= MIN_SIDE_PX || scale === 1) {
       for (const quality of QUALITIES) {
         const blob = await encode(bitmap, scale, quality);
-        // A browser that cannot encode WebP falls back to PNG: refuse rather than send something else.
-        if (blob?.type !== 'image/webp') throw new ScreenshotError('no_webp');
         if (blob.size <= MAX_SCREENSHOT_BYTES) return blob;
       }
       scale *= SHRINK;
@@ -148,11 +178,15 @@ export async function toWebp(file: Blob): Promise<Blob> {
 
 const SCREENSHOT_ERRORS: Readonly<Record<ScreenshotError['reason'], string>> = {
   not_an_image: 'That is not an image this browser can read.',
+  too_many_pixels: 'That image is too big to convert here (over 100 megapixels).',
+  encode_failed: 'The browser could not convert that image (it may be short of memory). Try a smaller one.',
   no_webp: 'This browser cannot make WebP images. Try a recent Chrome, Edge or Firefox.',
   too_large: 'That image stays over 1 MB even when shrunk.',
 };
 
 const SAVE_ERRORS: Readonly<Record<string, string>> = {
+  stale:
+    'This entry changed elsewhere (merged, reviewed or edited in another tab). Reload to see it, then make your changes again.',
   conflict:
     'The initial stop is fixed once the position has closed, so R stays honest. The other fields can change.',
   invalid: 'A tag is missing or of the wrong kind. Reload and try again.',

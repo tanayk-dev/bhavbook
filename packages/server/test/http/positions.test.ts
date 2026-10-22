@@ -410,3 +410,58 @@ describe('review fixes (S14a-1 review)', () => {
     });
   });
 });
+
+describe('journal safety (S14a-3b review)', () => {
+  it('ensures an entry without ever changing one', async () => {
+    await withPositions([BUY], async (test) => {
+      const [position] = (await list(test)).positions;
+      if (position === undefined) throw new Error('no position');
+      const ensure = () => send(test, `/api/positions/${position.ref}/journal/entry`, { method: 'POST' });
+      const created = (await (await ensure()).json()) as { id: string };
+      const saved = await send(
+        test,
+        `/api/positions/${position.ref}/journal`,
+        json('PUT', { ...ENTRY, thesis: 'Kept' }),
+      );
+      expect(saved.status).toBe(200);
+      expect(await (await ensure()).json()).toEqual(created);
+      expect((await detail(test, position.ref)).journal).toEqual([
+        expect.objectContaining({ thesis: 'Kept' }),
+      ]);
+      expect(
+        (
+          await send(test, `/api/positions/${positionRef('acc|x|DELIVERY|y')}/journal/entry`, {
+            method: 'POST',
+          })
+        ).status,
+      ).toBe(404);
+    });
+  });
+
+  it('refuses a save over an entry that changed since the form read it', async () => {
+    await withPositions([BUY], async (test) => {
+      const [position] = (await list(test)).positions;
+      if (position === undefined) throw new Error('no position');
+      const path = `/api/positions/${position.ref}/journal`;
+      // The form opened with no entry; meanwhile another tab created one.
+      expect(
+        (await send(test, path, json('PUT', { ...ENTRY, expectedUpdatedAt: null, thesis: 'A' }))).status,
+      ).toBe(200);
+      const stale = await send(test, path, json('PUT', { ...ENTRY, expectedUpdatedAt: null, thesis: 'B' }));
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toEqual({ error: 'stale' });
+      const entry = (await detail(test, position.ref)).journal[0] as unknown as { updatedAt: string };
+      // Timestamps are milliseconds: let the next save land in a later one.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(
+        (await send(test, path, json('PUT', { ...ENTRY, expectedUpdatedAt: entry.updatedAt, thesis: 'C' })))
+          .status,
+      ).toBe(200);
+      expect(
+        (await send(test, path, json('PUT', { ...ENTRY, expectedUpdatedAt: entry.updatedAt, thesis: 'D' })))
+          .status,
+      ).toBe(409);
+      expect((await detail(test, position.ref)).journal[0]).toMatchObject({ thesis: 'C' });
+    });
+  });
+});

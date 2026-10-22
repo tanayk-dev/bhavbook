@@ -5,7 +5,7 @@ import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/rea
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAX_SCREENSHOT_BYTES, microToRupees, positionRefOf, ScreenshotError, toWebp } from '@/lib/journal';
+import { MAX_SCREENSHOT_BYTES, microToRupees, positionRefOf, toWebp } from '@/lib/journal';
 import { routeTree } from '@/routeTree.gen';
 import { stubServer, type Routes } from './server';
 
@@ -63,6 +63,9 @@ function server() {
     deleted: [] as string[],
     merged: [] as unknown[],
     issues: [] as Record<string, unknown>[],
+    ensured: 0,
+    /** The next save answers this error. */
+    failSave: null as string | null,
   };
   const routes: Routes = {
     'GET /api/issues/summary': () => ({ body: { open: state.issues.length, byKind: {} } }),
@@ -88,7 +91,17 @@ function server() {
         journal: state.journal,
       },
     }),
+    [`POST /api/positions/${REF}/journal/entry`]: () => {
+      state.ensured += 1;
+      if (state.journal.length === 0) state.journal = [entry()];
+      return { body: { id: state.journal[0]?.id } };
+    },
     [`PUT /api/positions/${REF}/journal`]: (body) => {
+      if (state.failSave !== null) {
+        const error = state.failSave;
+        state.failSave = null;
+        return { status: 409, body: { error } };
+      }
       state.saved.push(body);
       if (state.journal.length === 0) state.journal = [entry()];
       return { body: { id: state.journal[0]?.id } };
@@ -171,6 +184,9 @@ describe('amounts, references and the WebP conversion', () => {
   it('shows stored amounts as rupees and names positions as the server does', () => {
     expect(microToRupees(95_000_000n)).toBe('95');
     expect(microToRupees(1_234_500_000n)).toBe('1234.50');
+    expect(microToRupees(100_123_456n)).toBe('100.123456');
+    expect(microToRupees(5_000n)).toBe('0.005');
+    expect(microToRupees(0n)).toBe('0');
     expect(microToRupees(null)).toBe('');
     expect(positionRefOf('a|b#c')).toBe(Buffer.from('a|b#c').toString('base64url'));
     expect(positionRefOf('ç|é')).toBe(Buffer.from('ç|é').toString('base64url'));
@@ -185,17 +201,34 @@ describe('amounts, references and the WebP conversion', () => {
     expect(toBlob.mock.calls.map((call) => call[2])).toEqual([0.85, 0.7, 0.55]);
   });
 
-  it('refuses a browser without WebP, an image that never fits, and a file that is not an image', async () => {
+  it('refuses a browser without WebP', async () => {
     stubCanvas([10], 'image/png');
-    await expect(toWebp(new Blob(['x']))).rejects.toThrow(ScreenshotError);
-    vi.restoreAllMocks();
+    await expect(toWebp(new Blob(['x']))).rejects.toMatchObject({ reason: 'no_webp' });
+  });
+
+  it('refuses an image that never fits in 1 MB', async () => {
     stubCanvas([2 * MAX_SCREENSHOT_BYTES]);
     await expect(toWebp(new Blob(['x']))).rejects.toMatchObject({ reason: 'too_large' });
+  });
+
+  it('refuses a file that is not an image, one with too many pixels, and a failed encode', async () => {
     vi.stubGlobal(
       'createImageBitmap',
       vi.fn(() => Promise.reject(new Error('bad'))),
     );
     await expect(toWebp(new Blob(['x']))).rejects.toMatchObject({ reason: 'not_an_image' });
+    const close = vi.fn();
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(() => Promise.resolve({ width: 20_000, height: 20_000, close })),
+    );
+    await expect(toWebp(new Blob(['x']))).rejects.toMatchObject({ reason: 'too_many_pixels' });
+    expect(close).toHaveBeenCalled();
+    stubCanvas([10]);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback: BlobCallback) => {
+      callback(null);
+    });
+    await expect(toWebp(new Blob(['x']))).rejects.toMatchObject({ reason: 'encode_failed' });
   });
 });
 
@@ -213,6 +246,7 @@ describe('the journal form', () => {
     expect(await screen.findByText('Saved.')).toBeInTheDocument();
     expect(state.saved).toEqual([
       {
+        expectedUpdatedAt: null,
         setupTagId: 'tag_bo',
         mistakeTagIds: ['tag_fomo'],
         thesis: 'Breakout above 95',
@@ -278,19 +312,19 @@ describe('screenshots', () => {
       new File(['b'], 'b.jpg', { type: 'image/jpeg' }),
     ]);
     expect(await screen.findByText('Added 2 screenshots.')).toBeInTheDocument();
-    expect(state.saved).toHaveLength(1);
+    expect(state.ensured).toBe(1);
+    expect(state.saved).toEqual([]);
     expect(state.uploads).toBe(2);
-    expect(await screen.findByRole('img', { name: 'Screenshot 2' })).toHaveAttribute(
-      'src',
-      '/api/attachments/att_2',
-    );
+    expect(
+      await screen.findByRole('img', { name: 'Screenshot 2 (opens full size in a new tab)' }),
+    ).toHaveAttribute('src', '/api/attachments/att_2');
   });
 
   it('deletes one after confirming', async () => {
     const { state, routes } = server();
     state.journal = [entry({ attachments: [{ id: 'att_9', bytes: 10 }] })];
     renderAt(`/positions/${REF}`, routes);
-    await userEvent.click(await screen.findByRole('button', { name: 'Delete screenshot 1' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete Screenshot 1' }));
     await userEvent.click(screen.getByRole('button', { name: 'Delete it' }));
     expect(await screen.findByText('Deleted the screenshot.')).toBeInTheDocument();
     expect(state.deleted).toEqual(['att_9']);
@@ -352,5 +386,100 @@ describe('two entries on one position, in the inbox', () => {
     await userEvent.click(within(card).getByRole('button', { name: 'Keep both' }));
     expect(await screen.findByText('Dismissed the issue.')).toBeInTheDocument();
     expect(state.merged).toEqual(['dismiss']);
+  });
+});
+
+describe('journal safety (S14a-3b review)', () => {
+  it('sends an untouched finer amount back exactly, even on a closed position', async () => {
+    const { state, routes } = server();
+    state.position = position({ state: 'CLOSED', closedAtUtc: '2025-09-15T05:30:00.000Z', openQty: '0' });
+    state.journal = [entry({ initialStopMicro: '100123456', plannedRiskMicro: '5000' })];
+    renderAt(`/positions/${REF}`, routes);
+    expect(await screen.findByLabelText('Initial stop (₹)')).toHaveValue('100.123456');
+    await userEvent.type(screen.getByLabelText('Thesis'), 'Late note');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    expect(state.saved[0]).toMatchObject({
+      expectedUpdatedAt: '2026-10-01T05:00:00.000Z',
+      initialStopMicro: '100123456',
+      plannedRiskMicro: '5000',
+    });
+  });
+
+  it('marks the malformed amount and refuses it', async () => {
+    const { routes } = server();
+    renderAt(`/positions/${REF}`, routes);
+    const target = await screen.findByLabelText('Target (₹)');
+    await userEvent.type(target, 'abc');
+    await userEvent.click(screen.getByRole('button', { name: 'Save journal' }));
+    expect(target).toHaveAttribute('aria-invalid', 'true');
+    expect(target).toHaveAccessibleDescription(/enter rupees with at most two decimals/);
+  });
+
+  it('says so when the entry changed elsewhere since the form opened', async () => {
+    const { state, routes } = server();
+    state.failSave = 'stale';
+    renderAt(`/positions/${REF}`, routes);
+    await userEvent.type(await screen.findByLabelText('Thesis'), 'Mine');
+    await userEvent.click(screen.getByRole('button', { name: 'Save journal' }));
+    expect(await screen.findByText(/This entry changed elsewhere/)).toBeInTheDocument();
+  });
+
+  it('keeps what is typed when a screenshot creates the entry first', async () => {
+    const { state, routes } = server();
+    stubCanvas([200_000]);
+    renderAt(`/positions/${REF}`, routes);
+    await userEvent.type(await screen.findByLabelText('Thesis'), 'Typed first');
+    await userEvent.upload(
+      screen.getByLabelText('Screenshot files'),
+      new File(['a'], 'a.png', { type: 'image/png' }),
+    );
+    expect(await screen.findByText('Added the screenshot.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Thesis')).toHaveValue('Typed first');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    // The entry the screenshot created is the one saved over, with its time: not stale.
+    expect(state.saved[0]).toMatchObject({
+      expectedUpdatedAt: '2026-10-01T05:00:00.000Z',
+      thesis: 'Typed first',
+    });
+  });
+
+  it('skips files that are not images, and takes a pasted picture anywhere on the page', async () => {
+    const { state, routes } = server();
+    stubCanvas([200_000]);
+    renderAt(`/positions/${REF}`, routes);
+    const files = await screen.findByLabelText('Screenshot files');
+    await userEvent.upload(
+      files,
+      [new File(['a'], 'a.png', { type: 'image/png' }), new File(['b'], 'b.txt', { type: 'text/plain' })],
+      { applyAccept: false },
+    );
+    expect(await screen.findByText(/Skipped 1 file that is not an image/)).toBeInTheDocument();
+    screen.getByLabelText('Thesis').focus();
+    await userEvent.paste({
+      files: [new File(['c'], 'c.png', { type: 'image/png' })],
+    } as unknown as DataTransfer);
+    await waitFor(() => {
+      expect(state.uploads).toBe(2);
+    });
+  });
+
+  it('explains when the colliding entries cannot be read', async () => {
+    const { state, routes } = server();
+    state.issues = [
+      {
+        id: 'i-col',
+        kind: 'journal_collision',
+        status: 'open',
+        accountId: 'a1',
+        accountNickname: 'Z main',
+        broker: 'zerodha',
+        createdAt: '2026-10-21T06:00:00.000Z',
+        subject: { positionId: 'gone', journalEntryIds: ['jnl_1', 'jnl_2'] },
+      },
+    ];
+    renderAt('/issues', routes);
+    expect(await screen.findByText(/The entries could not be read/)).toBeInTheDocument();
   });
 });

@@ -230,6 +230,7 @@ export interface JournalEntry {
   readonly reviewNote: string | null;
   readonly reviewedAt: string | null;
   readonly createdAt: string;
+  readonly updatedAt: string;
   readonly attachments: readonly { readonly id: string; readonly bytes: number }[];
 }
 
@@ -247,6 +248,7 @@ function journalEntry(value: unknown): JournalEntry {
     reviewNote: strOrNull(row.reviewNote),
     reviewedAt: instantOrNull(row.reviewedAt),
     createdAt: instant(row.createdAt),
+    updatedAt: instant(row.updatedAt),
     attachments: list(row.attachments).map((entry) => {
       const attachment = record(entry);
       return { id: str(attachment.id), bytes: num(attachment.bytes) };

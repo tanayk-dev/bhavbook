@@ -439,7 +439,7 @@ function Position({ detail }: { readonly detail: PositionDetail }) {
         </h2>
         {/* Keyed by the position: the first save creates the entry, and the form keeps what was typed. */}
         <JournalForm key={position.ref} detail={detail} />
-        <Screenshots positionRef={position.ref} entry={detail.journal[0] ?? null} />
+        <Screenshots key={position.ref} positionRef={position.ref} entry={detail.journal[0] ?? null} />
       </section>
       <Lots detail={detail} />
       <Fills detail={detail} />

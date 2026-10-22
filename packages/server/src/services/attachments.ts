@@ -1,7 +1,8 @@
 // Journal screenshots (PRD §3.3, ADR-0020; plan S14a). The browser re-encodes every image to WebP through a canvas,
 // which drops EXIF and location data, and keeps it within 1 MB. The server trusts none of that: it accepts only a
 // still WebP of at most 1 MB made of the chunks a canvas writes (an optional VP8X header first, an optional colour
-// profile and alpha, exactly one image), with no metadata declared or present, and stores it as a BLOB.
+// profile and alpha, exactly one image), with no metadata declared or present, and stores it as a BLOB. Screenshots are not journal
+// text: adding or deleting one leaves the entry's `updated_at` alone, so an open journal form never goes stale.
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { ActionError } from './errors.js';
@@ -13,7 +14,10 @@ const HEADER_BYTES = 12;
 const CHUNK_HEADER_BYTES = 8;
 /** Image data: a still WebP has exactly one of these. */
 const IMAGE_CHUNKS = new Set(['VP8 ', 'VP8L']);
-/** What may sit beside it (VP8X only first). Anything else, animation and unknown chunks included, is refused. */
+/**
+ * What may sit beside it (VP8X only first): alpha, and a colour profile, which Chromium's canvas encoder writes
+ * (its sRGB profile, nothing personal; checked by the E2E). Anything else is refused: animation, unknown chunks.
+ */
 const SIDE_CHUNKS = new Set(['VP8X', 'ICCP', 'ALPH']);
 /** Metadata chunks: never stored (they carry camera, time and location details). */
 const METADATA_CHUNKS = new Set(['EXIF', 'XMP ']);
@@ -94,7 +98,6 @@ export function addAttachment(
     db.prepare(
       "INSERT INTO attachment (id, journal_entry_id, mime, data, created_at) VALUES (?, ?, 'image/webp', ?, ?)",
     ).run(id, entryId, Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), at);
-    db.prepare('UPDATE journal_entry SET updated_at = ? WHERE id = ?').run(at, entryId);
     return id;
   });
 }
@@ -107,14 +110,12 @@ export function readAttachment(db: Database.Database, id: string): Uint8Array<Ar
   return new Uint8Array(data);
 }
 
-export function deleteAttachment(db: Database.Database, id: string, options: AttachmentOptions = {}): void {
-  const at = (options.now?.() ?? new Date()).toISOString();
+export function deleteAttachment(db: Database.Database, id: string): void {
   write(db, () => {
     const entry: unknown = db
       .prepare('DELETE FROM attachment WHERE id = ? RETURNING journal_entry_id')
       .pluck()
       .get(id);
     if (typeof entry !== 'string') throw new ActionError('no such screenshot', { code: 'not_found' });
-    db.prepare('UPDATE journal_entry SET updated_at = ? WHERE id = ?').run(at, entry);
   });
 }

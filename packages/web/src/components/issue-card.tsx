@@ -47,7 +47,7 @@ const GENERIC: Readonly<Record<string, string>> = {
   journal_unattached:
     'The trade a journal entry was written for is no longer imported. The entry is kept; re-import the trade to bring it back.',
   journal_collision:
-    'Two journal entries now belong to the same position (older history joined them). Keep one, filling its gaps from the other, or keep both.',
+    'Two journal entries now belong to the same position (older history joined them). Merge them into the one you choose (its values win; empty fields, including an initial stop, are filled from the other; notes are joined; tags and screenshots move over), or keep both.',
   fees_unrated:
     'Some trades fall before the charge rules BhavBook ships, so their charges are unknown, not guessed.',
   charges_unattached: 'Charges of shares a corporate action cashed out have no position left to sit on.',
@@ -413,8 +413,12 @@ function Actions({
 }
 
 /** The start of an entry's thesis, to tell two apart. */
-const preview = (text: string | null): string =>
-  text === null ? 'no thesis' : text.length > 80 ? `“${text.slice(0, 80)}…”` : `“${text}”`;
+const preview = (text: string | null): string => {
+  if (text === null) return 'no thesis';
+  // By user-perceived character, so an emoji is never cut in half.
+  const characters = Array.from(new Intl.Segmenter().segment(text), (part) => part.segment);
+  return characters.length > 80 ? `“${characters.slice(0, 80).join('')}…”` : `“${text}”`;
+};
 
 /** Two entries on one position: merge into the one chosen, or keep both (dismiss). */
 function Collision({ issue, busy, ...outcome }: FixProps) {
@@ -452,6 +456,15 @@ function Collision({ issue, busy, ...outcome }: FixProps) {
           </Link>
         )}
       </p>
+      {issue.status === 'open' && detail.isPending ? (
+        <p className="text-sm text-ink-muted">Reading the two entries…</p>
+      ) : null}
+      {issue.status === 'open' && detail.isError ? (
+        <p className="text-sm text-ink-muted">
+          The entries could not be read (the position may have been rebuilt). Keep both, or open the position
+          from the review queue.
+        </p>
+      ) : null}
       {issue.status === 'open' && entries.length > 1 ? (
         <fieldset className="space-y-1">
           <legend className="text-sm font-medium">Keep which entry?</legend>
