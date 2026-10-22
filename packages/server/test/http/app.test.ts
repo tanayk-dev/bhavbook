@@ -7,19 +7,6 @@ import { withTempDir } from '../vault/helpers.js';
 import { send, testApp, TOKEN } from './helpers.js';
 
 describe('route tree', () => {
-  it.each([['GET', '/api/analytics/summary']])(
-    '%s %s answers 501 until its step implements it',
-    async (method, target) => {
-      const response = await send(testApp(), target, {
-        method,
-        body: method === 'GET' ? undefined : '{}',
-        headers: { 'content-type': 'application/json' },
-      });
-      expect(response.status).toBe(501);
-      expect(await response.json()).toEqual({ error: 'not_implemented' });
-    },
-  );
-
   it('reports the vault schema version', async () => {
     await withTempDir(async (dir) => {
       const db = openVault(path.join(dir, 'vault.db'), { appVersion: 'test' });

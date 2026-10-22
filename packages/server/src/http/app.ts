@@ -1,7 +1,7 @@
 // The local HTTP app (ADR-0001, ADR-0002). Middleware order is the security contract:
 //   1. hardening headers + request log (route pattern, status, timing only)
 //   2. Host/Origin allowlist, then the session token (launch URL -> cookie)
-//   3. routes: the typed /api tree (501 until each step implements its service), then the web build
+//   3. routes: the typed /api tree, then the web build
 // Errors never echo bodies, messages or cell values (ADR-0019).
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
@@ -33,6 +33,7 @@ import { adjustmentInputSchema } from '../services/adjustments.js';
 import { ActionError, type ActionErrorCode } from '../services/errors.js';
 import { corporateActionInputSchema, listCorporateActions } from '../services/corporate-actions.js';
 import { diagnostics } from '../services/diagnostics.js';
+import { analytics, analyticsFilterSchema } from '../services/analytics.js';
 import {
   applyCorporateActionAndRecompute,
   previewCorporateActionInVault,
@@ -140,8 +141,6 @@ const CLIENT_ERRORS: ReadonlyMap<number, readonly [string, ErrorStatus]> = new M
   [413, ['payload_too_large', 413]],
   [415, ['unsupported_media_type', 415]],
 ]);
-
-const notImplemented = (): Response => error('not_implemented', 501);
 
 const idParam = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/) });
 const refParam = z.object({ ref: positionRefSchema });
@@ -671,7 +670,9 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
           return response;
         }),
       )
-      .get('/analytics/summary', notImplemented)
+      .get('/analytics', query(analyticsFilterSchema), (c) =>
+        withVault(live, (db) => jsonResponse(analytics(db, c.req.valid('query')))),
+      )
   );
 }
 
