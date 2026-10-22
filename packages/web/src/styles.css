@@ -14,6 +14,11 @@
   --ink-muted: #6b6f76;
   --accent-ink: #1f5a8a;
   --gain: #1e7a46;
+  /* Chart polarity (ADR-0028): green gain and red loss, stepped apart in lightness so they stay distinct for colour
+     vision deficiencies (dataviz validator: all checks pass on this surface). Text keeps --gain / --loss. */
+  --chart-gain: #15643a;
+  --chart-loss: #e8765f;
+  --chart-neutral: #f0efec;
   --loss: #b42318;
   --attention: #7a5c00;
   --reconciled: #1f5a8a;
@@ -48,6 +53,9 @@
   --ink-muted: #9ba0a6;
   --accent-ink: #8bb8e8;
   --gain: #5cc48a;
+  --chart-gain: #4aa874;
+  --chart-loss: #c4513f;
+  --chart-neutral: #383835;
   --loss: #f07a6e;
   --attention: #d9b44a;
   --reconciled: #8bb8e8;
