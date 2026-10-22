@@ -1,7 +1,8 @@
 // Journal entries and reviews (PRD §5.3, §10.1; plan S14a). An entry is created on a position's first save, anchored
 // to the fill that opened the position (its `anchor_key`), and attached right away; after every recompute it follows
 // whichever position holds that fill (S10c). Drafts work on open positions. Once a position has closed its initial
-// stop is fixed: R is measured against the stop as planned, never one moved after the outcome is known (Q11).
+// stop is fixed if one was recorded: R is measured against the stop as planned, never one moved after the outcome
+// is known (Q11). An empty one can still be filled in once, for traders who journal after the close (ADR-0027).
 // Reviewing marks a closed position's entries reviewed (creating an empty entry if it has none); reopening clears it.
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
@@ -147,7 +148,12 @@ export function saveJournal(
     const entry = entryFor(db, positionId, input, at);
     if (entry === null) throw new ActionError('the journal entry could not be created');
     const initialStop = amount(input.initialStopMicro);
-    if (position.state === 'CLOSED' && initialStop !== entry.initialStopMicro) {
+    // Closed: a recorded stop stays; an empty one may be filled in (ADR-0027).
+    if (
+      position.state === 'CLOSED' &&
+      entry.initialStopMicro !== null &&
+      initialStop !== entry.initialStopMicro
+    ) {
       throw new ActionError('the initial stop is fixed once the position closes', { code: 'conflict' });
     }
     db.prepare(

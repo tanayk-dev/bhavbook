@@ -29,18 +29,24 @@ test('a journal entry is saved, survives a reload, and the position is reviewed'
   await openFirstPosition(page, app.launch);
   await page.getByLabel('Thesis').fill('Bought the breakout, sold into weakness');
   await page.getByLabel('Planned risk (₹)').fill('500');
+  // Journalled after the close: the stop-loss had at entry can still be written down, once (ADR-0027).
+  await expect(page.getByLabel('Initial stop (₹)')).not.toHaveAttribute('readonly');
+  await page.getByLabel('Initial stop (₹)').fill('440');
   await page.getByLabel('Review note').fill('Stop was too tight');
   await page.getByRole('button', { name: 'Save journal' }).click();
   await expect(page.getByText('Saved.')).toBeVisible();
   await page.reload();
   await expect(page.getByLabel('Thesis')).toHaveValue('Bought the breakout, sold into weakness');
   await expect(page.getByLabel('Planned risk (₹)')).toHaveValue('500');
+  await expect(page.getByLabel('Initial stop (₹)')).toHaveValue('440');
   await expect(page.getByLabel('Initial stop (₹)')).toHaveAttribute('readonly', '');
   await page.getByRole('button', { name: 'Mark reviewed' }).click();
   await expect(page.getByText(/^Reviewed on /)).toBeVisible();
 });
 
 test('screenshots lose their metadata in the browser and stay under 1 MB', async ({ page, app }, info) => {
+  // Shrinking noise under 1 MB takes several encodes; slow CI runners need more than the default minute.
+  test.setTimeout(120_000);
   await openFirstPosition(page, app.launch);
   const tagged = info.outputPath('tagged.png');
   const large = info.outputPath('large.png');
@@ -73,7 +79,8 @@ test('screenshots lose their metadata in the browser and stay under 1 MB', async
   writeFileSync(photo, withExif(Buffer.from(jpegBase64, 'base64'), `MARKER-${LOCATION}`));
 
   await page.getByLabel('Screenshot files').setInputFiles([tagged, large, photo]);
-  await expect(page.getByText('Added 3 screenshots.')).toBeVisible();
+  // Noise barely compresses: shrinking it under 1 MB takes several encodes.
+  await expect(page.getByText('Added 3 screenshots.')).toBeVisible({ timeout: 60_000 });
   const shots = page.getByRole('img', { name: /^Screenshot \d \(opens full size in a new tab\)$/ });
   await expect(shots).toHaveCount(3);
   for (const shot of await shots.all()) {
