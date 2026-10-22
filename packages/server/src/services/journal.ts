@@ -6,6 +6,8 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
+import { recompute, type RecomputeOptions } from '../recompute/index.js';
+import { JOURNAL_COLLISION } from '../recompute/types.js';
 import { write } from './profiles.js';
 import { ActionError } from './errors.js';
 import { journalOf, positionById, positionIdOf } from './positions.js';
@@ -172,4 +174,104 @@ export function setReviewed(
          AND (reviewed_at IS NULL) = ?`,
     ).run(reviewed ? at : null, at, positionId, reviewed ? 1n : 0n);
   });
+}
+
+export const mergeSchema = z.object({ intoId: z.string().regex(ID) }).strict();
+
+interface MergeRow {
+  readonly id: string;
+  readonly setup_tag_id: string | null;
+  readonly thesis: string | null;
+  readonly initial_stop_micro: bigint | null;
+  readonly planned_stop_micro: bigint | null;
+  readonly planned_target_micro: bigint | null;
+  readonly planned_risk_micro: bigint | null;
+  readonly review_note: string | null;
+  readonly reviewed_at: string | null;
+}
+
+const firstSet = <T>(values: readonly (T | null)[]): T | null =>
+  values.find((value) => value !== null) ?? null;
+
+/** Distinct texts, the kept entry's first, separated by a blank line. */
+const joined = (values: readonly (string | null)[]): string | null => {
+  const texts = [...new Set(values.filter((value): value is string => value !== null))];
+  return texts.length === 0 ? null : texts.join('\n\n');
+};
+
+/**
+ * Merges the entries of a `journal_collision` issue into the one the user keeps (PRD §10.1 "merge or keep both";
+ * keeping both is dismissing the issue). The kept entry's values win; its empty fields take the others' values,
+ * notes are joined, tags and screenshots move over, and it stays reviewed only if every entry was. The others are
+ * deleted (the user's choice, never a recompute's), then the account is recomputed, which resolves the issue.
+ */
+export function mergeCollision(
+  db: Database.Database,
+  issueId: string,
+  intoId: string,
+  options: JournalOptions & RecomputeOptions = {},
+): void {
+  const at = (options.now?.() ?? new Date()).toISOString();
+  write(db, () => {
+    const issue = db
+      .prepare("SELECT account_id, subject_json FROM issue WHERE id = ? AND kind = ? AND status = 'open'")
+      .get(issueId, JOURNAL_COLLISION) as { account_id: string | null; subject_json: string } | undefined;
+    if (issue?.account_id == null) throw new ActionError('no such open collision', { code: 'not_found' });
+    const ids = collisionEntries(issue.subject_json);
+    if (!ids.includes(intoId))
+      throw new ActionError('the entry is not one of the collision', { code: 'invalid' });
+    const read = db.prepare(
+      `SELECT id, setup_tag_id, thesis, initial_stop_micro, planned_stop_micro, planned_target_micro,
+         planned_risk_micro, review_note, reviewed_at FROM journal_entry WHERE id = ?`,
+    );
+    // The kept entry first, so its values win.
+    const rows = [intoId, ...ids.filter((id) => id !== intoId)]
+      .map((id) => read.get(id) as MergeRow | undefined)
+      .filter((row): row is MergeRow => row !== undefined);
+    const others = rows.slice(1).map((row) => row.id);
+    if (rows[0]?.id !== intoId || others.length === 0) {
+      throw new ActionError('the collision has changed', { code: 'conflict' });
+    }
+    const reviews = rows.map((row) => row.reviewed_at);
+    const reviewedAt = reviews.every((review) => review !== null)
+      ? ([...reviews].sort().at(-1) ?? null)
+      : null;
+    db.prepare(
+      `UPDATE journal_entry SET setup_tag_id = ?, thesis = ?, initial_stop_micro = ?, planned_stop_micro = ?,
+         planned_target_micro = ?, planned_risk_micro = ?, review_note = ?, reviewed_at = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(
+      firstSet(rows.map((row) => row.setup_tag_id)),
+      joined(rows.map((row) => row.thesis)),
+      firstSet(rows.map((row) => row.initial_stop_micro)),
+      firstSet(rows.map((row) => row.planned_stop_micro)),
+      firstSet(rows.map((row) => row.planned_target_micro)),
+      firstSet(rows.map((row) => row.planned_risk_micro)),
+      joined(rows.map((row) => row.review_note)),
+      reviewedAt,
+      at,
+      intoId,
+    );
+    for (const other of others) {
+      db.prepare(
+        'INSERT OR IGNORE INTO journal_tag (journal_entry_id, tag_id) SELECT ?, tag_id FROM journal_tag WHERE journal_entry_id = ?',
+      ).run(intoId, other);
+      db.prepare('UPDATE attachment SET journal_entry_id = ? WHERE journal_entry_id = ?').run(intoId, other);
+      db.prepare('DELETE FROM journal_entry WHERE id = ?').run(other);
+    }
+    recompute(db, issue.account_id, options);
+  });
+}
+
+function collisionEntries(subjectJson: string): string[] {
+  try {
+    const subject: unknown = JSON.parse(subjectJson);
+    const ids =
+      typeof subject === 'object' && subject !== null
+        ? (subject as { journalEntryIds?: unknown }).journalEntryIds
+        : undefined;
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
 }
