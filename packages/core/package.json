@@ -10,7 +10,8 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./money": "./src/money/index.ts"
+    "./money": "./src/money/index.ts",
+    "./ratio": "./src/analytics/ratio.ts"
   },
   "scripts": {
     "typecheck": "tsc -p . --noEmit"

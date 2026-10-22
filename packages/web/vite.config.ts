@@ -10,5 +10,13 @@ export default defineConfig({
   plugins: [tanstackRouter({ target: 'react', autoCodeSplitting: true }), react(), tailwindcss()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   // Every asset ships as a file: the CSP has no data: fonts (packages/server/src/http/security.ts).
-  build: { outDir: 'dist', emptyOutDir: true, sourcemap: false, assetsInlineLimit: 0 },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    sourcemap: false,
+    assetsInlineLimit: 0,
+    // The ECharts chunk (about 600 kB, 200 kB gzipped) loads only with the dashboard's charts; the app's own chunks
+    // stay well under the default limit.
+    chunkSizeWarningLimit: 650,
+  },
 });

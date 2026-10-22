@@ -7,7 +7,39 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { routeTree } from '@/routeTree.gen';
 import { stubServer, type Routes } from './server';
 
-const VAULT = { 'GET /api/vault': { body: { schemaVersion: 3 } } };
+const NO_TRADES = {
+  breakevenMicro: '0',
+  includeIncomplete: false,
+  summary: {
+    trades: 0,
+    wins: 0,
+    losses: 0,
+    breakevens: 0,
+    grossMicro: '0',
+    chargesMicro: '0',
+    netMicro: '0',
+    estimated: false,
+    winRate: null,
+    expectancy: null,
+    avgWinner: null,
+    avgLoser: null,
+    profitFactor: null,
+    avgR: null,
+    rTrades: 0,
+    avgHoldingDays: null,
+    excluded: { incomplete: 0, excluded: 0, noStop: 0 },
+  },
+  days: [],
+  months: [],
+  bySetup: [],
+  byMistake: [],
+  mistakeCost: [],
+};
+// The Overview's dashboard: an empty vault has no trades yet.
+const VAULT = {
+  'GET /api/vault': { body: { schemaVersion: 3 } },
+  'GET /api/analytics': { body: NO_TRADES },
+};
 const ONE_ACCOUNT = {
   ...VAULT,
   'GET /api/profiles': {

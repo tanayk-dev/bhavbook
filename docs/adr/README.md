@@ -31,3 +31,4 @@ Decisions for BhavBook. The product context is in [`../product/PRD.md`](../produ
 | [0025](0025-analytics-definitions.md) | Analytics units and R-multiple definition | accepted | 2026-10-19 |
 | [0026](0026-license-mit.md) | MIT licence | accepted | 2026-10-19 |
 | [0027](0027-initial-stop-fill-once-after-close.md) | An empty initial stop can be filled in once after the close | accepted | 2026-10-22 |
+| [0028](0028-dashboard-charts-on-echarts.md) | Dashboard charts drawn with ECharts on EvilCharts' base | accepted | 2026-10-22 |
