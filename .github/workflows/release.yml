@@ -1,0 +1,102 @@
+name: release
+
+# Publishes `bhavbook` to npm when a version tag (v1.2.3) is pushed on a commit of `main` whose
+# packages/cli/package.json has that version. Two jobs (docs/releasing.md):
+#   - check: verify, pack, install and run `bhavbook doctor`, with no secret and no publish rights;
+#   - publish: in the `npm-publish` environment, publishes that tarball with provenance and nothing else.
+# Publishing uses npm trusted publishing (OIDC, no stored token); only the very first publish uses a short-lived
+# NPM_TOKEN secret. Actions are pinned to commits.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The tagged commit is on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag $GITHUB_REF_NAME is not on main: releases are cut from main only" >&2
+            exit 1
+          fi
+
+      - name: The tag matches the package version
+        run: |
+          version=$(node -p "require('./packages/cli/package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match packages/cli/package.json version $version" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable pnpm via corepack (version from package.json packageManager)
+        run: corepack enable
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify
+        run: pnpm verify
+
+      - name: Pack, install and check with npx bhavbook doctor
+        run: node scripts/e2e-packed.mjs
+
+      - name: Pack the release tarball
+        run: node scripts/pack-cli.mjs .pack
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package
+          path: .pack/bhavbook-*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    # Required reviewers and a v* tag policy are set on this environment in the repository settings.
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # .nvmrc's version: this job checks out nothing.
+          node-version: 24.22.0
+          registry-url: https://registry.npmjs.org
+
+      - name: npm supports trusted publishing (11.5.1 or newer)
+        run: |
+          node -e "const [a,b,c]=process.argv[1].split('.').map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)" "$(npm --version)" \
+            || { echo "npm $(npm --version) is too old for trusted publishing" >&2; exit 1; }
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: package
+
+      - name: Publish with provenance
+        run: npm publish "package/bhavbook-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
+        env:
+          # Only for the first publish (docs/releasing.md); remove this line once trusted publishing is set up.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -13,12 +13,10 @@ export interface Migration {
   readonly sql: string;
 }
 
-export const MIGRATIONS_DIR = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  'migrations',
-);
+/** `packages/server/migrations` from source; `migrations/` beside the bundle in the installed CLI (S16). */
+export const MIGRATIONS_DIR = /\.[cm]?tsx?$/.test(import.meta.url)
+  ? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'migrations')
+  : fileURLToPath(new URL('./migrations/', import.meta.url));
 const FILE_PATTERN = /^(\d{4})_([a-z0-9_]+)\.sql$/;
 
 /** Reads `NNNN_name.sql` files; versions must start at 1 and have no gaps. */

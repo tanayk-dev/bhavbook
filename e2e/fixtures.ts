@@ -1,4 +1,5 @@
 // A BhavBook process per test (a fresh vault each time): the CLI on a temporary vault, `--no-open`, its launch URL read from stdout.
+// The CLI runs from source, or from an installed package when BHAVBOOK_BIN names its bundle (scripts/e2e-packed.mjs).
 // Its stderr (one log line per request) is drained continuously, so the pipe never fills, and kept for diagnosis
 // when startup fails.
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -53,11 +54,12 @@ export const test = base.extend<{ app: App }>({
     // eslint-disable-next-line no-empty-pattern
     async ({}, use) => {
       const dir = mkdtempSync(path.join(tmpdir(), 'bhavbook-e2e-'));
-      const child = spawn(
-        process.execPath,
-        ['--import', 'tsx', 'packages/cli/src/index.ts', '--vault', path.join(dir, 'vault.db'), '--no-open'],
-        { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] },
-      );
+      const installed = process.env.BHAVBOOK_BIN;
+      const cli = installed === undefined ? ['--import', 'tsx', 'packages/cli/src/index.ts'] : [installed];
+      const child = spawn(process.execPath, [...cli, '--vault', path.join(dir, 'vault.db'), '--no-open'], {
+        cwd: ROOT,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
       let stderr = '';
       child.stderr.on('data', (chunk: Buffer) => {
         stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_KEPT);
