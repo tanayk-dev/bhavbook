@@ -31,7 +31,19 @@ import {
 import { breakevenSchema, readSettings, setBreakeven } from '../services/settings.js';
 import { adjustmentInputSchema } from '../services/adjustments.js';
 import { ActionError, type ActionErrorCode } from '../services/errors.js';
-import { journalInputSchema, saveJournal, setReviewed } from '../services/journal.js';
+import {
+  addAttachment,
+  deleteAttachment,
+  MAX_ATTACHMENT_BYTES,
+  readAttachment,
+} from '../services/attachments.js';
+import {
+  journalInputSchema,
+  mergeCollision,
+  mergeSchema,
+  saveJournal,
+  setReviewed,
+} from '../services/journal.js';
 import {
   listPositions,
   positionDetail,
@@ -164,6 +176,20 @@ function upload() {
   return [
     contentType,
     bodyLimit({ maxSize: MAX_BACKUP_BYTES, onError: () => error('payload_too_large', 413) }),
+  ] as const;
+}
+
+/** A journal screenshot: WebP only (the browser re-encodes every image), at most 1 MB. */
+function webpUpload() {
+  const contentType: MiddlewareHandler = async (c, next) => {
+    const type = c.req.header('content-type') ?? '';
+    if (!/^image\/webp(;|$)/i.test(type)) return error('unsupported_media_type', 415);
+    await next();
+    return undefined;
+  };
+  return [
+    contentType,
+    bodyLimit({ maxSize: MAX_ATTACHMENT_BYTES, onError: () => error('payload_too_large', 413) }),
   ] as const;
 }
 
@@ -459,6 +485,12 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
             return c.json({ id }, 201);
           }),
       )
+      .post('/issues/:id/merge', params(idParam), ...json(mergeSchema, SMALL_JSON_BYTES), (c) =>
+        withAction(live, (db) => {
+          mergeCollision(db, c.req.valid('param').id, c.req.valid('json').intoId);
+          return c.json({ ok: true });
+        }),
+      )
       .post('/adjustments/:id/revert', params(idParam), (c) =>
         withAction(live, (db) => {
           revertAndRecompute(db, c.req.valid('param').id);
@@ -493,6 +525,28 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
       .post('/positions/:ref/review', params(refParam), (c) =>
         withAction(live, (db) => {
           setReviewed(db, c.req.valid('param').ref, true);
+          return c.json({ ok: true });
+        }),
+      )
+      .post('/journal/:id/attachments', params(idParam), ...webpUpload(), async (c) => {
+        // Read first (within the body limit): the action itself is synchronous, so its errors map to codes.
+        const bytes = new Uint8Array(await c.req.arrayBuffer());
+        return withAction(live, (db) =>
+          c.json({ id: addAttachment(db, c.req.valid('param').id, bytes) }, 201),
+        );
+      })
+      .get('/attachments/:id', params(idParam), (c) =>
+        withAction(
+          live,
+          (db) =>
+            new Response(readAttachment(db, c.req.valid('param').id), {
+              headers: { 'Content-Type': 'image/webp' },
+            }),
+        ),
+      )
+      .delete('/attachments/:id', params(idParam), (c) =>
+        withAction(live, (db) => {
+          deleteAttachment(db, c.req.valid('param').id);
           return c.json({ ok: true });
         }),
       )
