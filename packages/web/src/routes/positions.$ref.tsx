@@ -1,10 +1,12 @@
 // The position detail (PRD §4, §5.2; plan S14a): what the position is (flags in words), its figures, the lots, every
 // fill as the broker wrote it and as BhavBook read it (declared vs assigned product), and the charges estimated vs
-// billed. A closed position can be marked reviewed or reopened here. The journal form follows in S14a-3b.
+// billed, and its journal (with screenshots). A closed position can be marked reviewed or reopened here.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useState } from 'react';
+import { JournalForm } from '@/components/journal-form';
 import { Money } from '@/components/money';
+import { Screenshots } from '@/components/screenshots';
 import { TableRegion, TOUCH } from '@/components/settings';
 import { Disconnected, EmptyState, ErrorState, LoadingRows } from '@/components/states';
 import { Button } from '@/components/ui/button';
@@ -431,6 +433,14 @@ function Position({ detail }: { readonly detail: PositionDetail }) {
       <Flags detail={detail} />
       <Figures detail={detail} />
       <Review detail={detail} />
+      <section aria-labelledby="journal" className="space-y-4">
+        <h2 id="journal" className="font-semibold">
+          Journal
+        </h2>
+        {/* Keyed by the position: the first save creates the entry, and the form keeps what was typed. */}
+        <JournalForm key={position.ref} detail={detail} />
+        <Screenshots key={position.ref} positionRef={position.ref} entry={detail.journal[0] ?? null} />
+      </section>
       <Lots detail={detail} />
       <Fills detail={detail} />
       <Charges detail={detail} />

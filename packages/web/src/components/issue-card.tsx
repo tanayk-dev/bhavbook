@@ -2,13 +2,16 @@
 // issues only; a dismissed issue can be reopened, and a resolved one is read-only. Every fix is the user's choice and
 // is recomputed on the server (ADR-0013). One action per card at a time. Amounts go through Money (formatINR),
 // dates are IST, and nothing relies on colour alone.
-import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { MapInstrumentForm, OpeningLotForm } from '@/components/issue-fixes';
 import { Money } from '@/components/money';
 import { TableRegion, TOUCH } from '@/components/settings';
 import { Button } from '@/components/ui/button';
 import { formatIstDate, istDateOf } from '@/lib/format';
+import { mergeEntries, positionRefOf } from '@/lib/journal';
+import { positionQuery } from '@/lib/positions';
 import {
   actionError,
   addAdjustment,
@@ -16,6 +19,7 @@ import {
   fifoMismatch,
   incompletePosition,
   issueAction,
+  journalCollision,
   kindLabel,
   lotSuggestion,
   subjectInstrument,
@@ -43,7 +47,7 @@ const GENERIC: Readonly<Record<string, string>> = {
   journal_unattached:
     'The trade a journal entry was written for is no longer imported. The entry is kept; re-import the trade to bring it back.',
   journal_collision:
-    'Two journal entries now belong to the same position (older history joined them). Both are kept.',
+    'Two journal entries now belong to the same position (older history joined them). Merge them into the one you choose (its values win; empty fields, including an initial stop, are filled from the other; notes are joined; tags and screenshots move over), or keep both.',
   fees_unrated:
     'Some trades fall before the charge rules BhavBook ships, so their charges are unknown, not guessed.',
   charges_unattached: 'Charges of shares a corporate action cashed out have no position left to sit on.',
@@ -365,12 +369,15 @@ function Actions({
   busy,
   error,
   children,
+  dismissLabel = 'Dismiss',
   ...outcome
 }: Outcome & {
   readonly issue: Issue;
   readonly busy: boolean;
   readonly error: unknown;
   readonly children?: ReactNode;
+  /** What dismissing means for this kind ("Keep both" for a journal collision). */
+  readonly dismissLabel?: string;
 }) {
   const dismissed = issue.status === 'dismissed';
   const toggle = useAction(
@@ -393,7 +400,7 @@ function Actions({
             toggle.mutate();
           }}
         >
-          {dismissed ? 'Reopen' : 'Dismiss'}
+          {dismissed ? 'Reopen' : dismissLabel}
         </Button>
       </div>
       {problem === null ? null : (
@@ -405,7 +412,97 @@ function Actions({
   );
 }
 
+/** The start of an entry's thesis, to tell two apart. */
+const preview = (text: string | null): string => {
+  if (text === null) return 'no thesis';
+  // By user-perceived character, so an emoji is never cut in half.
+  const characters = Array.from(new Intl.Segmenter().segment(text), (part) => part.segment);
+  return characters.length > 80 ? `“${characters.slice(0, 80).join('')}…”` : `“${text}”`;
+};
+
+/** Two entries on one position: merge into the one chosen, or keep both (dismiss). */
+function Collision({ issue, busy, ...outcome }: FixProps) {
+  const collision = journalCollision(issue.subject);
+  const ref = collision === null ? '' : positionRefOf(collision.positionId);
+  const detail = useQuery({ ...positionQuery(ref), enabled: ref !== '' && issue.status === 'open' });
+  const [into, setInto] = useState<string | null>(null);
+  const refresh = useRefresh();
+  const merge = useMutation({
+    mutationKey: ['issue', issue.id],
+    mutationFn: (intoId: string) => mergeEntries(issue.id, intoId),
+    onSuccess: async () => {
+      await refresh();
+      outcome.onDone('Merged the entries; the position has one journal entry now.');
+    },
+    onError: (error) => {
+      outcome.onFailed(actionError(error));
+    },
+  });
+  if (collision === null) return <Unreadable />;
+  const entries = (detail.data?.journal ?? []).filter((entry) =>
+    collision.journalEntryIds.includes(entry.id),
+  );
+  return (
+    <>
+      <p>
+        {GENERIC.journal_collision}{' '}
+        {ref === '' ? null : (
+          <Link
+            to="/positions/$ref"
+            params={{ ref }}
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            Open the position
+          </Link>
+        )}
+      </p>
+      {issue.status === 'open' && detail.isPending ? (
+        <p className="text-sm text-ink-muted">Reading the two entries…</p>
+      ) : null}
+      {issue.status === 'open' && detail.isError ? (
+        <p className="text-sm text-ink-muted">
+          The entries could not be read (the position may have been rebuilt). Keep both, or open the position
+          from the review queue.
+        </p>
+      ) : null}
+      {issue.status === 'open' && entries.length > 1 ? (
+        <fieldset className="space-y-1">
+          <legend className="text-sm font-medium">Keep which entry?</legend>
+          {entries.map((entry) => (
+            <label key={entry.id} className="flex items-center gap-2 text-sm">
+              <input
+                type="radio"
+                name={`keep-${issue.id}`}
+                checked={into === entry.id}
+                onChange={() => {
+                  setInto(entry.id);
+                }}
+              />
+              Written {formatIstDate(istDateOf(entry.createdAt))}: {preview(entry.thesis)}
+              {entry.reviewedAt === null ? '' : ', reviewed'}
+            </label>
+          ))}
+        </fieldset>
+      ) : null}
+      <Actions issue={issue} busy={busy} error={merge.error} dismissLabel="Keep both" {...outcome}>
+        {entries.length > 1 ? (
+          <Button
+            className={TOUCH}
+            disabled={busy || into === null}
+            onClick={() => {
+              if (into !== null) merge.mutate(into);
+            }}
+          >
+            {merge.isPending ? 'Merging…' : 'Merge into this one'}
+          </Button>
+        ) : null}
+      </Actions>
+    </>
+  );
+}
+
 const FIXES: Readonly<Record<string, (props: FixProps) => ReactNode>> = {
+  journal_collision: Collision,
   fill_from_statement: FillFromStatement,
   incomplete_position: Incomplete,
   opening_lot_redundant: RedundantLot,

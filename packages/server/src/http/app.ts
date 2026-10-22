@@ -38,6 +38,7 @@ import {
   readAttachment,
 } from '../services/attachments.js';
 import {
+  ensureEntry,
   journalInputSchema,
   mergeCollision,
   mergeSchema,
@@ -251,6 +252,7 @@ const ACTION_STATUS: Readonly<Record<Exclude<ActionErrorCode, 'failed'>, ErrorSt
   not_found: 404,
   invalid: 400,
   conflict: 409,
+  stale: 409,
 };
 
 /** Runs an issue or adjustment action; an ActionError answers its fixed code, anything else is a 500. */
@@ -521,6 +523,9 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
           withAction(live, (db) =>
             c.json({ id: saveJournal(db, c.req.valid('param').ref, c.req.valid('json')) }),
           ),
+      )
+      .post('/positions/:ref/journal/entry', params(refParam), (c) =>
+        withAction(live, (db) => c.json({ id: ensureEntry(db, c.req.valid('param').ref) })),
       )
       .post('/positions/:ref/review', params(refParam), (c) =>
         withAction(live, (db) => {

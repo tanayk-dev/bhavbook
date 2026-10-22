@@ -11,7 +11,7 @@ import { JOURNAL_COLLISION } from '../recompute/types.js';
 import { MAX_ATTACHMENTS_PER_ENTRY } from './attachments.js';
 import { write } from './profiles.js';
 import { ActionError } from './errors.js';
-import { journalOf, positionById, positionIdOf } from './positions.js';
+import { journalOf, positionById, positionIdOf, type JournalEntryView } from './positions.js';
 
 const MAX_TEXT = 10_000;
 const MAX_MISTAKES = 20;
@@ -26,6 +26,11 @@ export const journalInputSchema = z
   .object({
     /** Which of two colliding entries this edits; without one the position's only entry (or a new one). */
     entryId: z.string().regex(ID).optional(),
+    /**
+     * The entry's `updatedAt` the form started from (null: it started with no entry). A save over a newer entry
+     * (merged, reviewed or edited elsewhere) is refused as stale instead of overwriting it. Absent: no check.
+     */
+    expectedUpdatedAt: z.string().max(40).nullable().optional(),
     setupTagId: z.string().regex(ID).nullable(),
     mistakeTagIds: z.array(z.string().regex(ID)).max(MAX_MISTAKES),
     thesis: text.nullable(),
@@ -92,19 +97,39 @@ function createEntry(db: Database.Database, positionId: string, at: string): str
   return id;
 }
 
-/** The entry a save edits: the named one (attached here), the only one, or a new one. */
-function entryFor(db: Database.Database, positionId: string, entryId: string | undefined, at: string) {
+const stale = (): never => {
+  throw new ActionError('the entry changed since the form was opened', { code: 'stale' });
+};
+
+/** The entry a save edits: the named one (attached here), the only one, or a new one; refused when stale. */
+function entryFor(db: Database.Database, positionId: string, input: JournalInput, at: string) {
   const attached = journalOf(db, positionId);
-  if (entryId !== undefined) {
-    const named = attached.find((entry) => entry.id === entryId);
-    if (named === undefined) throw new ActionError('no such journal entry here', { code: 'not_found' });
-    return named;
+  const expected = input.expectedUpdatedAt;
+  let entry: JournalEntryView | undefined;
+  if (input.entryId !== undefined) {
+    entry = attached.find((candidate) => candidate.id === input.entryId);
+    if (entry === undefined) throw new ActionError('no such journal entry here', { code: 'not_found' });
+  } else {
+    if (attached.length > 1) throw new ActionError('the position has two entries', { code: 'conflict' });
+    entry = attached[0];
   }
-  if (attached.length > 1) throw new ActionError('the position has two entries', { code: 'conflict' });
-  const [only] = attached;
-  if (only !== undefined) return only;
+  if (expected !== undefined && (entry?.updatedAt ?? null) !== expected) return stale();
+  if (entry !== undefined) return entry;
   const id = createEntry(db, positionId, at);
-  return journalOf(db, positionId).find((entry) => entry.id === id) ?? null;
+  return journalOf(db, positionId).find((candidate) => candidate.id === id) ?? null;
+}
+
+/**
+ * The position's journal entry, created empty if it has none; never changes an existing one. Screenshots need an
+ * entry to belong to, and must not overwrite what the form saved. With two colliding entries, the older.
+ */
+export function ensureEntry(db: Database.Database, ref: string, options: JournalOptions = {}): string {
+  const at = (options.now?.() ?? new Date()).toISOString();
+  const positionId = positionIdOf(ref);
+  return write(db, () => {
+    positionById(db, positionId);
+    return journalOf(db, positionId)[0]?.id ?? createEntry(db, positionId, at);
+  });
 }
 
 /** Saves a position's journal entry (creating it on first save); returns its id. */
@@ -119,7 +144,7 @@ export function saveJournal(
   return write(db, () => {
     const position = positionById(db, positionId);
     checkTags(db, input);
-    const entry = entryFor(db, positionId, input.entryId, at);
+    const entry = entryFor(db, positionId, input, at);
     if (entry === null) throw new ActionError('the journal entry could not be created');
     const initialStop = amount(input.initialStopMicro);
     if (position.state === 'CLOSED' && initialStop !== entry.initialStopMicro) {

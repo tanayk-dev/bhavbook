@@ -94,6 +94,16 @@ describe('what counts as a screenshot', () => {
       ),
     ).toBe('has_metadata');
     expect(webpProblem(webp([['ICCP', new Uint8Array(4)]]))).toBe('not_webp');
+    // A colour profile beside a picture is allowed: Chromium's canvas encoder writes its sRGB profile.
+    expect(
+      webpProblem(
+        webp([
+          ['VP8X', new Uint8Array(10)],
+          ['ICCP', new Uint8Array(8)],
+          ['VP8L', image.subarray(0, 13)],
+        ]),
+      ),
+    ).toBeNull();
     expect(webpProblem(Buffer.from('\x89PNG\r\n\x1a\n0000000000000000', 'latin1'))).toBe('not_webp');
     expect(webpProblem(PIXEL.subarray(0, 30))).toBe('not_webp');
     const lying = Uint8Array.from(PIXEL);
@@ -144,7 +154,7 @@ describe('what counts as a screenshot', () => {
       webpProblem(
         webp([
           ['VP8X', new Uint8Array(10)],
-          ['ICCP', new Uint8Array(8)],
+
           ['ALPH', new Uint8Array(3)],
           ['VP8 ', new Uint8Array(10)],
         ]),
