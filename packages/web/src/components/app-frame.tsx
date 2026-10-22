@@ -3,14 +3,15 @@
 // Touch targets grow to 44 px on the phone layout (direction §7).
 import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { BookOpen, FileUp, Inbox, Moon, Settings, Sun, type LucideIcon } from 'lucide-react';
+import { BookOpen, ClipboardCheck, FileUp, Inbox, Moon, Settings, Sun, type LucideIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { issueSummaryQuery } from '@/lib/issues';
+import { reviewCountQuery } from '@/lib/positions';
 import { applyTheme, currentTheme, safeStorage, type Theme } from '@/lib/theme';
 
 export interface NavItem {
-  readonly to: '/' | '/issues' | '/import' | '/settings';
+  readonly to: '/' | '/review' | '/issues' | '/import' | '/settings';
   readonly label: string;
   readonly icon: LucideIcon;
 }
@@ -18,22 +19,36 @@ export interface NavItem {
 /** The surfaces built so far (PRD §4); later steps add Review, Positions, Issues, Dashboard and more. */
 export const NAV: readonly NavItem[] = [
   { to: '/', label: 'Overview', icon: BookOpen },
+  { to: '/review', label: 'Review', icon: ClipboardCheck },
   { to: '/issues', label: 'Issues', icon: Inbox },
   { to: '/import', label: 'Import', icon: FileUp },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
-/** The open-issue count on the Issues link; nothing while there are none (or the count can't be read). */
-function OpenIssues() {
-  const summary = useQuery({ ...issueSummaryQuery, retry: false });
-  const open = summary.data?.open ?? 0;
-  if (open === 0) return null;
+/** A count beside a link, for the eye; the link's accessible name says it in words. */
+function Badge({ count }: { readonly count: number }) {
+  if (count === 0) return null;
   return (
-    <span className="figure ml-auto rounded-sm bg-attention/15 px-1.5 text-xs text-attention max-lg:absolute max-lg:top-0.5 max-lg:right-0.5">
-      {open.toLocaleString('en-IN')}
-      <span className="sr-only"> open</span>
+    <span
+      aria-hidden="true"
+      className="figure ml-auto rounded-sm bg-attention/15 px-1.5 text-xs text-attention max-lg:absolute max-lg:top-0.5 max-lg:right-0.5"
+    >
+      {count.toLocaleString('en-IN')}
     </span>
   );
+}
+
+/**
+ * The counts on the rail: open issues and closed positions waiting for review. Nothing while there are none (or a
+ * count can't be read).
+ */
+function useCounts(): Readonly<Partial<Record<NavItem['to'], { count: number; words: string }>>> {
+  const issues = useQuery({ ...issueSummaryQuery, retry: false });
+  const review = useQuery({ ...reviewCountQuery, retry: false });
+  return {
+    '/issues': { count: issues.data?.open ?? 0, words: 'open' },
+    '/review': { count: review.data ?? 0, words: 'to review' },
+  };
 }
 
 export function ThemeToggle() {
@@ -56,6 +71,7 @@ export function ThemeToggle() {
 }
 
 export function AppFrame({ children }: { readonly children: ReactNode }) {
+  const counts = useCounts();
   return (
     <div className="grid min-h-dvh grid-cols-[56px_1fr] grid-rows-[48px_1fr] lg:grid-cols-[224px_1fr]">
       <a
@@ -72,19 +88,26 @@ export function AppFrame({ children }: { readonly children: ReactNode }) {
       </header>
       <nav aria-label="Main" className="border-r border-rule bg-surface py-3">
         <ul className="space-y-0.5 px-2">
-          {NAV.map(({ to, label, icon: Icon }) => (
-            <li key={to}>
-              <Link
-                to={to}
-                title={label}
-                className="relative flex h-11 items-center gap-3 rounded-sm px-2 text-ink-muted hover:bg-muted hover:text-ink data-[status=active]:bg-accent data-[status=active]:text-accent-foreground lg:h-8"
-              >
-                <Icon aria-hidden="true" className="size-4 shrink-0" />
-                <span className="sr-only lg:not-sr-only">{label}</span>
-                {to === '/issues' ? <OpenIssues /> : null}
-              </Link>
-            </li>
-          ))}
+          {NAV.map(({ to, label, icon: Icon }) => {
+            const badge = counts[to];
+            const count = badge?.count ?? 0;
+            return (
+              <li key={to}>
+                <Link
+                  to={to}
+                  title={label}
+                  aria-label={
+                    count === 0 ? label : `${label}, ${count.toLocaleString('en-IN')} ${badge?.words ?? ''}`
+                  }
+                  className="relative flex h-11 items-center gap-3 rounded-sm px-2 text-ink-muted hover:bg-muted hover:text-ink data-[status=active]:bg-accent data-[status=active]:text-accent-foreground lg:h-8"
+                >
+                  <Icon aria-hidden="true" className="size-4 shrink-0" />
+                  <span className="sr-only lg:not-sr-only">{label}</span>
+                  <Badge count={count} />
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       </nav>
       <main id="main" tabIndex={-1} className="min-w-0 px-6 py-5 outline-none">

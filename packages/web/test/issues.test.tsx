@@ -204,8 +204,10 @@ describe('the inbox', () => {
     expect(await card(/Charges differ from the statement/)).toHaveTextContent('STT (whole contract note)');
     expect(await card(/Possible corporate action/)).toHaveTextContent('split, bonus');
     expect(
-      within(screen.getByRole('navigation', { name: 'Main' })).getByRole('link', { name: /Issues/ }),
-    ).toHaveTextContent('5 open');
+      await within(screen.getByRole('navigation', { name: 'Main' })).findByRole('link', {
+        name: 'Issues, 5 open',
+      }),
+    ).toBeInTheDocument();
   });
 
   it('uses the statement lot, which resolves the position too', async () => {
