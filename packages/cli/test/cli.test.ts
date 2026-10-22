@@ -105,6 +105,17 @@ describe('bhavbook (serve)', () => {
     expect(io.stdout.join('\n')).toContain(io.opened[0]);
   });
 
+  it('says the link works once', async () => {
+    const io = fakeIo({
+      onRunning: async (server) => {
+        expect((await fetch(server.url, { redirect: 'manual' })).status).toBe(302);
+        expect((await fetch(server.url, { redirect: 'manual' })).status).toBe(401);
+      },
+    });
+    expect(await main(['--vault', vault, '--port', '0'], io)).toBe(0);
+    expect(io.stdout.join('\n')).toContain('The link works once');
+  });
+
   it('uses the default vault under the home directory', async () => {
     expect(await main(['--port', '0'], fakeIo())).toBe(0);
     expect(existsSync(path.join(dir, 'BhavBook', 'vault.db'))).toBe(true);

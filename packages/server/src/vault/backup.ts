@@ -30,7 +30,14 @@ import {
   migrate,
   type Migration,
 } from './migrations.js';
-import { APPLICATION_ID, hardenConnection, referenceFingerprint, schemaFingerprint } from './schema.js';
+import {
+  APPLICATION_ID,
+  createOwnerOnly,
+  hardenConnection,
+  referenceFingerprint,
+  restrictToOwner,
+  schemaFingerprint,
+} from './schema.js';
 
 export type BackupReason = 'manual' | 'pre-import' | 'pre-undo' | 'pre-migration' | 'pre-restore';
 /** Routine auto-backups kept per vault; pre-migration backups are never rotated away. */
@@ -98,6 +105,9 @@ export function createBackup(
   if (isVaultFile(outPath, db.name))
     throw new BackupError('refusing to write a backup over the vault or its files');
   const snapshot = tempPath(outPath, 'snapshot');
+  // VACUUM INTO fills this empty, owner-only file, so the snapshot is never readable by others. Made before the
+  // `try`: should the name exist, the clean-up below must not delete a file this did not create.
+  createOwnerOnly(snapshot);
   try {
     // VACUUM INTO gives a transactionally consistent copy; the path is bound, never interpolated.
     db.prepare('VACUUM INTO ?').run(snapshot);
@@ -254,8 +264,10 @@ function rebuildFromBackup(
   migrations: readonly Migration[],
   options: BackupOptions,
 ): void {
+  if (!existsSync(target)) createOwnerOnly(target);
   const db = new Database(target);
   try {
+    restrictToOwner(target);
     hardenConnection(db);
     const now = options.now ? { now: options.now } : {};
     migrate(

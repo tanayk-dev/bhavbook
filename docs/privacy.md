@@ -40,9 +40,13 @@ treat them the same way.
 ## The local app
 
 BhavBook listens on `127.0.0.1` only, so other computers on your network cannot reach it. Each start makes a new
-random session key. The link in your terminal carries it and stays valid until BhavBook stops, so treat that link
-like a password while BhavBook runs; every request must carry the key, and requests from other websites are refused.
-When BhavBook stops, the key is gone: the next start makes a new one.
+random session key, kept in a cookie other websites cannot use. The link in your terminal does not contain the key:
+it carries a one-time code that the first browser to open it exchanges for the session, after which the link is dead.
+Every request must carry the key, and requests from other websites are refused. When BhavBook stops, the key is gone.
+
+On a computer shared with other user accounts, someone who reads the link in the moment before your browser opens it
+could use it first; you would then see "This BhavBook link has already been used". Stop and restart BhavBook: that
+makes a new link and ends their session.
 
 ## Logs
 

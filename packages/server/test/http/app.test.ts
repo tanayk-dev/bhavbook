@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { MAX_JSON_BYTES, toJson } from '../../src/http/index.js';
 import { latestVersion, loadMigrations, openVault } from '../../src/vault/index.js';
 import { withTempDir } from '../vault/helpers.js';
-import { send, testApp, TOKEN } from './helpers.js';
+import { LAUNCH, send, testApp, TOKEN } from './helpers.js';
 
 describe('route tree', () => {
   it('reports the vault schema version', async () => {
@@ -87,9 +87,10 @@ describe('logging and error policy (ADR-0019)', () => {
 
   it('logs requests as JSON lines without the query string, so the launch token never reaches the log', async () => {
     const test = testApp();
-    await send(test, `/?t=${TOKEN}`, { headers: { cookie: null } });
+    await send(test, `/?t=${LAUNCH}`, { headers: { cookie: null } });
     await send(test, '/api/positions/cG9z?secret=MARKER-55');
     const log = test.lines.join('\n');
+    expect(log).not.toContain(LAUNCH);
     expect(log).not.toContain(TOKEN);
     expect(log).not.toContain('MARKER');
     const entry = JSON.parse(test.lines.at(-1) ?? '{}') as Record<string, unknown>;

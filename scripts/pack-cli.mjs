@@ -17,6 +17,15 @@ import { run } from './shell.mjs';
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CLI = path.join(ROOT, 'packages', 'cli');
 const PNPM_STORE = path.join(ROOT, 'node_modules', '.pnpm');
+const EVILCHARTS_LICENCE = path.join(
+  ROOT,
+  'packages',
+  'web',
+  'src',
+  'components',
+  'charts',
+  'LICENSE-evilcharts',
+);
 const REPOSITORY = 'https://github.com/tanayk-dev/bhavbook/blob/main/';
 
 const pnpm = (args, cwd = ROOT) => run('pnpm', args, { cwd });
@@ -72,6 +81,8 @@ function writeNotices() {
     '## The web interface (`dist/web`)',
     viteNotices.replace(/^#/gm, '##'),
     ...webNotices(viteNotices),
+    // Source vendored into the web build: not an npm dependency, so Vite does not list it.
+    `### EvilCharts (vendored chart base, MIT)\n\n\`\`\`\n${read(EVILCHARTS_LICENCE)}\n\`\`\``,
   ];
   writeFileSync(path.join(dist, 'THIRD-PARTY-NOTICES.md'), `${sections.join('\n\n')}\n`);
 }

@@ -18,12 +18,13 @@ function age(file: string, ms: number): void {
 }
 
 describe('vault lock: review follow-ups', () => {
-  it('names the lock file in the in-use error', () => {
+  it('names the lock file in the in-use error, without the folder it is in', () => {
     withTempDir((dir) => {
       const vault = path.join(dir, 'vault.db');
       const lock = acquireVaultLock(vault);
       try {
-        expect(() => acquireVaultLock(vault)).toThrow(lockPath(vault));
+        expect(() => acquireVaultLock(vault)).toThrow(path.basename(lockPath(vault)));
+        expect(() => acquireVaultLock(vault)).not.toThrow(dir);
       } finally {
         lock.release();
       }

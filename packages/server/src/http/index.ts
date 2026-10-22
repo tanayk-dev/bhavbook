@@ -5,7 +5,10 @@ export {
   allowedHosts,
   allowedOrigins,
   checkRequest,
+  launchGate,
+  SESSION_COOKIE_MAX_AGE_S,
   sessionCookieName,
+  type LaunchGate,
   type RequestFacts,
 } from './security.js';
 export { HOSTNAME, startServer, type RunningServer, type StartOptions } from './serve.js';

@@ -108,9 +108,10 @@ import type { Logger } from './logger.js';
 import {
   checkOrigin,
   checkRequest,
-  sameSecret,
   SECURITY_HEADERS,
+  SESSION_COOKIE_MAX_AGE_S,
   sessionCookieName,
+  type LaunchGate,
   type RequestFacts,
 } from './security.js';
 
@@ -118,7 +119,10 @@ import {
 export const MAX_JSON_BYTES = 1024 * 1024;
 
 export interface AppOptions {
+  /** The session key every request's cookie must carry. Never printed: links carry `launch` tokens instead. */
   readonly token: string;
+  /** The one-time tokens of launch links (`/?t=`), redeemed for the session cookie. */
+  readonly launch: LaunchGate;
   /** The port the server listens on; known only after listen(), hence a getter. */
   readonly port: () => number;
   readonly logger: Logger;
@@ -715,6 +719,11 @@ function logAndHarden(logger: Logger): MiddlewareHandler {
   };
 }
 
+/** Shown in place of the app when a launch link was already used (it works once, ADR-0029). */
+const SPENT_LINK =
+  'This BhavBook link has already been used. In the browser that opened it, go to BhavBook again; ' +
+  'for another browser, stop BhavBook (Ctrl+C) and start it again for a new link.';
+
 function guard(options: AppOptions): MiddlewareHandler {
   return async (c, next) => {
     const facts: RequestFacts = {
@@ -727,12 +736,21 @@ function guard(options: AppOptions): MiddlewareHandler {
     const port = options.port();
     if (!checkOrigin(facts, port)) return error('forbidden', 403);
     const launchToken = c.req.method === 'GET' && c.req.path === '/' ? c.req.query('t') : undefined;
-    if (launchToken !== undefined) {
-      if (!sameSecret(launchToken, options.token)) return error('unauthorized', 401);
-      setCookie(c, sessionCookieName(port), options.token, { httpOnly: true, sameSite: 'Strict', path: '/' });
-      return c.redirect('/', 302);
-    }
     const result = checkRequest(facts, port, options.token);
+    if (launchToken !== undefined) {
+      if (options.launch.redeem(launchToken)) {
+        setCookie(c, sessionCookieName(port), options.token, {
+          httpOnly: true,
+          sameSite: 'Strict',
+          path: '/',
+          maxAge: SESSION_COOKIE_MAX_AGE_S,
+        });
+        return c.redirect('/', 302);
+      }
+      // A used (or wrong) link: a browser that already has the session goes in; nothing new is handed out.
+      if (result.ok) return c.redirect('/', 302);
+      return c.text(SPENT_LINK, 401);
+    }
     if (!result.ok) return error(result.status === 403 ? 'forbidden' : 'unauthorized', result.status);
     await next();
     return undefined;

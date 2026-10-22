@@ -1,8 +1,17 @@
 // Shared helpers for HTTP tests: an in-memory app with a captured log, and requests that pass the checks by default.
 import type Database from 'better-sqlite3';
-import { createApp, createLogger, sessionCookieName, type AppOptions } from '../../src/http/index.js';
+import {
+  createApp,
+  createLogger,
+  launchGate,
+  sessionCookieName,
+  type AppOptions,
+} from '../../src/http/index.js';
 
+/** The session key the cookie carries. */
 export const TOKEN = 'k'.repeat(43);
+/** The one-time launch link's token (a different secret). */
+export const LAUNCH = 'L'.repeat(43);
 export const PORT = 4321;
 export const ORIGIN = `http://127.0.0.1:${PORT}`;
 
@@ -15,6 +24,7 @@ export function testApp(overrides: Partial<AppOptions> = {}, db: Database.Databa
   const lines: string[] = [];
   const app = createApp({
     token: TOKEN,
+    launch: launchGate(LAUNCH),
     port: () => PORT,
     logger: createLogger((line) => lines.push(line)),
     vault: db,

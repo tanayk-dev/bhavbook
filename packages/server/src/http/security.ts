@@ -5,7 +5,9 @@
 //   3. Sec-Fetch-Site, when sent, must be same-origin or none. Cookies ignore ports, so SameSite=Strict alone
 //      would let a page on another localhost port make blind requests with our cookie;
 //   4. the per-launch session token, from a cookie named per port.
-// There is no CORS.
+// There is no CORS. The link printed at start carries a different, one-time token: opening it sets the session
+// cookie and spends it, so a link read from the terminal, a process list or browser history cannot be replayed
+// (ADR-0029). The cookie survives a closed browser; its key dies when BhavBook stops.
 import { createHash, timingSafeEqual } from 'node:crypto';
 
 export const SESSION_COOKIE_PREFIX = 'bhavbook_session';
@@ -36,6 +38,26 @@ export function allowedHosts(port: number): readonly string[] {
 export function allowedOrigins(port: number): readonly string[] {
   return allowedHosts(port).map((host) => `http://${host}`);
 }
+
+/** The launch link's one-time token: redeeming it spends it. */
+export interface LaunchGate {
+  /** True once for the link's token, then never again. */
+  redeem(candidate: string): boolean;
+}
+
+export function launchGate(token: string): LaunchGate {
+  let open: string | null = token;
+  return {
+    redeem: (candidate) => {
+      if (open === null || !sameSecret(candidate, open)) return false;
+      open = null;
+      return true;
+    },
+  };
+}
+
+/** How long the session cookie outlives a closed browser; the key itself dies when BhavBook stops. */
+export const SESSION_COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
 
 /** Constant-time comparison of two secrets of any length (both are hashed first). */
 export function sameSecret(a: string, b: string): boolean {
@@ -78,6 +100,8 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   'Content-Security-Policy':
     "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   'Cache-Control': 'no-store',
+  'Permissions-Policy':
+    'camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()',
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
 };

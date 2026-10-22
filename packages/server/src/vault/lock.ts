@@ -7,6 +7,7 @@
 // (also O_EXCL), and staleness is re-checked while holding it: without that, two processes that both saw the
 // same dead lock could each delete the other's fresh one.
 import { closeSync, openSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
+import path from 'node:path';
 import { VaultError } from './errors.js';
 
 const OWNER_ONLY_FILE = 0o600;
@@ -24,8 +25,11 @@ export function lockPath(vaultPath: string): string {
   return `${vaultPath}.lock`;
 }
 
+/** Names the lock file beside the vault, not its full path: a pasted error must not carry the home folder. */
 function inUse(file: string): VaultError {
-  return new VaultError(`the vault is in use by another BhavBook process (lock file: ${file})`);
+  return new VaultError(
+    `the vault is in use by another BhavBook process (lock file ${path.basename(file)}, beside the vault)`,
+  );
 }
 
 function isRunning(pid: number): boolean {

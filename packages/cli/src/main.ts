@@ -157,6 +157,8 @@ async function serveCommand(args: Parsed, io: CliIo): Promise<number> {
       });
       try {
         io.out(`BhavBook is running at ${server.url}`);
+        // ADR-0029: the link opens a session once; that browser keeps it until BhavBook stops.
+        io.out('The link works once: another browser needs BhavBook restarted.');
         io.out('Press Ctrl+C to stop.');
         if (args.open) {
           await io.openBrowser(server.url).catch(() => {
