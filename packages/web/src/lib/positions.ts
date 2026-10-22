@@ -229,6 +229,7 @@ export interface JournalEntry {
   readonly plannedRiskMicro: bigint | null;
   readonly reviewNote: string | null;
   readonly reviewedAt: string | null;
+  readonly createdAt: string;
   readonly attachments: readonly { readonly id: string; readonly bytes: number }[];
 }
 
@@ -245,6 +246,7 @@ function journalEntry(value: unknown): JournalEntry {
     plannedRiskMicro: bigOrNull(row.plannedRiskMicro),
     reviewNote: strOrNull(row.reviewNote),
     reviewedAt: instantOrNull(row.reviewedAt),
+    createdAt: instant(row.createdAt),
     attachments: list(row.attachments).map((entry) => {
       const attachment = record(entry);
       return { id: str(attachment.id), bytes: num(attachment.bytes) };

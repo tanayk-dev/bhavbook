@@ -327,6 +327,20 @@ export async function mapInstrument(id: string, target: InstrumentTarget): Promi
   await readJson(await send(() => post(`/api/issues/${encodeURIComponent(id)}/map`, target)));
 }
 
+export interface JournalCollision {
+  readonly positionId: string;
+  readonly journalEntryIds: readonly string[];
+}
+
+/** A `journal_collision` subject: the position and the entries on it. */
+export function journalCollision(subject: unknown): JournalCollision | null {
+  if (!isRecord(subject)) return null;
+  const positionId = text(subject.positionId);
+  const ids = Array.isArray(subject.journalEntryIds) ? subject.journalEntryIds : null;
+  if (positionId === null || !ids?.every((id): id is string => typeof id === 'string')) return null;
+  return { positionId, journalEntryIds: ids };
+}
+
 export type AdjustmentInput =
   | {
       readonly kind: 'opening_lot';
