@@ -12,6 +12,7 @@ import {
   createBackup,
   createLogger,
   isVaultFile,
+  loadMigrations,
   openVault,
   openVaultReadOnly,
   recoverInterruptedRestore,
@@ -32,8 +33,14 @@ export interface CliIo {
 
 const MIN_NODE: readonly [number, number] = [24, 11];
 
-/** The web build (`pnpm --filter @bhavbook/web build`); without it the server shows a placeholder page. */
-const WEB_BUILD = fileURLToPath(new URL('../../web/dist/', import.meta.url));
+/**
+ * Installed, this code runs from the bundle (`dist/index.mjs`, built by tsdown) with the web build in `dist/web`; in
+ * the workspace it runs from source and the web build is `packages/web/dist`.
+ */
+const BUNDLED = !import.meta.url.endsWith('.ts');
+
+/** The web build; without it the server shows a placeholder page. */
+const WEB_BUILD = fileURLToPath(new URL(BUNDLED ? './web/' : '../../web/dist/', import.meta.url));
 
 const USAGE = `usage:
   bhavbook [--vault <path>] [--port <n>] [--no-open]   start BhavBook and open it in your browser
@@ -43,6 +50,7 @@ const USAGE = `usage:
 
 class UsageError extends Error {}
 
+// `src/` and `dist/` both sit next to package.json.
 const APP_VERSION = (
   JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
 ).version;
@@ -208,6 +216,14 @@ function doctorCommand(args: Parsed, io: CliIo): number {
   } catch {
     report(false, 'sqlite', 'better-sqlite3 does not load on this machine');
   }
+  try {
+    report(true, 'schema', `${String(loadMigrations().length)} migrations`);
+  } catch {
+    report(false, 'schema', 'the migration files are missing or unreadable');
+  }
+  if (existsSync(path.join(WEB_BUILD, 'index.html'))) report(true, 'web', 'the interface is built');
+  else if (BUNDLED) report(false, 'web', 'the interface is missing from this install');
+  else report(null, 'web', 'not built (pnpm --filter @bhavbook/web build)');
   if (!existsSync(args.vault)) {
     report(null, 'vault', 'not created yet');
     return results.includes(false) ? 1 : 0;

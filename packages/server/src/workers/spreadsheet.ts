@@ -42,6 +42,7 @@ const EOCD_SIGNATURE = 0x06054b50;
 const CENTRAL_SIGNATURE = 0x02014b50;
 const EOCD_MIN = 22;
 const EOCD_SEARCH = EOCD_MIN + 0xffff;
+// Beside this module from source; the installed CLI bundles the worker as `dist/spreadsheet-worker.mjs` (S16).
 const WORKER_URL = new URL('./spreadsheet-worker.mjs', import.meta.url);
 
 const MESSAGES: Readonly<Record<string, string>> = {

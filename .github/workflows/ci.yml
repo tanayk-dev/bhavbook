@@ -82,8 +82,10 @@ jobs:
       - name: Install Chromium for Playwright
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Build the web app and run the end-to-end tests
-        run: pnpm e2e
+      # What ships is what is tested: pack `bhavbook`, install the tarball with npm into an empty directory, check
+      # `npx bhavbook doctor`, then run the end-to-end suite against the installed CLI.
+      - name: Pack, install and run the end-to-end tests on the installed package
+        run: pnpm e2e:packed
 
       - name: Keep screenshots and traces of a failed run
         if: failure()

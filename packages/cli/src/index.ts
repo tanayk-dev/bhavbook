@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Local-first trade journal for Indian multi-broker equity traders. Run with npx bhavbook.
 import { homedir } from 'node:os';
 import open from 'open';

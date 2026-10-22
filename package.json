@@ -17,6 +17,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "e2e": "pnpm --filter @bhavbook/web build && playwright test",
+    "pack:cli": "node scripts/pack-cli.mjs",
+    "e2e:packed": "node scripts/e2e-packed.mjs --e2e",
     "fixtures:make": "tsx tools/fixtures/src/make-fixtures.ts",
     "pii:scan": "tsx tools/fixtures/src/pii-scan.ts",
     "check:leaks": "node scripts/check-broker-exports.mjs",

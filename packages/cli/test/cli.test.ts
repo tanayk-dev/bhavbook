@@ -188,6 +188,10 @@ describe('doctor', () => {
     expect(text).toMatch(/ok\s+node/i);
     expect(text).toMatch(/ok\s+sqlite/i);
     expect(text).toMatch(/skip\s+vault/i);
+    // The schema the vault would be migrated to is readable (the bundle carries the migration files).
+    expect(text).toMatch(/ok\s+schema: \d+ migrations/i);
+    // Run from source, the web build is optional (it is built for the E2E and the package); in the package it is not.
+    expect(text).toMatch(/(ok|skip)\s+web/i);
   });
 
   it('checks the integrity of an existing vault', async () => {

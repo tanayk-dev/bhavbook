@@ -15,6 +15,8 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: false,
     assetsInlineLimit: 0,
+    // The licences of everything bundled; the published package ships them (S16).
+    license: { fileName: 'THIRD-PARTY-NOTICES.md' },
     // The ECharts chunk (about 600 kB, 200 kB gzipped) loads only with the dashboard's charts; the app's own chunks
     // stay well under the default limit.
     chunkSizeWarningLimit: 650,

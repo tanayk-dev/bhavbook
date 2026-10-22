@@ -4,21 +4,52 @@
   "type": "module",
   "description": "Local-first trade journal for Indian multi-broker equity traders. Run with npx bhavbook.",
   "license": "MIT",
+  "keywords": [
+    "trading-journal",
+    "trade-journal",
+    "zerodha",
+    "dhan",
+    "nse",
+    "bse",
+    "local-first"
+  ],
+  "homepage": "https://github.com/tanayk-dev/bhavbook#readme",
+  "bugs": "https://github.com/tanayk-dev/bhavbook/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tanayk-dev/bhavbook.git",
+    "directory": "packages/cli"
+  },
   "engines": {
     "node": ">=24.11"
   },
+  "bin": {
+    "bhavbook": "./dist/index.mjs"
+  },
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": "./src/index.ts"
   },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": "./dist/index.mjs"
+    }
+  },
   "scripts": {
+    "build": "tsdown",
+    "prepack": "node ../../scripts/check-package.mjs",
     "typecheck": "tsc -p . --noEmit"
   },
   "dependencies": {
-    "@bhavbook/server": "workspace:*",
     "better-sqlite3": "13.0.3",
     "open": "11.0.4"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "9.6.0"
+    "@bhavbook/server": "workspace:*",
+    "@types/better-sqlite3": "9.6.0",
+    "tsdown": "0.23.1"
   }
 }

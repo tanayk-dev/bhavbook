@@ -1,0 +1,61 @@
+name: release
+
+# Publishes `bhavbook` to npm when a version tag (v1.2.3) is pushed. The tag must match packages/cli/package.json.
+# Publishing uses npm trusted publishing (OIDC, no stored token) with provenance; until the package exists on npm,
+# an NPM_TOKEN secret is used instead (see docs/releasing.md). Actions are pinned to commits: this job can publish.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+
+      - name: Enable pnpm via corepack (version from package.json packageManager)
+        run: corepack enable
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: The tag matches the package version
+        run: |
+          version=$(node -p "require('./packages/cli/package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match packages/cli/package.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Verify
+        run: pnpm verify
+
+      - name: Pack, install and check with npx bhavbook doctor
+        run: node scripts/e2e-packed.mjs
+
+      - name: Pack
+        run: node scripts/pack-cli.mjs .pack
+
+      - name: Publish with provenance
+        run: npm publish ".pack/bhavbook-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
