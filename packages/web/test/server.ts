@@ -6,7 +6,8 @@ export interface Reply {
   readonly body: unknown;
 }
 
-export type Routes = Readonly<Record<string, Reply | ((body: unknown) => Reply)>>;
+/** A handler gets the JSON body and the URL (for its query string). */
+export type Routes = Readonly<Record<string, Reply | ((body: unknown, url: URL) => Reply)>>;
 
 /** Stubs fetch; keys are `GET /api/vault`-style. Unknown routes answer 404 like the real server. */
 export function stubServer(routes: Routes) {
@@ -16,7 +17,9 @@ export function stubServer(routes: Routes) {
     const route = routes[`${method} ${url.pathname}`];
     const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
     const reply =
-      typeof route === 'function' ? route(body) : (route ?? { status: 404, body: { error: 'not_found' } });
+      typeof route === 'function'
+        ? route(body, url)
+        : (route ?? { status: 404, body: { error: 'not_found' } });
     return Promise.resolve(Response.json(reply.body, { status: reply.status ?? 200 }));
   });
   vi.stubGlobal('fetch', fetch);

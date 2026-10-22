@@ -13,7 +13,9 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ImportRouteImport } from './routes/import'
 import { Route as IssuesRouteImport } from './routes/issues'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as ReviewRouteImport } from './routes/review'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as PositionsRefRouteImport } from './routes/positions.$ref'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -35,9 +37,19 @@ const OnboardingRoute = OnboardingRouteImport.update({
   path: '/onboarding',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ReviewRoute = ReviewRouteImport.update({
+  id: '/review',
+  path: '/review',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PositionsRefRoute = PositionsRefRouteImport.update({
+  id: '/positions/$ref',
+  path: '/positions/$ref',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -46,14 +58,18 @@ export interface FileRoutesByFullPath {
   '/import': typeof ImportRoute
   '/issues': typeof IssuesRoute
   '/onboarding': typeof OnboardingRoute
+  '/review': typeof ReviewRoute
   '/settings': typeof SettingsRoute
+  '/positions/$ref': typeof PositionsRefRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/import': typeof ImportRoute
   '/issues': typeof IssuesRoute
   '/onboarding': typeof OnboardingRoute
+  '/review': typeof ReviewRoute
   '/settings': typeof SettingsRoute
+  '/positions/$ref': typeof PositionsRefRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -61,14 +77,38 @@ export interface FileRoutesById {
   '/import': typeof ImportRoute
   '/issues': typeof IssuesRoute
   '/onboarding': typeof OnboardingRoute
+  '/review': typeof ReviewRoute
   '/settings': typeof SettingsRoute
+  '/positions/$ref': typeof PositionsRefRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/import' | '/issues' | '/onboarding' | '/settings'
+  fullPaths:
+    | '/'
+    | '/import'
+    | '/issues'
+    | '/onboarding'
+    | '/review'
+    | '/settings'
+    | '/positions/$ref'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/import' | '/issues' | '/onboarding' | '/settings'
-  id: '__root__' | '/' | '/import' | '/issues' | '/onboarding' | '/settings'
+  to:
+    | '/'
+    | '/import'
+    | '/issues'
+    | '/onboarding'
+    | '/review'
+    | '/settings'
+    | '/positions/$ref'
+  id:
+    | '__root__'
+    | '/'
+    | '/import'
+    | '/issues'
+    | '/onboarding'
+    | '/review'
+    | '/settings'
+    | '/positions/$ref'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -76,7 +116,9 @@ export interface RootRouteChildren {
   ImportRoute: typeof ImportRoute
   IssuesRoute: typeof IssuesRoute
   OnboardingRoute: typeof OnboardingRoute
+  ReviewRoute: typeof ReviewRoute
   SettingsRoute: typeof SettingsRoute
+  PositionsRefRoute: typeof PositionsRefRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -109,11 +151,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/review': {
+      id: '/review'
+      path: '/review'
+      fullPath: '/review'
+      preLoaderRoute: typeof ReviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/positions/$ref': {
+      id: '/positions/$ref'
+      path: '/positions/$ref'
+      fullPath: '/positions/$ref'
+      preLoaderRoute: typeof PositionsRefRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -124,7 +180,9 @@ const rootRouteChildren: RootRouteChildren = {
   ImportRoute: ImportRoute,
   IssuesRoute: IssuesRoute,
   OnboardingRoute: OnboardingRoute,
+  ReviewRoute: ReviewRoute,
   SettingsRoute: SettingsRoute,
+  PositionsRefRoute: PositionsRefRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
