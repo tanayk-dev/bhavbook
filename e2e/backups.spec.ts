@@ -30,7 +30,9 @@ test('back up, change, restore, download; a bad file changes nothing', async ({ 
   await list.getByRole('button', { name: /^Restore the backup from/ }).click();
   await page.screenshot({ path: info.outputPath('settings-restore-confirm-1280x720.png'), fullPage: true });
   await page.getByRole('group', { name: 'Confirm restore' }).getByRole('button', { name: 'Restore' }).click();
-  await expect(page.getByText(/^Restored the backup from .+ IST\.$/)).toBeVisible();
+  // A restore takes a safety backup, verifies the file, swaps it in and reopens it: slow CI runners (Windows) need
+  // more than the default 5 s.
+  await expect(page.getByText(/^Restored the backup from .+ IST\.$/)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('No setup tags yet.')).toBeVisible();
   await expect(list.getByRole('row', { name: /Before a restore/ })).toHaveCount(1);
 
