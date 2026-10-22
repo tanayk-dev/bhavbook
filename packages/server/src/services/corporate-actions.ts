@@ -8,15 +8,21 @@ import { reconstructAccount, type CorporateAction } from '@bhavbook/core';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { isoDateSchema } from './adjustments.js';
+import { ActionError, type ActionErrorCode } from './errors.js';
 
-export class CorporateActionError extends Error {
-  override readonly name = 'CorporateActionError';
+/** A corporate-action failure: its `code` is what the HTTP layer answers (`failed` is a 500). */
+export class CorporateActionError extends ActionError {
+  override readonly name: string = 'CorporateActionError';
   /** The stored action or the account involved, when there is one (ids only). */
   readonly corporateActionId: string | undefined;
   readonly accountId: string | undefined;
 
-  constructor(message: string, ids: { corporateActionId?: string; accountId?: string } = {}) {
-    super(message);
+  constructor(
+    message: string,
+    ids: { corporateActionId?: string; accountId?: string } = {},
+    code: ActionErrorCode = 'failed',
+  ) {
+    super(message, { code });
     this.corporateActionId = ids.corporateActionId;
     this.accountId = ids.accountId;
   }
@@ -27,7 +33,7 @@ const isin = z.string().regex(/^[A-Z]{2}[A-Z0-9]{9}\d$/);
 const ratio = z.string().regex(/^[1-9]\d{0,5}$/);
 
 /** What callers hold: bigints as decimal strings. */
-const inputSchema = z
+export const corporateActionInputSchema = z
   .object({
     type: z.enum(['SPLIT', 'BONUS', 'CONVERSION', 'DEMERGER']),
     isin,
@@ -43,7 +49,7 @@ const inputSchema = z
   })
   .strict();
 
-export type CorporateActionInput = z.infer<typeof inputSchema>;
+export type CorporateActionInput = z.infer<typeof corporateActionInputSchema>;
 
 /** A stored row (better-sqlite3 reads integers as bigint); core checks the rest. */
 const rowSchema = z.object({
@@ -119,10 +125,10 @@ const PREVIEW_ID = 'ca_99999999999999999_preview';
 
 /** A validated input as core's action (with the preview id until stored). */
 export function parseCorporateAction(input: unknown, id = PREVIEW_ID): CorporateAction {
-  const parsed = inputSchema.safeParse(input);
-  if (!parsed.success) throw new CorporateActionError('invalid corporate action');
+  const parsed = corporateActionInputSchema.safeParse(input);
+  if (!parsed.success) throw new CorporateActionError('invalid corporate action', {}, 'invalid');
   const action = fromInput(id, parsed.data);
-  if (!passesCore(action)) throw new CorporateActionError('invalid corporate action');
+  if (!passesCore(action)) throw new CorporateActionError('invalid corporate action', {}, 'invalid');
   return action;
 }
 
@@ -186,7 +192,9 @@ function transition(db: Database.Database, id: string, from: Status, to: Status)
   const changed = db
     .prepare('UPDATE corporate_action SET status = ? WHERE id = ? AND status = ?')
     .run(to, id, from);
-  if (changed.changes !== 1) throw new CorporateActionError(`no ${from} corporate action with that id`);
+  if (changed.changes !== 1) {
+    throw new CorporateActionError(`no ${from} corporate action with that id`, {}, 'not_found');
+  }
 }
 
 /** active -> reverted. Does not recompute. */
@@ -201,9 +209,29 @@ export function restoreCorporateAction(db: Database.Database, id: string): void 
     const actions = activeCorporateActions(db);
     const restored = actions.find((action) => action.id === id);
     if (actions.some((other) => other.id !== id && restored !== undefined && sameFacts(other, restored))) {
-      throw new CorporateActionError('an identical corporate action is already active', {
-        corporateActionId: id,
-      });
+      throw new CorporateActionError(
+        'an identical corporate action is already active',
+        { corporateActionId: id },
+        'conflict',
+      );
     }
   })();
+}
+
+export interface StoredCorporateAction {
+  readonly action: CorporateAction;
+  readonly status: Status;
+  readonly createdAt: string;
+}
+
+/** Every stored action, active and reverted, newest ex-date first (the corporate actions page). */
+export function listCorporateActions(db: Database.Database): StoredCorporateAction[] {
+  const rows = db
+    .prepare(`SELECT ${COLUMNS}, status, created_at FROM corporate_action ORDER BY ex_date DESC, id DESC`)
+    .all() as (Record<string, unknown> & { status: Status; created_at: string })[];
+  return rows.map((row, index) => ({
+    action: fromRow(row, index),
+    status: row.status,
+    createdAt: row.created_at,
+  }));
 }
