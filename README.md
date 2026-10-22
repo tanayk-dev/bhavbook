@@ -2,13 +2,14 @@
 
 A free, open-source, **local-first** trade journal for Indian equity traders with accounts at more than one broker.
 Drop in the tradebooks you download from Zerodha and Dhan: BhavBook rebuilds every position from the raw fills, costs
-each one to the paisa, and lets you journal and review it. Your trades never leave your computer.
+each one, and lets you journal and review it. Your trades never leave your computer.
 
 - **Every position, rebuilt from fills:** FIFO per account and ISIN, intraday told apart from delivery the way the
   brokers do it, the splits, bonuses and demergers you record applied, and gaps in your history flagged instead of
   guessed.
 - **Real costs:** brokerage, STT, exchange charges, SEBI fees, stamp duty, GST and DP charges, estimated by a fee
-  engine and reconciled against your broker's statements when you import them.
+  engine that rounds the way the broker bills. For Dhan, importing its Global Transactions report replaces the
+  estimates with Dhan's own figures and flags any difference.
 - **A journal you review:** thesis, stop and target, setup and mistake tags, screenshots, a review queue you can run
   from the keyboard, and a dashboard by setup, by mistake and by month.
 
@@ -47,8 +48,8 @@ bhavbook doctor [--vault <path>]                     check Node, SQLite and the 
 ```
 
 **Backups:** BhavBook backs the vault up by itself before every import, undo, restore and upgrade. It keeps the last
-ten of those, and every backup taken before an upgrade. Settings → Backups makes one when you ask, and downloads or
-restores any of them. A `.bhav` file is a complete,
+ten of each kind, every backup taken before an upgrade, and every backup you make yourself. Settings → Backups makes
+one when you ask, and downloads or restores any of them. A `.bhav` file is a complete,
 checksummed copy: restore it on another computer to move your journal.
 
 **Updating:** `npx bhavbook@latest`. The vault is migrated forward on the first start, after a backup.

@@ -5,6 +5,9 @@ import type { Page } from '@playwright/test';
 import { addAccount, brokerFixtures } from './dhan.js';
 import { expect, startApp, test } from './fixtures.js';
 
+// Each recompute after a fix can take seconds on a slow CI runner.
+const SETTLE_MS = 20_000;
+
 const THESES = [
   'Breakout above the range on volume',
   'Pullback to the 20-day average',
@@ -27,7 +30,7 @@ async function settleIssues(page: Page): Promise<void> {
   const settle = async (action: () => Promise<void>): Promise<void> => {
     const before = await open.count();
     await action();
-    await expect.poll(() => open.count()).toBeLessThan(before);
+    await expect.poll(() => open.count(), { timeout: SETTLE_MS }).toBeLessThan(before);
   };
 
   const unknown = page.getByRole('article', { name: /Unknown instrument/ });
@@ -64,11 +67,18 @@ async function journalThree(page: Page): Promise<void> {
   }
 }
 
-/** What the dashboard says (the metrics strip and the monthly table), and the reviewed positions' rows. */
-async function readBack(page: Page, origin: string): Promise<{ dashboard: string[]; reviewed: string[] }> {
+interface ReadBack {
+  readonly dashboard: string[];
+  readonly reviewed: string[];
+  readonly theses: string[];
+}
+
+/** What the dashboard says (the metrics strip and the monthly table), the reviewed rows and their journals. */
+async function readBack(page: Page, origin: string): Promise<ReadBack> {
   await page.goto(`${origin}/`);
   const metrics = page.getByRole('region', { name: 'Metrics' });
-  await expect(metrics).toContainText('₹');
+  // Loaded and not empty: trades were won and lost.
+  await expect(metrics).toContainText(/[1-9][\d,]* won, [1-9][\d,]* lost/);
   const monthly = page.getByRole('region', { name: 'Net P&L by month' });
   await monthly.getByText('Show as a table').click();
   const months = monthly.getByRole('table', { name: 'Realised P&L by month' });
@@ -78,7 +88,17 @@ async function readBack(page: Page, origin: string): Promise<{ dashboard: string
   await page.goto(`${origin}/review?tab=reviewed`);
   const reviewed = page.getByRole('row').filter({ has: page.locator('a[data-position]') });
   await expect(reviewed).toHaveCount(THESES.length);
-  return { dashboard, reviewed: (await reviewed.allInnerTexts()).sort() };
+  const rows = (await reviewed.allInnerTexts()).sort();
+  const links = await page
+    .locator('a[data-position]')
+    .evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute('href') ?? ''));
+  const theses: string[] = [];
+  for (const link of links) {
+    await page.goto(`${origin}${link}`);
+    await expect(page.getByLabel('Thesis')).not.toHaveValue('');
+    theses.push(await page.getByLabel('Thesis').inputValue());
+  }
+  return { dashboard, reviewed: rows, theses: theses.sort() };
 }
 
 test('a fresh vault to the dashboard, then backed up and restored into another with the same numbers', async ({
@@ -100,6 +120,7 @@ test('a fresh vault to the dashboard, then backed up and restored into another w
   await settleIssues(page);
   await journalThree(page);
   const before = await readBack(page, app.origin);
+  expect(before.theses).toEqual([...THESES].sort());
   await page.screenshot({ path: info.outputPath('journey-reviewed-1280x720.png'), fullPage: true });
 
   await page.goto(`${app.origin}/settings`);
@@ -117,7 +138,11 @@ test('a fresh vault to the dashboard, then backed up and restored into another w
   await download.saveAs(backup);
 
   const other = await startApp();
-  const context = await browser.newContext();
+  // A context of its own: both apps are on 127.0.0.1, and each one's session cookie is named after its port.
+  const context = await browser.newContext().catch(async (error: unknown) => {
+    await other.close();
+    throw error;
+  });
   try {
     const fresh = await context.newPage();
     await fresh.goto(other.launch);

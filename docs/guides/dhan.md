@@ -20,8 +20,8 @@ history. Overlapping files are fine: nothing is counted twice.
   issue: choose the instrument once and every row with that name follows.
 - **The trade value is the truth.** Dhan's trade price is a rounded average; BhavBook keeps the reported trade value
   and derives the price from it, so totals match Dhan's to the paisa.
-- **Intraday, delivery and MTF** come from the order type in each row. Shares bought and sold on the same day are
-  intraday, whatever was declared, as in Dhan's Tax Report.
+- **Intraday, delivery and MTF:** each row declares its product, but shares bought and sold on the same day are
+  counted as intraday whatever was declared, as in Dhan's Tax Report. The rest keeps its declared product.
 - **Sells without their buys** (an IPO allotment, shares transferred in) appear as incomplete positions. Accept the
   opening lot the Tax Report offers, enter it by hand, or exclude the position.
 - **Charges** are estimated from Dhan's published rates until Global Transactions covers the day; Dhan's figures then

@@ -12,7 +12,7 @@ Nothing that BhavBook sends. It makes no network requests of its own:
 - The interface (pages, scripts, fonts, icons) is served from the package. Nothing is fetched from a CDN.
 - The links to your broker's report pages are ordinary links: they open only when you click them.
 
-The tests enforce this: a guard fails any test that opens an outbound connection.
+The unit and integration tests fail on any connection to a host other than this computer. The browser tests are not covered by that guard; there, the pages' content security policy lets them load and connect only to BhavBook itself.
 
 ## Where your data is
 
@@ -40,8 +40,9 @@ treat them the same way.
 ## The local app
 
 BhavBook listens on `127.0.0.1` only, so other computers on your network cannot reach it. Each start makes a new
-random session key, opened once through the link in your terminal; every request must carry it, and requests from
-other websites are refused. When BhavBook stops, the key is gone: the next start makes a new one.
+random session key. The link in your terminal carries it and stays valid until BhavBook stops, so treat that link
+like a password while BhavBook runs; every request must carry the key, and requests from other websites are refused.
+When BhavBook stops, the key is gone: the next start makes a new one.
 
 ## Logs
 
