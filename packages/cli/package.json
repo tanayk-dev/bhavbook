@@ -1,6 +1,6 @@
 {
   "name": "bhavbook",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Local-first trade journal for Indian multi-broker equity traders. Run with npx bhavbook.",
   "license": "MIT",
