@@ -191,18 +191,26 @@ describe('the journal', () => {
     });
   });
 
-  it('fixes the initial stop once the position has closed; other fields stay editable', async () => {
+  it('lets an empty initial stop be filled in after the close, then fixes it (ADR-0027)', async () => {
     await withPositions([BUY, SELL], async (test) => {
       const [position] = (await list(test)).positions;
       if (position === undefined) throw new Error('no position');
       const path = `/api/positions/${position.ref}/journal`;
-      const locked = await send(test, path, json('PUT', { ...ENTRY, initialStopMicro: '95000000' }));
-      expect(locked.status).toBe(409);
-      expect(await locked.json()).toEqual({ error: 'conflict' });
-      expect((await send(test, path, json('PUT', { ...ENTRY, reviewNote: 'Sold too early' }))).status).toBe(
+      // Journalled after the close: the stop the trader had can still be written down.
+      expect((await send(test, path, json('PUT', { ...ENTRY, initialStopMicro: '95000000' }))).status).toBe(
         200,
       );
-      expect((await detail(test, position.ref)).journal).toHaveLength(1);
+      // Once recorded, it cannot be moved or cleared.
+      for (const moved of ['90000000', null]) {
+        const locked = await send(test, path, json('PUT', { ...ENTRY, initialStopMicro: moved }));
+        expect(locked.status).toBe(409);
+        expect(await locked.json()).toEqual({ error: 'conflict' });
+      }
+      const kept = { ...ENTRY, initialStopMicro: '95000000', reviewNote: 'Sold too early' };
+      expect((await send(test, path, json('PUT', kept))).status).toBe(200);
+      expect((await detail(test, position.ref)).journal).toEqual([
+        expect.objectContaining({ initialStopMicro: '95000000', reviewNote: 'Sold too early' }),
+      ]);
     });
   });
 

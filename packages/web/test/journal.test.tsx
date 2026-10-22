@@ -289,6 +289,20 @@ describe('the journal form', () => {
     });
   });
 
+  it('lets an empty initial stop be filled in after the close (ADR-0027)', async () => {
+    const { state, routes } = server();
+    state.position = position({ state: 'CLOSED', closedAtUtc: '2025-09-15T05:30:00.000Z', openQty: '0' });
+    state.journal = [entry({ thesis: 'Old' })];
+    renderAt(`/positions/${REF}`, routes);
+    const stop = await screen.findByLabelText('Initial stop (₹)');
+    expect(stop).not.toHaveAttribute('readonly');
+    expect(stop).toHaveAccessibleDescription(/add the stop you had at entry\. Once saved it is fixed/);
+    await userEvent.type(stop, '480');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    expect(state.saved[0]).toMatchObject({ initialStopMicro: '480000000' });
+  });
+
   it('edits the older of two colliding entries and points to Issues', async () => {
     const { state, routes } = server();
     state.journal = [entry(), entry({ id: 'jnl_2' })];

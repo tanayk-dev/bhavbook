@@ -1,6 +1,7 @@
 // The journal entry of a position (PRD §5.3, §9.2 Q11): setup and mistake tags, thesis, the initial and planned stop,
-// target, planned risk and a review note. A draft can be written while the position is open; once it has closed the
-// initial stop is fixed (R is measured against the stop as planned). Amounts are typed in rupees and sent as
+// target, planned risk and a review note. A draft can be written while the position is open; once it has closed a
+// recorded initial stop is fixed (R is measured against the stop as planned), and an empty one can be filled in once
+// (ADR-0027). Amounts are typed in rupees and sent as
 // micro-rupees, string arithmetic only; an amount left as it was goes back exactly as stored. The form keeps the
 // entry it started from: a newer one on the server (merged, reviewed, edited in another tab) replaces an untouched
 // form, and a save over it is refused as stale rather than overwriting it.
@@ -205,7 +206,9 @@ export function JournalForm({ detail }: { readonly detail: PositionDetail }) {
   };
   const setups = (tags.data ?? []).filter((tag) => tag.kind === 'setup');
   const mistakes = (tags.data ?? []).filter((tag) => tag.kind === 'mistake');
-  const lockedStop = closed;
+  // Closed with a stop recorded: fixed. Closed without one: it can still be written down, once (ADR-0027).
+  const lockedStop = closed && base.stored.initialStop !== null;
+  const fillableStop = closed && base.stored.initialStop === null;
   return (
     <form onSubmit={submit} noValidate className="max-w-3xl space-y-4">
       {changedElsewhere ? (
@@ -293,11 +296,14 @@ export function JournalForm({ detail }: { readonly detail: PositionDetail }) {
       <div className="grid gap-4 sm:grid-cols-4">
         {AMOUNTS.map(([key, label]) => {
           const locked = key === 'initialStop' && lockedStop;
-          const hint = locked
-            ? fields.initialStop === ''
-              ? 'Not set when the trade was open; R then uses the planned risk.'
-              : 'Fixed once the position closed.'
-            : undefined;
+          const hint =
+            key !== 'initialStop'
+              ? undefined
+              : locked
+                ? 'Fixed once the position closed.'
+                : fillableStop
+                  ? 'Not recorded while the trade was open: add the stop you had at entry. Once saved it is fixed.'
+                  : undefined;
           return (
             <Field key={key} id={ids[key]} label={label} {...(hint === undefined ? {} : { hint })}>
               <Input
@@ -306,7 +312,7 @@ export function JournalForm({ detail }: { readonly detail: PositionDetail }) {
                 value={fields[key]}
                 readOnly={locked}
                 className="read-only:bg-muted read-only:text-ink-muted"
-                {...(locked ? { 'aria-describedby': `${ids[key]}-hint` } : {})}
+                {...(hint !== undefined ? { 'aria-describedby': `${ids[key]}-hint` } : {})}
                 {...(badAmount === key ? { 'aria-invalid': true, 'aria-describedby': ids.error } : {})}
                 onChange={(event) => {
                   set(key, event.target.value);

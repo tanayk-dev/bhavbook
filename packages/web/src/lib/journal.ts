@@ -188,7 +188,7 @@ const SAVE_ERRORS: Readonly<Record<string, string>> = {
   stale:
     'This entry changed elsewhere (merged, reviewed or edited in another tab). Reload to see it, then make your changes again.',
   conflict:
-    'The initial stop is fixed once the position has closed, so R stays honest. The other fields can change.',
+    'The initial stop was recorded and the position has closed, so it is fixed (R stays honest). The other fields can change.',
   invalid: 'A tag is missing or of the wrong kind. Reload and try again.',
   invalid_request: 'Some values are malformed: amounts are rupees with at most two decimals.',
   not_found: 'This position changed meanwhile (new trades rebuilt it). Reload the page.',
