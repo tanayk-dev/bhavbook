@@ -22,20 +22,16 @@ describe('fetch metadata and unsafe methods', () => {
   });
 
   it('rejects a state-changing request without an Origin header', async () => {
-    const response = await send(testApp(), '/api/journal', {
+    const response = await send(testApp(), '/api/positions/cG9z/review', {
       method: 'POST',
       headers: { origin: null },
     });
     expect(response.status).toBe(403);
+    // With its Origin the same request gets through the checks (and finds no vault).
     expect(
-      (
-        await send(testApp(), '/api/journal', {
-          method: 'POST',
-          headers: { origin: ORIGIN, 'content-type': 'application/json' },
-          body: '{}',
-        })
-      ).status,
-    ).toBe(501);
+      (await send(testApp(), '/api/positions/cG9z/review', { method: 'POST', headers: { origin: ORIGIN } }))
+        .status,
+    ).toBe(503);
   });
 
   it('names the session cookie per port, so two instances and other localhost apps do not collide', async () => {

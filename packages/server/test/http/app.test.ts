@@ -7,21 +7,18 @@ import { withTempDir } from '../vault/helpers.js';
 import { send, testApp, TOKEN } from './helpers.js';
 
 describe('route tree', () => {
-  it.each([
-    ['GET', '/api/positions'],
-    ['GET', '/api/positions/7'],
-    ['GET', '/api/journal'],
-    ['POST', '/api/journal'],
-    ['GET', '/api/analytics/summary'],
-  ])('%s %s answers 501 until its step implements it', async (method, target) => {
-    const response = await send(testApp(), target, {
-      method,
-      body: method === 'GET' ? undefined : '{}',
-      headers: { 'content-type': 'application/json' },
-    });
-    expect(response.status).toBe(501);
-    expect(await response.json()).toEqual({ error: 'not_implemented' });
-  });
+  it.each([['GET', '/api/analytics/summary']])(
+    '%s %s answers 501 until its step implements it',
+    async (method, target) => {
+      const response = await send(testApp(), target, {
+        method,
+        body: method === 'GET' ? undefined : '{}',
+        headers: { 'content-type': 'application/json' },
+      });
+      expect(response.status).toBe(501);
+      expect(await response.json()).toEqual({ error: 'not_implemented' });
+    },
+  );
 
   it('reports the vault schema version', async () => {
     await withTempDir(async (dir) => {
@@ -46,15 +43,15 @@ describe('input validation', () => {
   it.each([['x'.repeat(65)], ['a%20b'], ['a%3Bb'], ['%E2%82%B9']])(
     'rejects the malformed id %s with 400',
     async (id) => {
-      const response = await send(testApp(), `/api/positions/${id}`);
+      const response = await send(testApp(), `/api/issues/${id}/suggestions`);
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({ error: 'invalid_request' });
     },
   );
 
   it('rejects malformed JSON without echoing it', async () => {
-    const response = await send(testApp(), '/api/journal', {
-      method: 'POST',
+    const response = await send(testApp(), '/api/positions/cG9z/journal', {
+      method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: '{"MARKER-7f3a":',
     });
@@ -63,8 +60,8 @@ describe('input validation', () => {
   });
 
   it('rejects a non-JSON content type on JSON routes', async () => {
-    const response = await send(testApp(), '/api/journal', {
-      method: 'POST',
+    const response = await send(testApp(), '/api/positions/cG9z/journal', {
+      method: 'PUT',
       headers: { 'content-type': 'text/plain' },
       body: '{}',
     });
@@ -72,8 +69,8 @@ describe('input validation', () => {
   });
 
   it('rejects bodies over the size limit with 413', async () => {
-    const response = await send(testApp(), '/api/journal', {
-      method: 'POST',
+    const response = await send(testApp(), '/api/positions/cG9z/journal', {
+      method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: 'x'.repeat(MAX_JSON_BYTES) }),
     });
@@ -104,7 +101,7 @@ describe('logging and error policy (ADR-0019)', () => {
   it('logs requests as JSON lines without the query string, so the launch token never reaches the log', async () => {
     const test = testApp();
     await send(test, `/?t=${TOKEN}`, { headers: { cookie: null } });
-    await send(test, '/api/positions/7?secret=MARKER-55');
+    await send(test, '/api/positions/cG9z?secret=MARKER-55');
     const log = test.lines.join('\n');
     expect(log).not.toContain(TOKEN);
     expect(log).not.toContain('MARKER');
@@ -113,8 +110,8 @@ describe('logging and error policy (ADR-0019)', () => {
       level: 'info',
       event: 'request',
       method: 'GET',
-      path: '/api/positions/:id',
-      status: 501,
+      path: '/api/positions/:ref',
+      status: 503,
     });
     expect(Object.keys(entry).sort()).toEqual(['event', 'level', 'method', 'ms', 'path', 'status', 'time']);
   });

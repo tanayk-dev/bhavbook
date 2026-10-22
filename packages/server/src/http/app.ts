@@ -31,6 +31,14 @@ import {
 import { breakevenSchema, readSettings, setBreakeven } from '../services/settings.js';
 import { adjustmentInputSchema } from '../services/adjustments.js';
 import { ActionError, type ActionErrorCode } from '../services/errors.js';
+import { journalInputSchema, saveJournal, setReviewed } from '../services/journal.js';
+import {
+  listPositions,
+  positionDetail,
+  positionRefSchema,
+  positionsFilterSchema,
+  reviewQueueCount,
+} from '../services/positions.js';
 import {
   instrumentNames,
   issueFilterSchema,
@@ -114,15 +122,10 @@ const CLIENT_ERRORS: ReadonlyMap<number, readonly [string, ErrorStatus]> = new M
 const notImplemented = (): Response => error('not_implemented', 501);
 
 const idParam = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/) });
+const refParam = z.object({ ref: positionRefSchema });
 /** A backup file name; the catalog resolves only names it would have made itself. */
 const backupParam = z.object({ name: z.string().regex(/^[a-z0-9-]{1,80}\.bhav$/i) });
 const restoreSchema = z.object({ name: z.string().max(80) }).strict();
-
-/**
- * Placeholder body schema for routes whose step has not defined one yet: any JSON object. The implementing step
- * replaces it with the real schema.
- */
-const pendingBody = z.looseObject({});
 
 function params<T extends z.ZodType>(schema: T) {
   return validator('param', (value) => {
@@ -220,6 +223,7 @@ async function withImports(
 const ACTION_STATUS: Readonly<Record<Exclude<ActionErrorCode, 'failed'>, ErrorStatus>> = {
   not_found: 404,
   invalid: 400,
+  conflict: 409,
 };
 
 /** Runs an issue or adjustment action; an ActionError answers its fixed code, anything else is a 500. */
@@ -464,10 +468,30 @@ function apiRoutes(options: AppOptions, live: LiveVault) {
           return c.json({ ok: true });
         }),
       )
-      .get('/positions', notImplemented)
-      .get('/positions/:id', params(idParam), notImplemented)
-      .get('/journal', notImplemented)
-      .post('/journal', ...json(pendingBody), notImplemented)
+      .get('/positions', query(positionsFilterSchema), (c) =>
+        withVault(live, (db) => jsonResponse(listPositions(db, c.req.valid('query')))),
+      )
+      .get('/positions/review-count', (c) => withVault(live, (db) => c.json({ count: reviewQueueCount(db) })))
+      .get('/positions/:ref', params(refParam), (c) =>
+        withAction(live, (db) => jsonResponse(positionDetail(db, c.req.valid('param').ref))),
+      )
+      .put('/positions/:ref/journal', params(refParam), ...json(journalInputSchema), (c) =>
+        withAction(live, (db) =>
+          c.json({ id: saveJournal(db, c.req.valid('param').ref, c.req.valid('json')) }),
+        ),
+      )
+      .post('/positions/:ref/review', params(refParam), (c) =>
+        withAction(live, (db) => {
+          setReviewed(db, c.req.valid('param').ref, true);
+          return c.json({ ok: true });
+        }),
+      )
+      .post('/positions/:ref/reopen', params(refParam), (c) =>
+        withAction(live, (db) => {
+          setReviewed(db, c.req.valid('param').ref, false);
+          return c.json({ ok: true });
+        }),
+      )
       .get('/settings', (c) => withVault(live, (db) => c.json(readSettings(db))))
       .put('/settings', ...json(breakevenSchema, SMALL_JSON_BYTES), (c) =>
         withVault(live, (db) => {
