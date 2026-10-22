@@ -25,6 +25,8 @@ and the only way to get an R was to convert the stop into a rupee amount in "Pla
   - an **empty** initial stop can be filled in, **once**; after that save it is fixed like any recorded stop.
 - Merging two colliding journal entries keeps the chosen entry's stop, and fills an empty one from the other entry
   (the other entry's stop was recorded too).
+- "Fixed" means while the position is closed: if a later buy reopens the same run, the stop is editable again until
+  it closes.
 - R's definition does not change.
 
 ## Alternatives Considered

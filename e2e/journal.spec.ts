@@ -45,6 +45,8 @@ test('a journal entry is saved, survives a reload, and the position is reviewed'
 });
 
 test('screenshots lose their metadata in the browser and stay under 1 MB', async ({ page, app }, info) => {
+  // Shrinking noise under 1 MB takes several encodes; slow CI runners need more than the default minute.
+  test.setTimeout(120_000);
   await openFirstPosition(page, app.launch);
   const tagged = info.outputPath('tagged.png');
   const large = info.outputPath('large.png');

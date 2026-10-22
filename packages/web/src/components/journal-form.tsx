@@ -76,6 +76,8 @@ function baseOf(entry: JournalEntry | null): Base {
   };
 }
 
+const micro = (value: string | null): bigint | null => (value === null ? null : BigInt(value));
+
 const sameFields = (a: Fields, b: Fields): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /** An amount as typed, as micro-rupees: null when empty, undefined when it is not an amount. */
@@ -176,9 +178,19 @@ export function JournalForm({ detail }: { readonly detail: PositionDetail }) {
   };
   const save = useMutation({
     mutationFn: ({ input }: { input: JournalInput; saved: Fields }) => saveJournal(position.ref, input),
-    onSuccess: async (_id, { saved }) => {
+    onSuccess: async (_id, { input, saved }) => {
       // What was saved is the new starting point; the refetch brings the server's time (and trimmed text).
-      setBase((current) => ({ ...current, fields: saved }));
+      setBase((current) => ({
+        ...current,
+        fields: saved,
+        // As stored now: a stop just filled in on a closed position locks at once, before the refetch.
+        stored: {
+          initialStop: micro(input.initialStopMicro),
+          plannedStop: micro(input.plannedStopMicro),
+          plannedTarget: micro(input.plannedTargetMicro),
+          plannedRisk: micro(input.plannedRiskMicro),
+        },
+      }));
       await queryClient.invalidateQueries({ queryKey: ['positions'] });
       setMessage('Saved.');
     },
@@ -312,8 +324,18 @@ export function JournalForm({ detail }: { readonly detail: PositionDetail }) {
                 value={fields[key]}
                 readOnly={locked}
                 className="read-only:bg-muted read-only:text-ink-muted"
-                {...(hint !== undefined ? { 'aria-describedby': `${ids[key]}-hint` } : {})}
-                {...(badAmount === key ? { 'aria-invalid': true, 'aria-describedby': ids.error } : {})}
+                {...(hint !== undefined || badAmount === key
+                  ? {
+                      // The hint ("once saved it is fixed") and the error are both read.
+                      'aria-describedby': [
+                        hint === undefined ? null : `${ids[key]}-hint`,
+                        badAmount === key ? ids.error : null,
+                      ]
+                        .filter((id) => id !== null)
+                        .join(' '),
+                    }
+                  : {})}
+                {...(badAmount === key ? { 'aria-invalid': true } : {})}
                 onChange={(event) => {
                   set(key, event.target.value);
                 }}

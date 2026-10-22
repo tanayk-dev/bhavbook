@@ -301,6 +301,11 @@ describe('the journal form', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(await screen.findByText('Saved.')).toBeInTheDocument();
     expect(state.saved[0]).toMatchObject({ initialStopMicro: '480000000' });
+    // Recorded now: fixed at once, without waiting for a reload.
+    expect(screen.getByLabelText('Initial stop (₹)')).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('Initial stop (₹)')).toHaveAccessibleDescription(
+      'Fixed once the position closed.',
+    );
   });
 
   it('edits the older of two colliding entries and points to Issues', async () => {
