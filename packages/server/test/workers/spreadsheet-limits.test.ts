@@ -52,6 +52,12 @@ interface Tamper {
   readonly localMethod?: number;
   readonly localName?: string;
   readonly encrypted?: boolean;
+  /** The sizes the local header declares (the parser sizes its buffer from them). */
+  readonly localSizes?: readonly [compressed: number, unpacked: number];
+  /** Sets the data-descriptor flag (sizes follow the data; the local header may hold zeros). */
+  readonly descriptor?: boolean;
+  /** Adds a ZIP64 extended-information extra field to the local header. */
+  readonly zip64?: boolean;
 }
 
 /** A deflated zip of `parts`, truthful unless a part or `tamper` says otherwise. */
@@ -64,14 +70,18 @@ function zipOf(parts: readonly Part[], tamper: Tamper = {}): Buffer {
     const localName = Buffer.from(tamper.localName ?? part.name, 'latin1');
     const data = deflateRawSync(part.content);
     const declared = part.declared ?? part.content.length;
-    const flags = tamper.encrypted === true ? 1 : 0;
+    const flags = (tamper.encrypted === true ? 1 : 0) | (tamper.descriptor === true ? 8 : 0);
+    const [localCompressed, localUnpacked] = tamper.localSizes ?? [data.length, declared];
+    // A ZIP64 record (id 1) claiming 4 GB unpacked.
+    const extra = tamper.zip64 === true ? Buffer.from([1, 0, 8, 0, 0, 0, 0, 0, 1, 0, 0, 0]) : Buffer.alloc(0);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(flags, 6);
     local.writeUInt16LE(tamper.localMethod ?? 8, 8);
-    local.writeUInt32LE(data.length, 18);
-    local.writeUInt32LE(declared, 22);
+    local.writeUInt32LE(localCompressed, 18);
+    local.writeUInt32LE(localUnpacked, 22);
     local.writeUInt16LE(localName.length, 26);
+    local.writeUInt16LE(extra.length, 28);
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(flags, 8);
@@ -80,9 +90,9 @@ function zipOf(parts: readonly Part[], tamper: Tamper = {}): Buffer {
     central.writeUInt32LE(declared, 24);
     central.writeUInt16LE(name.length, 28);
     central.writeUInt32LE(offset, 42);
-    locals.push(local, localName, data);
+    locals.push(local, localName, extra, data);
     centrals.push(central, name);
-    offset += local.length + localName.length + data.length;
+    offset += local.length + localName.length + extra.length + data.length;
   }
   const directory = Buffer.concat(centrals);
   const end = Buffer.alloc(22);
@@ -145,6 +155,20 @@ describe('inspectZip (before the parser sees the file)', () => {
     await expect(inspectZip(zipOf([SHEET], { localName: 'xl/other.xml' }))).rejects.toThrow(
       /headers disagree/,
     );
+  });
+
+  it('rejects local sizes that differ from the directory (the parser allocates from them)', async () => {
+    const huge = zipOf([SHEET], { localSizes: [12, 2_000_000_000] });
+    await expect(inspectZip(huge)).rejects.toThrow(/headers disagree/);
+  });
+
+  it('accepts zero local sizes only behind a data-descriptor flag', async () => {
+    expect((await inspectZip(zipOf([SHEET], { descriptor: true, localSizes: [0, 0] }))).entries).toBe(1);
+    await expect(inspectZip(zipOf([SHEET], { localSizes: [0, 0] }))).rejects.toThrow(/headers disagree/);
+  });
+
+  it('rejects a ZIP64 size record (a spreadsheet never needs one)', async () => {
+    await expect(inspectZip(zipOf([SHEET], { zip64: true }))).rejects.toThrow(/ZIP64/);
   });
 
   it('rejects an encrypted part', async () => {

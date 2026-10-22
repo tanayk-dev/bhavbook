@@ -105,10 +105,11 @@ export function createBackup(
   if (isVaultFile(outPath, db.name))
     throw new BackupError('refusing to write a backup over the vault or its files');
   const snapshot = tempPath(outPath, 'snapshot');
+  // VACUUM INTO fills this empty, owner-only file, so the snapshot is never readable by others. Made before the
+  // `try`: should the name exist, the clean-up below must not delete a file this did not create.
+  createOwnerOnly(snapshot);
   try {
-    // VACUUM INTO gives a transactionally consistent copy; the path is bound, never interpolated. It fills the
-    // empty, owner-only file made first, so the snapshot is never readable by others.
-    createOwnerOnly(snapshot);
+    // VACUUM INTO gives a transactionally consistent copy; the path is bound, never interpolated.
     db.prepare('VACUUM INTO ?').run(snapshot);
     const bytes = readFileSync(snapshot);
     const file = encodeBhav(bytes, {

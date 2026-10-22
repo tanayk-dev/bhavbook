@@ -46,6 +46,9 @@ const LOCAL_SIGNATURE = 0x04034b50;
 const LOCAL_HEADER = 30;
 const CENTRAL_HEADER = 46;
 const ENCRYPTED = 0x1;
+/** Sizes follow the data (a data descriptor); the local header may then hold zeros. */
+const DESCRIPTOR = 0x8;
+const ZIP64_EXTRA = 0x0001;
 const STORED = 0;
 const DEFLATED = 8;
 const EOCD_MIN = 22;
@@ -92,6 +95,14 @@ const headersDisagree = (): SpreadsheetError =>
  * both must agree on the compression method and the name, and neither may be encrypted. Its data must lie before
  * the directory.
  */
+/** True when an extra-field block (id, size, data records) holds a ZIP64 size record. */
+function hasZip64(bytes: Buffer, from: number, length: number): boolean {
+  for (let at = from; at + 4 <= from + length; at += 4 + bytes.readUInt16LE(at + 2)) {
+    if (bytes.readUInt16LE(at) === ZIP64_EXTRA) return true;
+  }
+  return false;
+}
+
 function partAt(bytes: Buffer, central: number, dataEnd: number): ZipPart {
   const flags = bytes.readUInt16LE(central + 8);
   const method = bytes.readUInt16LE(central + 10);
@@ -108,7 +119,21 @@ function partAt(bytes: Buffer, central: number, dataEnd: number): ZipPart {
   if ((flags | bytes.readUInt16LE(local + 6)) & ENCRYPTED)
     throw new SpreadsheetError('spreadsheet is encrypted');
   if (bytes.readUInt16LE(local + 8) !== method || !localName.equals(name)) throw headersDisagree();
-  const start = local + LOCAL_HEADER + localNameLength + bytes.readUInt16LE(local + 28);
+  // The parser sizes its buffers from the local header: its sizes must be the directory's (or zeros, when a data
+  // descriptor carries them), and no ZIP64 record may override them.
+  const localSizes = [bytes.readUInt32LE(local + 18), bytes.readUInt32LE(local + 22)];
+  const sameSizes = localSizes[0] === compressed && localSizes[1] === unpacked;
+  const deferred = (flags & DESCRIPTOR) !== 0 && localSizes[0] === 0 && localSizes[1] === 0;
+  if (!sameSizes && !deferred) throw headersDisagree();
+  const localExtra = bytes.readUInt16LE(local + 28);
+  const centralExtraAt = central + CENTRAL_HEADER + name.length;
+  if (
+    hasZip64(bytes, local + LOCAL_HEADER + localNameLength, localExtra) ||
+    hasZip64(bytes, centralExtraAt, bytes.readUInt16LE(central + 30))
+  ) {
+    throw new SpreadsheetError('spreadsheet uses ZIP64 sizes, which a spreadsheet never needs');
+  }
+  const start = local + LOCAL_HEADER + localNameLength + localExtra;
   if (start + compressed > dataEnd) throw invalidZip();
   if (method === STORED && compressed !== unpacked) throw sizeMismatch();
   if (method !== STORED && method !== DEFLATED) {
