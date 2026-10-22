@@ -48,29 +48,48 @@ async function stop(child: ChildProcess): Promise<void> {
   await exited;
 }
 
+export interface RunningApp extends App {
+  /** Stops the process and deletes its vault. */
+  close(): Promise<void>;
+}
+
+/** Starts BhavBook on a new, empty vault. The `app` fixture is one per test; a test may start more (a second vault). */
+export async function startApp(): Promise<RunningApp> {
+  const dir = mkdtempSync(path.join(tmpdir(), 'bhavbook-e2e-'));
+  const installed = process.env.BHAVBOOK_BIN;
+  const cli = installed === undefined ? ['--import', 'tsx', 'packages/cli/src/index.ts'] : [installed];
+  const child = spawn(process.execPath, [...cli, '--vault', path.join(dir, 'vault.db'), '--no-open'], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_KEPT);
+  });
+  const close = async (): Promise<void> => {
+    await stop(child);
+    // SQLite handles can linger for a moment on Windows after the process ends.
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  };
+  try {
+    const launch = await launchUrl(child, () => stderr);
+    return { launch, origin: new URL(launch).origin, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
 export const test = base.extend<{ app: App }>({
   app: [
     // Playwright reads fixture dependencies from this destructuring pattern: it must stay an object pattern.
     // eslint-disable-next-line no-empty-pattern
     async ({}, use) => {
-      const dir = mkdtempSync(path.join(tmpdir(), 'bhavbook-e2e-'));
-      const installed = process.env.BHAVBOOK_BIN;
-      const cli = installed === undefined ? ['--import', 'tsx', 'packages/cli/src/index.ts'] : [installed];
-      const child = spawn(process.execPath, [...cli, '--vault', path.join(dir, 'vault.db'), '--no-open'], {
-        cwd: ROOT,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stderr = '';
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_KEPT);
-      });
+      const app = await startApp();
       try {
-        const launch = await launchUrl(child, () => stderr);
-        await use({ launch, origin: new URL(launch).origin });
+        await use({ launch: app.launch, origin: app.origin });
       } finally {
-        await stop(child);
-        // SQLite handles can linger for a moment on Windows after the process ends.
-        rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        await app.close();
       }
     },
     { scope: 'test' },

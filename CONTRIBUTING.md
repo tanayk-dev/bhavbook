@@ -26,4 +26,8 @@ Thanks for helping. Before you change anything, read these:
 
 ## Adding a broker
 
-The adapter contract and contributor guide arrive with plan step S5a (`packages/adapters/CONTRACT.md`). Groww and Upstox are planned for v1.1 and are good first contributions.
+Read [`packages/adapters/CONTRACT.md`](packages/adapters/CONTRACT.md): the rules every adapter follows, a step-by-step checklist and a template. Groww and Upstox are planned for v1.1 and are good first contributions.
+
+## Fee rules
+
+Brokerage and statutory rates change over time; [`docs/contributing/fee-rules.md`](docs/contributing/fee-rules.md) explains how a new rate is added and tested.

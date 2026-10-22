@@ -42,3 +42,75 @@ interface BrokerAdapter {
   - **every quirk** in the broker's `NOTES.md`.
 - Validate your output with `parseResultSchema.parse(result)` in the tests.
 - `pnpm verify` must pass, including `pnpm pii:scan`.
+
+## Adding a broker, step by step
+
+1. **Collect real exports** from an account you own and put them under `docs/broker-exports/<broker>/` (gitignored).
+   Write `docs/broker-exports/<broker>/NOTES.md`: where each report is downloaded, its layout, and every quirk you
+   find. The Zerodha and Dhan notes are the model. Only the notes are committed.
+2. **Make the fixtures:** add the broker's files to `tools/fixtures/src/sources.ts`, run `pnpm fixtures:make`, then `pnpm pii:scan`.
+3. **Register the broker id:** `brokerIdSchema` in `src/contract.ts`, `SUPPORTED_BROKERS` in
+   `packages/server/src/services/profiles.ts`, the analytics filter (`packages/server/src/services/analytics.ts` and
+   `packages/web/src/lib/analytics.ts`), and `BROKERS` in `packages/web/src/lib/profiles.ts`.
+4. **Write the failing tests**, then the adapter in `src/<broker>/` (the template below), and export it from
+   `src/index.ts`.
+5. **Plug it in:** add it to `DEFAULT_ADAPTERS` in `packages/server/src/import/service.ts`, and add its report kinds
+   with their download hints to `REPORTS` in `packages/web/src/lib/imports.ts`.
+6. **Charges:** add the broker's brokerage rules under `packages/core/rules/broker/<broker>/` (see
+   [fee rules](../../docs/contributing/fee-rules.md)); statutory charges are shared.
+7. **A user guide:** `docs/guides/<broker>.md`, like the Zerodha and Dhan ones, linked from the README.
+
+## Template
+
+```ts
+// <Broker> adapter: <the reports it imports>; <the reports it recognises but v1 does not import>.
+import type {
+  AdapterInput,
+  BrokerAdapter,
+  Detection,
+  FileProbe,
+  ParseResult,
+  ReportKind,
+} from '../contract.js';
+
+const HEADER = 'Date,Time,Symbol,ISIN,Side,Quantity,Price,Trade ID,Order ID'; // the tradebook's exact header
+
+function detect(probe: FileProbe): Detection | null {
+  if (probe.type !== 'text') return null;
+  // Skip any metadata rows the broker writes above the header (never keep their contents).
+  const header = probe.head.split(/\r?\n/).find((line) => line.startsWith('Date,'));
+  return header === HEADER ? { kind: '<broker>.tradebook', confidence: 1 } : null;
+}
+
+function parse(input: AdapterInput, kind: ReportKind): ParseResult {
+  if (kind === '<broker>.tradebook' && input.type === 'text') return parseTradebook(input.text);
+  throw new Error(`<broker> adapter cannot parse ${kind} from ${input.type} input`);
+}
+
+export const brokerAdapter: BrokerAdapter = {
+  broker: '<broker>',
+  version: '1',
+  reportKinds: ['<broker>.tradebook'],
+  rejectedKinds: [],
+  detect,
+  parse,
+};
+```
+
+`parseTradebook` reads the rows with `src/csv.ts`, converts money with `parseDecimalToMicro` and times with
+`parseIstLocal`, builds each row's `dedupKey` from the broker's own trade and order IDs when it has them (Zerodha's
+`zerodha:{exchange}:{trade_date}:{order_id}:{trade_id}`) or from a content hash plus an occurrence index when it has
+none (Dhan), and returns rows, skipped rows and errors as described above. `src/zerodha/tradebook.ts` is the
+smallest complete example.
+
+## Good first adapters: Groww and Upstox (v1.1)
+
+Both were planned from the start: the contract and the schema need no change for them. What is known so far:
+
+- **Upstox:** its exports carry metadata rows above the header (account details), which must be skipped, never
+  stored.
+- **Groww:** its order history includes orders that were not executed; they are skipped with a reason, not imported.
+
+Each needs real exports from someone with an account (anonymised by `pnpm fixtures:make`; the originals never leave
+your machine), a NOTES file, the adapter with its tests, fee rules and a user guide. Open an issue before you start
+so the work isn't duplicated.

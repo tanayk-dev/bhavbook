@@ -12,6 +12,14 @@ const FIXTURES = path.join(
   'fixtures',
 );
 
+/** Every fixture file of a broker (`dhan`, `zerodha`), one per report kind. */
+export function brokerFixtures(broker: string): string[] {
+  const dir = path.join(FIXTURES, broker);
+  return readdirSync(dir).flatMap((kind) =>
+    readdirSync(path.join(dir, kind)).map((file) => path.join(dir, kind, file)),
+  );
+}
+
 /** The fixture file of a Dhan report kind (`trade_history`, `tax_report`, ...). */
 export function fixture(kind: string): string {
   const dir = path.join(FIXTURES, 'dhan', kind);
@@ -43,6 +51,14 @@ export async function onboard(
   await page.getByLabel('Profile name').fill('Swing');
   await page.getByRole('button', { name: 'Create profile' }).click();
   await page.locator('label', { hasText: broker }).click();
+  await page.getByLabel('Nickname').fill(nickname);
+  await page.getByRole('button', { name: 'Add account' }).click();
+}
+
+/** Adds a broker account on the onboarding page (the first one, or after "Add a broker account"). */
+export async function addAccount(page: Page, broker: 'Zerodha' | 'Dhan', nickname: string): Promise<void> {
+  await page.locator('label', { hasText: broker }).click();
+  await expect(page.getByRole('radio', { name: broker })).toBeChecked();
   await page.getByLabel('Nickname').fill(nickname);
   await page.getByRole('button', { name: 'Add account' }).click();
 }

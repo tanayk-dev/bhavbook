@@ -1,33 +1,8 @@
 // S13b-2: the import wizard through the real server with the real (anonymised) fixtures. Import every Dhan and
 // Zerodha fixture into its account, see the history and coverage, re-import (everything is a duplicate), and undo.
-import { readdirSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { Page } from '@playwright/test';
+import { addAccount, brokerFixtures as fixtures } from './dhan.js';
 import { expect, test } from './fixtures.js';
-
-const FIXTURES = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  'packages',
-  'adapters',
-  'fixtures',
-);
-
-/** Every fixture file of a broker, one per report kind. */
-function fixtures(broker: string): string[] {
-  const dir = path.join(FIXTURES, broker);
-  return readdirSync(dir).flatMap((kind) =>
-    readdirSync(path.join(dir, kind)).map((file) => path.join(dir, kind, file)),
-  );
-}
-
-async function addAccount(page: Page, broker: 'Zerodha' | 'Dhan', nickname: string): Promise<void> {
-  await page.locator('label', { hasText: broker }).click();
-  await expect(page.getByRole('radio', { name: broker })).toBeChecked();
-  await page.getByLabel('Nickname').fill(nickname);
-  await page.getByRole('button', { name: 'Add account' }).click();
-}
 
 test('import every fixture, re-import as duplicates, undo', async ({ page, app }, info) => {
   await page.goto(app.launch);
