@@ -2,6 +2,7 @@
 // here; money arrives as decimal strings of micro-rupees and becomes bigint. A position is addressed by its `ref`,
 // which the server derives from the position's anchor, so a link to it survives recomputes.
 import { queryOptions } from '@tanstack/react-query';
+import type { ProvenanceKind } from '@/components/provenance';
 import { api, ApiError, readJson, send } from '@/lib/api';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -11,6 +12,15 @@ const unexpected = (): never => {
 };
 const str = (value: unknown): string => (typeof value === 'string' ? value : unexpected());
 const strOrNull = (value: unknown): string | null => (value === null ? null : str(value));
+/** A UTC instant as the server writes it (ISO 8601); anything else is unexpected. */
+const instant = (value: unknown): string =>
+  typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(Date.parse(value))
+    ? value
+    : unexpected();
+const instantOrNull = (value: unknown): string | null => (value === null ? null : instant(value));
+const date = (value: unknown): string =>
+  typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : unexpected();
+const dateOrNull = (value: unknown): string | null => (value === null ? null : date(value));
 const big = (value: unknown): bigint =>
   typeof value === 'string' && /^-?\d{1,19}$/.test(value) ? BigInt(value) : unexpected();
 const bigOrNull = (value: unknown): bigint | null => (value === null ? null : big(value));
@@ -66,8 +76,8 @@ export function positionSummary(value: unknown): PositionSummary {
     incomplete: bool(row.incomplete),
     excluded: bool(row.excluded),
     orphanQty: big(row.orphanQty),
-    openedAtUtc: str(row.openedAtUtc),
-    closedAtUtc: strOrNull(row.closedAtUtc),
+    openedAtUtc: instant(row.openedAtUtc),
+    closedAtUtc: instantOrNull(row.closedAtUtc),
     openQty: big(row.openQty),
     boughtQty: big(row.boughtQty),
     boughtValueMicro: big(row.boughtValueMicro),
@@ -75,7 +85,7 @@ export function positionSummary(value: unknown): PositionSummary {
     realisedGrossMicro: big(row.realisedGrossMicro),
     chargesMicro: big(row.chargesMicro),
     feeStatus: strOrNull(row.feeStatus),
-    reviewedAt: strOrNull(row.reviewedAt),
+    reviewedAt: instantOrNull(row.reviewedAt),
     journalEntries: num(row.journalEntries),
   };
 }
@@ -159,8 +169,8 @@ function fill(value: unknown): PositionFill {
       trade === null
         ? null
         : {
-            executedAtUtc: str(trade.executedAtUtc),
-            tradeDateIst: str(trade.tradeDateIst),
+            executedAtUtc: instant(trade.executedAtUtc),
+            tradeDateIst: date(trade.tradeDateIst),
             exchange: str(trade.exchange),
             quantity: big(trade.quantity),
             priceMicro: big(trade.priceMicro),
@@ -185,8 +195,8 @@ function lot(value: unknown): PositionLot {
     quantity: big(row.quantity),
     entryValueMicro: big(row.entryValueMicro),
     exitValueMicro: bigOrNull(row.exitValueMicro),
-    entryDateIst: str(row.entryDateIst),
-    exitDateIst: strOrNull(row.exitDateIst),
+    entryDateIst: date(row.entryDateIst),
+    exitDateIst: dateOrNull(row.exitDateIst),
   };
 }
 
@@ -234,7 +244,7 @@ function journalEntry(value: unknown): JournalEntry {
     plannedTargetMicro: bigOrNull(row.plannedTargetMicro),
     plannedRiskMicro: bigOrNull(row.plannedRiskMicro),
     reviewNote: strOrNull(row.reviewNote),
-    reviewedAt: strOrNull(row.reviewedAt),
+    reviewedAt: instantOrNull(row.reviewedAt),
     attachments: list(row.attachments).map((entry) => {
       const attachment = record(entry);
       return { id: str(attachment.id), bytes: num(attachment.bytes) };
@@ -276,9 +286,23 @@ export async function setReviewed(ref: string, reviewed: boolean): Promise<void>
   await readJson(await send(() => route.$post({ param: { ref } })));
 }
 
+/**
+ * Where a position's P&L figures come from (direction §3), worst first: incomplete history, then a statement that
+ * disagrees, then estimated charges; reconciled only when the statement covers everything.
+ */
+export function netProvenance(position: PositionSummary): ProvenanceKind {
+  if (position.incomplete) return 'incomplete';
+  if (position.feeStatus === 'FEES_DISCREPANCY') return 'discrepancy';
+  if (position.feeStatus === 'FEES_RECONCILED') return 'reconciled';
+  return 'estimated';
+}
+
+const CHARGE_ORDER = ['brokerage', 'stt', 'exchange_txn', 'sebi', 'ipft', 'stamp_duty', 'gst', 'dp'];
+
 export interface ChargeLine {
   readonly component: string;
-  readonly estimatedMicro: bigint;
+  /** Null when the fee engine estimated none of it (only a statement bills it). */
+  readonly estimatedMicro: bigint | null;
   /** Null when no statement covers this charge for any of the fills. */
   readonly reportedMicro: bigint | null;
   /** What counts: reported where a statement covers a fill's charge, else estimated. */
@@ -287,38 +311,30 @@ export interface ChargeLine {
 
 /** Per charge component, the estimate, the statement's amount and what counts (PRD §8.2), in a fixed order. */
 export function chargeLines(charges: readonly PositionCharge[]): ChargeLine[] {
-  const ORDER = ['brokerage', 'stt', 'exchange_txn', 'sebi', 'ipft', 'stamp_duty', 'gst', 'dp'];
-  const byKey = new Map<string, { estimated: bigint; reported: bigint | null }>();
+  const byKey = new Map<string, { component: string; estimated: bigint | null; reported: bigint | null }>();
   for (const entry of charges) {
     const key = `${entry.component}|${entry.allocationId}`;
-    const current = byKey.get(key) ?? { estimated: 0n, reported: null };
+    const current = byKey.get(key) ?? { component: entry.component, estimated: null, reported: null };
     byKey.set(
       key,
       entry.source === 'estimated'
-        ? { ...current, estimated: current.estimated + entry.amountMicro }
+        ? { ...current, estimated: (current.estimated ?? 0n) + entry.amountMicro }
         : { ...current, reported: (current.reported ?? 0n) + entry.amountMicro },
     );
   }
+  const add = (a: bigint | null, b: bigint | null): bigint | null => (b === null ? a : (a ?? 0n) + b);
   const lines = new Map<string, ChargeLine>();
-  for (const [key, amounts] of byKey) {
-    const component = key.slice(0, key.indexOf('|'));
-    const line = lines.get(component) ?? {
-      component,
-      estimatedMicro: 0n,
-      reportedMicro: null,
-      effectiveMicro: 0n,
-    };
-    lines.set(component, {
-      component,
-      estimatedMicro: line.estimatedMicro + amounts.estimated,
-      reportedMicro:
-        amounts.reported === null ? line.reportedMicro : (line.reportedMicro ?? 0n) + amounts.reported,
-      effectiveMicro: line.effectiveMicro + (amounts.reported ?? amounts.estimated),
+  for (const amounts of byKey.values()) {
+    const line = lines.get(amounts.component);
+    lines.set(amounts.component, {
+      component: amounts.component,
+      estimatedMicro: add(line?.estimatedMicro ?? null, amounts.estimated),
+      reportedMicro: add(line?.reportedMicro ?? null, amounts.reported),
+      effectiveMicro: (line?.effectiveMicro ?? 0n) + (amounts.reported ?? amounts.estimated ?? 0n),
     });
   }
-  return [...lines.values()].sort(
-    (a, b) => (ORDER.indexOf(a.component) + 1 || 99) - (ORDER.indexOf(b.component) + 1 || 99),
-  );
+  const rank = (component: string) => CHARGE_ORDER.indexOf(component) + 1 || CHARGE_ORDER.length + 1;
+  return [...lines.values()].sort((a, b) => rank(a.component) - rank(b.component));
 }
 
 const REVIEW_ERRORS: Readonly<Record<string, string>> = {

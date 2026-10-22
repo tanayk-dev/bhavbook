@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { ApiError } from '@/lib/api';
 import { formatIstDate, istDateOf } from '@/lib/format';
 import {
+  netProvenance,
   reviewError,
   reviewQueueQuery,
   setReviewed,
@@ -18,7 +19,17 @@ import {
   type ReviewFilter,
 } from '@/lib/positions';
 
-export const Route = createFileRoute('/review')({ component: ReviewPage });
+export interface ReviewSearch {
+  /** The Reviewed tab; absent is the queue. */
+  readonly tab?: 'reviewed';
+}
+
+export const Route = createFileRoute('/review')({
+  // The tab lives in the URL, so Back from a position and a reload keep it.
+  validateSearch: (search: Record<string, unknown>): ReviewSearch =>
+    search.tab === 'reviewed' ? { tab: 'reviewed' } : {},
+  component: ReviewPage,
+});
 
 const ANNOUNCE_DELAY_MS = 50;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -35,7 +46,9 @@ export function daysHeld(position: PositionSummary): number {
 }
 
 function ReviewPage() {
-  const [tab, setTab] = useState<ReviewFilter>('unreviewed');
+  const search = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const tab: ReviewFilter = search.tab ?? 'unreviewed';
   const [notice, setNotice] = useState('');
   const timer = useRef<number | undefined>(undefined);
   const table = useRef<HTMLTableElement>(null);
@@ -59,18 +72,21 @@ function ReviewPage() {
       await queryClient.invalidateQueries({ queryKey: ['positions'] });
       announce(tab === 'unreviewed' ? 'Marked reviewed.' : 'Back in the review queue.');
     },
-    onError: async (error) => {
+    onError: async (error, { index }) => {
+      // Keep the user's place: the row at the same index (refreshed) takes the focus back.
+      left.current = index;
       announce(reviewError(error));
       await queryClient.invalidateQueries({ queryKey: ['positions'] });
     },
   });
+  // After each fetch (even one that returns the same rows), focus the row now where the acted-on one was.
   useEffect(() => {
     if (left.current === null || !queue.isSuccess) return;
     const links = rowLinks(table.current);
     const next = links[Math.min(left.current, links.length - 1)] ?? title.current;
     left.current = null;
     next?.focus();
-  }, [queue.data, queue.isSuccess]);
+  }, [queue.dataUpdatedAt, queue.isSuccess]);
 
   const disconnection = queue.error instanceof ApiError ? queue.error.disconnection : null;
   if (disconnection !== null) return <Disconnected reason={disconnection} />;
@@ -78,7 +94,8 @@ function ReviewPage() {
   const name = (key: string) => queue.data?.instruments[key] ?? key;
 
   const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    // A held key repeats: only a fresh press acts, so holding r never reviews rows not yet looked at.
+    if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
     const links = rowLinks(table.current);
     const at = links.findIndex((link) => link === document.activeElement);
     if (event.key === 'j' || event.key === 'k') {
@@ -94,7 +111,7 @@ function ReviewPage() {
   return (
     <div className="max-w-5xl space-y-5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <h1 ref={title} tabIndex={-1} className="text-lg font-semibold focus:outline-none">
+        <h1 ref={title} tabIndex={-1} className="text-lg font-semibold focus:outline-hidden">
           Review
         </h1>
         <p role="status" className="text-sm">
@@ -109,8 +126,10 @@ function ReviewPage() {
               variant={tab === value ? 'secondary' : 'ghost'}
               className={TOUCH}
               aria-pressed={tab === value}
+              disabled={toggle.isPending}
               onClick={() => {
-                setTab(value);
+                left.current = null;
+                void navigate({ search: value === 'reviewed' ? { tab: 'reviewed' } : {} });
               }}
             >
               {value === 'unreviewed' ? 'To review' : 'Reviewed'}
@@ -170,45 +189,57 @@ function ReviewPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-rule">
-              {positions.map((position, index) => (
-                <tr key={position.ref} className="h-11 focus-within:bg-muted">
-                  <th scope="row" className="px-3 text-left font-normal">
-                    <Link
-                      to="/positions/$ref"
-                      params={{ ref: position.ref }}
-                      data-position=""
-                      className="rounded-sm font-medium underline-offset-4 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      {name(position.instrumentKey)}
-                    </Link>
-                    <span className="ml-2 text-ink-muted">
-                      {position.accountNickname} · {position.bucket.toLowerCase()}
-                    </span>
-                  </th>
-                  <td className="figure px-3">
-                    {position.closedAtUtc === null ? '' : formatIstDate(istDateOf(position.closedAtUtc))}
-                  </td>
-                  <td className="figure px-3 text-right">
-                    {daysHeld(position).toLocaleString('en-IN')} {daysHeld(position) === 1 ? 'day' : 'days'}
-                  </td>
-                  <td className="px-3 text-right">
-                    <Money valueMicro={position.realisedGrossMicro - position.chargesMicro} signed />
-                  </td>
-                  <td className="px-3 text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      aria-label={`${tab === 'unreviewed' ? 'Mark reviewed' : 'Reopen'} ${name(position.instrumentKey)}`}
-                      disabled={toggle.isPending}
-                      onClick={() => {
-                        toggle.mutate({ position, index });
-                      }}
-                    >
-                      {tab === 'unreviewed' ? 'Mark reviewed' : 'Reopen'}
-                    </Button>
-                  </td>
-                </tr>
-              ))}
+              {positions.map((position, index) => {
+                // Two rows can share an instrument (two accounts, or delivery and intraday): names say which.
+                const described = `${name(position.instrumentKey)}, ${position.accountNickname}, ${position.bucket.toLowerCase()}`;
+                const verb = tab === 'unreviewed' ? 'Mark reviewed' : 'Reopen';
+                const days = daysHeld(position);
+                return (
+                  <tr key={position.ref} className="h-11 focus-within:bg-muted">
+                    <th scope="row" className="px-3 text-left font-normal">
+                      <Link
+                        to="/positions/$ref"
+                        params={{ ref: position.ref }}
+                        data-position=""
+                        aria-label={described}
+                        className="rounded-sm font-medium underline-offset-4 hover:underline focus:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        {name(position.instrumentKey)}
+                      </Link>
+                      <span aria-hidden="true" className="ml-2 text-ink-muted">
+                        {position.accountNickname} · {position.bucket.toLowerCase()}
+                      </span>
+                    </th>
+                    <td className="figure px-3">
+                      {position.closedAtUtc === null ? '' : formatIstDate(istDateOf(position.closedAtUtc))}
+                    </td>
+                    <td className="figure px-3 text-right">
+                      {days.toLocaleString('en-IN')} {days === 1 ? 'day' : 'days'}
+                    </td>
+                    <td className="px-3 text-right">
+                      <Money
+                        valueMicro={position.realisedGrossMicro - position.chargesMicro}
+                        signed
+                        provenance={netProvenance(position)}
+                      />
+                    </td>
+                    <td className="px-3 text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`${verb} ${described}`}
+                        // Not `disabled`: a focused button that becomes disabled drops the focus to the page.
+                        aria-disabled={toggle.isPending}
+                        onClick={() => {
+                          if (!toggle.isPending) toggle.mutate({ position, index });
+                        }}
+                      >
+                        {verb}
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </TableRegion>

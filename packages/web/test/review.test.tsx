@@ -110,6 +110,10 @@ function server() {
     queue: [summary('cmVmVENT', TCS), summary('cmVmSU5GWQ', INFY, { realisedGrossMicro: '-500000000' })],
     reviewed: [] as ReturnType<typeof summary>[],
     calls: [] as string[],
+    /** Overrides for the detail's position. */
+    detail: {} as Record<string, unknown>,
+    /** The next review answers this error instead. */
+    failNext: null as string | null,
   };
   const move = (ref: string, from: 'queue' | 'reviewed', to: 'queue' | 'reviewed') => {
     const position = state[from].find((entry) => entry.ref === ref);
@@ -125,8 +129,24 @@ function server() {
       };
     },
     'GET /api/positions/review-count': () => ({ body: { count: state.queue.length } }),
-    'GET /api/positions/cmVmVENT': { body: DETAIL },
+    'GET /api/positions/cmVmVENT': () => ({
+      body: {
+        ...DETAIL,
+        position: {
+          ...DETAIL.position,
+          reviewedAt: state.reviewed.some((entry) => entry.ref === 'cmVmVENT')
+            ? '2026-10-22T10:00:00.000Z'
+            : null,
+          ...state.detail,
+        },
+      },
+    }),
     'POST /api/positions/cmVmVENT/review': () => {
+      if (state.failNext !== null) {
+        const error = state.failNext;
+        state.failNext = null;
+        return { status: error === 'not_found' ? 404 : 400, body: { error } };
+      }
       state.calls.push('review TCS');
       move('cmVmVENT', 'queue', 'reviewed');
       return { body: { ok: true } };
@@ -197,18 +217,19 @@ describe('the review queue', () => {
   it('j and k move between positions; r marks one reviewed and focus moves to the next', async () => {
     const { state, routes } = server();
     renderAt('/review', routes);
-    await screen.findByRole('link', { name: 'TCS' });
-    screen.getByRole('link', { name: 'TCS' }).focus();
+    await screen.findByRole('link', { name: 'TCS, Z main, delivery' });
+    screen.getByRole('link', { name: 'TCS, Z main, delivery' }).focus();
     await userEvent.keyboard('j');
-    expect(screen.getByRole('link', { name: 'Infosys' })).toHaveFocus();
+    expect(screen.getByRole('link', { name: 'Infosys, Z main, delivery' })).toHaveFocus();
     await userEvent.keyboard('k');
-    expect(screen.getByRole('link', { name: 'TCS' })).toHaveFocus();
+    expect(screen.getByRole('link', { name: 'TCS, Z main, delivery' })).toHaveFocus();
     await userEvent.keyboard('{Control>}r{/Control}');
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(state.calls).toEqual([]);
     await userEvent.keyboard('r');
     expect(await screen.findByText('Marked reviewed.')).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Infosys' })).toHaveFocus();
+      expect(screen.getByRole('link', { name: 'Infosys, Z main, delivery' })).toHaveFocus();
     });
     await userEvent.keyboard('r');
     expect(await screen.findByText('Nothing to review')).toBeInTheDocument();
@@ -223,7 +244,7 @@ describe('the review queue', () => {
     expect(await screen.findByText('Nothing to review')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
     const reviewed = await screen.findByRole('table', { name: 'Reviewed positions' });
-    await userEvent.click(within(reviewed).getByRole('button', { name: 'Reopen TCS' }));
+    await userEvent.click(within(reviewed).getByRole('button', { name: 'Reopen TCS, Z main, delivery' }));
     expect(await screen.findByText('Back in the review queue.')).toBeInTheDocument();
     expect(state.calls).toEqual(['reopen TCS']);
   });
@@ -249,17 +270,85 @@ describe('the position detail', () => {
     expect(within(charges).getByRole('row', { name: /Brokerage/ })).toHaveTextContent('No statement');
   });
 
-  it('marks the position reviewed', async () => {
+  it('marks the position reviewed and reopens it', async () => {
     const { state, routes } = server();
     renderAt('/positions/cmVmVENT', routes);
     await userEvent.click(await screen.findByRole('button', { name: 'Mark reviewed' }));
     expect(await screen.findByText('Marked reviewed.')).toBeInTheDocument();
-    expect(state.calls).toEqual(['review TCS']);
+    expect(await screen.findByText('Reviewed on 22 Oct 2026.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Reopen review' }));
+    expect(await screen.findByText('Not reviewed yet.')).toBeInTheDocument();
+    expect(state.calls).toEqual(['review TCS', 'reopen TCS']);
+  });
+
+  it('marks figures by where they come from, and sends an incomplete position to Issues before review', async () => {
+    const { state, routes } = server();
+    state.detail = { incomplete: true, orphanQty: '5' };
+    renderAt('/positions/cmVmVENT', routes);
+    expect(await screen.findByText(/Incomplete: 5 shares were sold/)).toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: 'Incomplete history' }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Mark reviewed' })).toBeNull();
+    expect(within(screen.getByRole('main')).getByRole('link', { name: 'Issues' })).toBeInTheDocument();
   });
 
   it('says so when the position is no longer there', async () => {
     const { routes } = server();
     renderAt('/positions/bm9wZQ', routes);
     expect(await screen.findByText('This position is no longer there')).toBeInTheDocument();
+  });
+});
+
+describe('review fixes (S14a-3a review)', () => {
+  it('acts once for a held r, and marks the net P&L as estimated', async () => {
+    const { state, routes } = server();
+    renderAt('/review', routes);
+    const first = await screen.findByRole('link', { name: 'TCS, Z main, delivery' });
+    expect(screen.getAllByRole('img', { name: 'Estimated by the fee engine' })).toHaveLength(2);
+    first.focus();
+    await userEvent.keyboard('{r>4/}');
+    expect(await screen.findByText('Marked reviewed.')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Infosys, Z main, delivery' })).toHaveFocus();
+    });
+    expect(state.calls).toEqual(['review TCS']);
+  });
+
+  it('keeps the place when a review fails, and says why', async () => {
+    const { state, routes } = server();
+    state.failNext = 'not_found';
+    renderAt('/review', routes);
+    const first = await screen.findByRole('link', { name: 'TCS, Z main, delivery' });
+    first.focus();
+    await userEvent.keyboard('r');
+    expect(await screen.findByText(/This position changed meanwhile/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'TCS, Z main, delivery' })).toHaveFocus();
+    });
+  });
+
+  it('opens on the Reviewed tab from the URL', async () => {
+    const { state, routes } = server();
+    state.reviewed = [summary('cmVmVENT', TCS, { reviewedAt: '2026-10-20T10:00:00.000Z' })];
+    renderAt('/review?tab=reviewed', routes);
+    expect(await screen.findByRole('table', { name: 'Reviewed positions' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reviewed' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('refuses malformed dates rather than showing NaN days', () => {
+    expect(() =>
+      positionList({
+        positions: [summary('r', TCS, { closedAtUtc: 'yesterday' })],
+        total: 1,
+        instruments: {},
+      }),
+    ).toThrow(ApiError);
+  });
+
+  it('shows None for a charge only a statement bills', () => {
+    expect(
+      chargeLines([{ allocationId: '1', component: 'dp', source: 'reported', amountMicro: 15_930_000n }]),
+    ).toEqual([
+      { component: 'dp', estimatedMicro: null, reportedMicro: 15_930_000n, effectiveMicro: 15_930_000n },
+    ]);
   });
 });

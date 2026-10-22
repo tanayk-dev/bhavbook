@@ -12,6 +12,7 @@ import { ApiError } from '@/lib/api';
 import { formatIstDate, formatIstDateTime, istDateOf } from '@/lib/format';
 import {
   chargeLines,
+  netProvenance,
   positionQuery,
   reviewError,
   setReviewed,
@@ -33,7 +34,7 @@ const COMPONENTS: Readonly<Record<string, string>> = {
 };
 
 const FEE_STATUS: Readonly<Record<string, string>> = {
-  FEES_ESTIMATED: 'Charges are estimated: no broker statement covers them yet.',
+  FEES_ESTIMATED: 'Some or all charges are estimated: no broker statement covers them yet.',
   FEES_RECONCILED: 'Charges match the broker statement.',
   FEES_DISCREPANCY: 'The broker billed differently from the estimate; the billed amounts count.',
 };
@@ -111,11 +112,25 @@ function Review({ detail }: { readonly detail: PositionDetail }) {
       await queryClient.invalidateQueries({ queryKey: ['positions'] });
       setMessage(reviewed ? 'Back in the review queue.' : 'Marked reviewed.');
     },
-    onError: (error) => {
+    onError: async (error) => {
       setMessage(reviewError(error));
+      // A position rebuilt away (not_found) then shows as gone rather than staying on a dead page.
+      await queryClient.invalidateQueries({ queryKey: ['positions'] });
     },
   });
   if (position.state !== 'CLOSED' && !reviewed) return null;
+  // Like the queue: an incomplete or excluded position is settled in Issues before it is reviewed.
+  if (!reviewed && (position.incomplete || position.excluded)) {
+    return (
+      <p className="text-sm">
+        Not reviewed yet. Settle it in{' '}
+        <Link to="/issues" className="text-primary underline-offset-4 hover:underline">
+          Issues
+        </Link>{' '}
+        first: its P&amp;L is not complete.
+      </p>
+    );
+  }
   return (
     <div className="flex flex-wrap items-center gap-3">
       <p className="text-sm">
@@ -150,13 +165,29 @@ function Figures({ detail }: { readonly detail: PositionDetail }) {
     ],
     ['Sold', <Money key="sold" valueMicro={position.soldValueMicro} />],
     ...(closed ? [] : ([['Still held', `${qty(position.openQty)} shares`]] as [string, React.ReactNode][])),
-    ['Realised P&L before charges', <Money key="gross" valueMicro={position.realisedGrossMicro} signed />],
-    ['Charges', <Money key="charges" valueMicro={position.chargesMicro} />],
+    [
+      'Realised P&L before charges',
+      <Money
+        key="gross"
+        valueMicro={position.realisedGrossMicro}
+        signed
+        {...(position.incomplete ? { provenance: 'incomplete' as const } : {})}
+      />,
+    ],
+    [
+      'Charges',
+      <Money key="charges" valueMicro={position.chargesMicro} provenance={netProvenance(position)} />,
+    ],
     ...(closed
       ? ([
           [
             'Net P&L',
-            <Money key="net" valueMicro={position.realisedGrossMicro - position.chargesMicro} signed />,
+            <Money
+              key="net"
+              valueMicro={position.realisedGrossMicro - position.chargesMicro}
+              signed
+              provenance={netProvenance(position)}
+            />,
           ],
         ] as [string, React.ReactNode][])
       : []),
@@ -244,6 +275,18 @@ function product(fill: PositionFill): string {
   return `${assigned} (declared ${declared})`;
 }
 
+/** Where a fill came from; an imported trade discloses the broker's own row. */
+function Source({ fill }: { readonly fill: PositionFill }) {
+  const raw = fill.trade?.raw ?? null;
+  if (fill.trade === null || raw === null) return <>{SOURCES[fill.source]}</>;
+  return (
+    <details>
+      <summary className="cursor-pointer">Broker row ({fill.trade.exchange})</summary>
+      <code className="mt-1 block font-mono text-xs break-all text-ink-muted">{raw}</code>
+    </details>
+  );
+}
+
 function Fills({ detail }: { readonly detail: PositionDetail }) {
   return (
     <section aria-labelledby="fills" className="space-y-2">
@@ -282,7 +325,7 @@ function Fills({ detail }: { readonly detail: PositionDetail }) {
             {detail.fills.map((fill) => (
               <tr key={fill.allocationId} className="h-8 align-top">
                 <th scope="row" className="figure px-3 py-1.5 text-left font-normal">
-                  {fill.trade === null ? '' : formatIstDateTime(fill.trade.executedAtUtc)}
+                  {fill.trade === null ? SOURCES[fill.source] : formatIstDateTime(fill.trade.executedAtUtc)}
                 </th>
                 <td className="px-3 py-1.5">{fill.side === 'BUY' ? 'Buy' : 'Sell'}</td>
                 <td className="figure px-3 py-1.5 text-right">{qty(fill.quantity)}</td>
@@ -294,18 +337,7 @@ function Fills({ detail }: { readonly detail: PositionDetail }) {
                 </td>
                 <td className="px-3 py-1.5">{product(fill)}</td>
                 <td className="px-3 py-1.5">
-                  {fill.trade?.raw == null ? (
-                    SOURCES[fill.source]
-                  ) : (
-                    <details>
-                      <summary className="cursor-pointer">
-                        {SOURCES[fill.source]}, {fill.trade.exchange}
-                      </summary>
-                      <code className="mt-1 block font-mono text-xs break-all text-ink-muted">
-                        {fill.trade.raw}
-                      </code>
-                    </details>
-                  )}
+                  <Source fill={fill} />
                 </td>
               </tr>
             ))}
@@ -352,7 +384,11 @@ function Charges({ detail }: { readonly detail: PositionDetail }) {
                   {COMPONENTS[line.component] ?? line.component}
                 </th>
                 <td className="px-3 text-right">
-                  <Money valueMicro={line.estimatedMicro} />
+                  {line.estimatedMicro === null ? (
+                    <span className="text-ink-muted">None</span>
+                  ) : (
+                    <Money valueMicro={line.estimatedMicro} />
+                  )}
                 </td>
                 <td className="px-3 text-right">
                   {line.reportedMicro === null ? (
