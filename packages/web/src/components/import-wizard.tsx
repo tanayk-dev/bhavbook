@@ -300,11 +300,14 @@ export function ImportWizard({ account, announce }: ImportWizardProps) {
     },
   });
   // Another import or an undo changes what is "new": a preview made before it is stale, so it is dropped. The
-  // history query shares structure, so its data only changes identity when its content does.
+  // history query shares structure, so its data only changes identity when its content does. Its first answer is
+  // not a change: a preview made while it was loading stays.
   const history = useQuery(importsQuery(account.id));
   const { reset: resetPreview } = previewing;
+  const seenHistory = useRef(history.data);
   useEffect(() => {
-    resetPreview();
+    if (seenHistory.current !== undefined && seenHistory.current !== history.data) resetPreview();
+    seenHistory.current = history.data;
   }, [history.data, resetPreview]);
   const busy = previewing.isPending || committing.isPending;
   const preview = (files: readonly ChosenFile[]) => {

@@ -125,7 +125,8 @@ test('a fresh vault to the dashboard, then backed up and restored into another w
 
   await page.goto(`${app.origin}/settings`);
   await page.getByRole('button', { name: 'Back up now' }).click();
-  await expect(page.getByText(/^Backed up BhavBook/)).toBeVisible();
+  // A consistent copy of the whole vault, checksummed: slow runners need more than the default 5 s.
+  await expect(page.getByText(/^Backed up BhavBook/)).toBeVisible({ timeout: SETTLE_MS });
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     page
