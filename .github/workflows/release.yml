@@ -96,8 +96,9 @@ jobs:
           name: package
           path: package
 
+      # `./` makes it a local file: npm reads `package/name.tgz` as GitHub shorthand (user/repo).
       - name: Publish with provenance
-        run: npm publish "package/bhavbook-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
+        run: npm publish "./package/bhavbook-${GITHUB_REF_NAME#v}.tgz" --provenance --access public
         env:
           # Only for the first publish (docs/releasing.md); remove this line once trusted publishing is set up.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
