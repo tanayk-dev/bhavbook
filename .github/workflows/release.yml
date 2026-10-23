@@ -60,13 +60,14 @@ jobs:
       - name: Pack, install and check with npx bhavbook doctor
         run: node scripts/e2e-packed.mjs
 
+      # Not a dot folder: upload-artifact leaves hidden files out (found by the first v1.0.0 run).
       - name: Pack the release tarball
-        run: node scripts/pack-cli.mjs .pack
+        run: node scripts/pack-cli.mjs release
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package
-          path: .pack/bhavbook-*.tgz
+          path: release/bhavbook-*.tgz
           if-no-files-found: error
           retention-days: 7
 

@@ -37,5 +37,6 @@ test-results/
 
 # The packed `bhavbook` package (scripts/pack-cli.mjs) and the files it copies in
 .pack/
+release/
 packages/cli/README.md
 packages/cli/LICENSE
